@@ -1,1 +1,64 @@
-<h3>Empresas</h3><form method=post action='{{url_for("settings_company_add")}}'>Nome:<input name=name>Fusões inclusas:<input name=included type=number><button>Salvar</button></form>{% for c in companies %}<div>{{c.name}} - {{c.included_splices}}</div>{% endfor %}
+
+{% extends 'base.html' %}
+{% block title %}Configurações · SPLICER{% endblock %}
+{% block content %}
+<h3 class="mb-3">Configurações</h3>
+
+<div class="row g-4">
+  <div class="col-lg-5">
+    <div class="card p-4 h-100">
+      <h5>Empresas &amp; fusões inclusas</h5>
+      <form method="post" action="{{ url_for('settings_company_add') }}" class="row g-2 mb-3">
+        <div class="col-12">
+          <label class="form-label">Empresa</label>
+          <input class="form-control" name="name" placeholder="Ex.: AT&T" required>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Fusões inclusas por lançamento</label>
+          <input class="form-control" name="included_splices" type="number" min="0" value="1">
+        </div>
+        <div class="col-12">
+          <button class="btn btn-primary w-100" type="submit">Salvar empresa</button>
+        </div>
+      </form>
+
+      <h6 class="mt-3">Empresas cadastradas</h6>
+      <table class="table table-sm table-dark align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Empresa</th>
+            <th class="text-center">Fusões inclusas</th>
+            <th class="text-end">Ações</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in companies %}
+            <tr>
+              <td>{{ c.name }}</td>
+              <td class="text-center">{{ c.included_splices }}</td>
+              <td class="text-end">
+                <a class="btn btn-sm btn-outline-info" href="{{ url_for('settings_company_detail', cid=c.id) }}">Configurar</a>
+              </td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="3" class="text-secondary">Nenhuma empresa cadastrada ainda.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="col-lg-7">
+    <div class="card p-4 h-100">
+      <h5>Como funciona</h5>
+      <ul class="small mb-0">
+        <li>Use esta tela para <b>cadastrar as empresas</b> com as quais você trabalha.</li>
+        <li>Depois, clique em <b>Configurar</b> para definir dispositivos, faixas de fusão e mapas específicos de cada empresa.</li>
+        <li>Na tela de <b>Lançamento</b>, você escolhe a empresa e o campo de mapa só mostra os mapas cadastrados para ela.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+{% endblock %}
