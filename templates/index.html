@@ -1,0 +1,1 @@
+<form method='post' enctype='multipart/form-data'>Empresa:<input name=company>Arquivo:<input type=file name=file><button>Enviar</button></form>{% for r in recs %}<div>{{r.company}} - {{r.total_usd}}</div>{% endfor %}

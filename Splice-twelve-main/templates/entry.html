@@ -1,0 +1,150 @@
+
+{% extends 'base.html' %}
+{% block title %}Lançamentos · SPLICER{% endblock %}
+{% block content %}
+<h3 class="mb-3">Lançamento manual</h3>
+
+<div class="row g-4">
+  <div class="col-lg-6">
+    <div class="card p-4">
+      <h5 class="mb-3">Novo lançamento</h5>
+      <form method="post">
+        <div class="mb-3">
+          <label class="form-label">Empresa</label>
+          <select name="company" id="company-select" class="form-control" required>
+            <option value="">Selecione a empresa</option>
+            {% for c in companies %}
+              <option value="{{ c }}">{{ c }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Map</label>
+          <select name="map" id="map-select" class="form-control" required>
+            <option value="">Selecione a empresa primeiro</option>
+          </select>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Tipo / Dispositivo</label>
+          <select name="type" id="type-select" class="form-control" required>
+            <option value="">Selecione a empresa primeiro</option>
+          </select>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Nome do dispositivo</label>
+          <input name="device_name" class="form-control" placeholder="Ex.: CAM 01, CTO 02">
+        </div>
+        <div class="row g-2">
+          <div class="col-6">
+            <label class="form-label">Splices</label>
+            <input name="splices" type="number" min="0" class="form-control" value="0">
+          </div>
+          <div class="col-6">
+            <label class="form-label">Data</label>
+            <input name="created" type="date" class="form-control" value="{{ today }}">
+          </div>
+        </div>
+        <input type="hidden" name="splicer" value="{{ default_splicer }}">
+        <button class="btn btn-primary w-100" type="submit">Salvar lançamento</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card p-4 text-light">
+      <h5 class="mb-3">Como funciona</h5>
+      <ul class="small text-light">
+        <li>Escolha a <b>empresa</b>. O campo de <b>map</b> só mostra mapas cadastrados para ela.</li>
+        <li>As regras de <b>fusões inclusas</b> e <b>preços</b> vêm da tela de Configurações.</li>
+        <li>Esse formulário lança <b>apenas uma linha</b> por vez, igual a uma linha da planilha.</li>
+        <li>Todos os lançamentos aparecem depois na tela principal de <b>Produção</b>.</li>
+        <li>Se você for usuário normal, só vê e lança <b>os seus próprios registros</b>. O admin vê tudo.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script>
+
+  const mapsByCompany = {{ maps_by_company|tojson }};
+  const devicesByCompany = {{ devices_by_company|tojson }};
+  const companySelect = document.getElementById('company-select');
+  const mapSelect = document.getElementById('map-select');
+  const typeSelect = document.getElementById('type-select');
+
+
+
+
+  function updateTypes() {
+    const company = companySelect.value || "__global__";
+    const types = devicesByCompany[company] || devicesByCompany["__global__"] || [];
+    typeSelect.innerHTML = '';
+
+    if (!company) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'Selecione a empresa primeiro';
+      typeSelect.appendChild(opt);
+      return;
+    }
+
+    if (types.length === 0) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'Nenhum dispositivo cadastrado para esta empresa';
+      typeSelect.appendChild(opt);
+      return;
+    }
+
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = 'Selecione o tipo / dispositivo';
+    typeSelect.appendChild(empty);
+
+    types.forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t;
+      opt.textContent = t;
+      typeSelect.appendChild(opt);
+    });
+  }
+
+  function updateMaps() {
+    const company = companySelect.value;
+    const maps = mapsByCompany[company] || [];
+    mapSelect.innerHTML = '';
+
+    if (!company) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'Selecione a empresa primeiro';
+      mapSelect.appendChild(opt);
+      return;
+    }
+
+    if (maps.length === 0) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'Nenhum mapa cadastrado para esta empresa';
+      mapSelect.appendChild(opt);
+      return;
+    }
+
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = 'Selecione o mapa';
+    mapSelect.appendChild(empty);
+
+    maps.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = m;
+      mapSelect.appendChild(opt);
+    });
+  }
+
+  companySelect.addEventListener('change', () => { updateMaps(); updateTypes(); });
+</script>
+{% endblock %}

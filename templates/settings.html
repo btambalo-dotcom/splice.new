@@ -1,0 +1,1 @@
+<h3>Empresas</h3><form method=post action='{{url_for("settings_company_add")}}'>Nome:<input name=name>Fusões inclusas:<input name=included type=number><button>Salvar</button></form>{% for c in companies %}<div>{{c.name}} - {{c.included_splices}}</div>{% endfor %}

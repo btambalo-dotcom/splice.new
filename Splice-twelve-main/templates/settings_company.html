@@ -1,0 +1,162 @@
+
+{% extends 'base.html' %}
+{% block title %}Empresa {{ company.name }} · SPLICER{% endblock %}
+{% block content %}
+<h3 class="mb-3">Empresa: {{ company.name }}</h3>
+
+<div class="row g-4">
+  <div class="col-lg-4">
+    <div class="card p-4 h-100">
+      <h5>Fusões inclusas</h5>
+      <form method="post" action="{{ url_for('settings_company_add') }}" class="row g-2 mb-3">
+        <input type="hidden" name="name" value="{{ company.name }}">
+        <div class="col-12">
+          <label class="form-label">Fusões inclusas por lançamento</label>
+          <input class="form-control" name="included_splices" type="number" min="0" value="{{ company.included_splices }}">
+        </div>
+        <div class="col-12">
+          <button class="btn btn-primary w-100" type="submit">Atualizar</button>
+        </div>
+      </form>
+
+      <a href="{{ url_for('settings') }}" class="btn btn-outline-secondary btn-sm w-100">Voltar para empresas</a>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="card p-4 h-100">
+      <h5>Dispositivos ({{ company.name }})</h5>
+      <form method="post" action="{{ url_for('settings_device_add') }}" class="row g-2 mb-3">
+        <input type="hidden" name="company" value="{{ company.name }}">
+        <input type="hidden" name="next" value="{{ url_for('settings_company_detail', cid=company.id) }}">
+        <div class="col-12">
+          <label class="form-label">Nome do dispositivo</label>
+          <input class="form-control" name="name" placeholder="Ex.: CAM, CTO, ONT" required>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Valor (USD)</label>
+          <div class="input-group">
+            <span class="input-group-text">$</span>
+            <input class="form-control" name="value_usd" type="number" step="0.01" min="0" required>
+          </div>
+        </div>
+        <div class="col-12">
+          <button class="btn btn-primary w-100" type="submit">Salvar dispositivo</button>
+        </div>
+      </form>
+
+      <table class="table table-sm table-dark align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Dispositivo</th>
+            <th class="text-end">Valor</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for d in types %}
+            <tr>
+              <td>{{ d.name }}</td>
+              <td class="text-end">${{ '%.2f'|format(d.value_usd) }}</td>
+              <td class="text-end">
+                <a href="{{ url_for('settings_device_delete', did=d.id, next=url_for('settings_company_detail', cid=company.id)) }}"
+                   class="btn btn-sm btn-outline-danger"
+                   onclick="return confirm('Remover dispositivo?');">✕</a>
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="3" class="text-secondary">Nenhum dispositivo cadastrado.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="card p-4 h-100">
+      <h5>Faixas &amp; mapas ({{ company.name }})</h5>
+
+      <form method="post" action="{{ url_for('settings_tier_add') }}" class="row g-2 mb-3">
+        <input type="hidden" name="company" value="{{ company.name }}">
+        <input type="hidden" name="next" value="{{ url_for('settings_company_detail', cid=company.id) }}">
+        <div class="col-4">
+          <label class="form-label">Splices mín.</label>
+          <input class="form-control" name="min_splices" type="number" min="0" value="1">
+        </div>
+        <div class="col-4">
+          <label class="form-label">Splices máx.</label>
+          <input class="form-control" name="max_splices" type="number" min="0" placeholder="∞">
+        </div>
+        <div class="col-4">
+          <label class="form-label">$ / fusão</label>
+          <div class="input-group">
+            <span class="input-group-text">$</span>
+            <input class="form-control" name="price" type="number" step="0.01" min="0" required>
+          </div>
+        </div>
+        <div class="col-12">
+          <button class="btn btn-primary w-100" type="submit">Adicionar faixa</button>
+        </div>
+      </form>
+
+      <table class="table table-sm table-dark align-middle mb-3">
+        <thead>
+          <tr>
+            <th>Splices</th>
+            <th class="text-end">$ / fusão</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in tiers %}
+            <tr>
+              <td>
+                {% if t.max_splices %}
+                  {{ t.min_splices }} – {{ t.max_splices }}
+                {% else %}
+                  {{ t.min_splices }} – ∞
+                {% endif %}
+              </td>
+              <td class="text-end">${{ '%.2f'|format(t.price_per_splice_usd) }}</td>
+              <td class="text-end">
+                <a href="{{ url_for('settings_tier_delete', tid=t.id, next=url_for('settings_company_detail', cid=company.id)) }}"
+                   class="btn btn-sm btn-outline-danger"
+                   onclick="return confirm('Remover faixa?');">✕</a>
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="3" class="text-secondary">Nenhuma faixa cadastrada.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <h6 class="mt-3">Mapas da empresa</h6>
+      <form method="post" action="{{ url_for('settings_company_detail', cid=company.id) }}" class="row g-2 mb-2">
+        <div class="col-8">
+          <label class="form-label">Novo mapa</label>
+          <input class="form-control" name="new_map" placeholder="Ex.: MAP-001" >
+        </div>
+        <div class="col-4 d-flex align-items-end">
+          <button class="btn btn-outline-light w-100" type="submit">Adicionar mapa</button>
+        </div>
+      </form>
+
+      <div class="border rounded p-2" style="max-height: 180px; overflow-y: auto;">
+        {% if maps %}
+          <ul class="list-unstyled mb-0 small">
+            {% for m in maps %}
+              <li class="d-flex justify-content-between align-items-center">
+                <span>{{ m.name }}</span>
+                <a href="{{ url_for('settings_company_detail', cid=company.id) }}?del_map={{ m.id }}" class="text-danger"
+                   onclick="return confirm('Remover mapa?');">✕</a>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <span class="text-secondary small">Nenhum mapa cadastrado ainda.</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
