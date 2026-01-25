@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, send_file
+from flask import Flask, render_template, request, redirect, url_for, flash, send_file, abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from datetime import datetime, date
@@ -664,6 +664,14 @@ def export_pdf():
 @login_required
 def record_delete(rid: int):
     rec = Record.query.get_or_404(rid)
+
+    # Apenas admin pode apagar qualquer registro.
+    # Usuário comum só pode apagar o próprio lançamento.
+    if not getattr(current_user, "is_admin", False):
+        enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
+        if rec.splicer != enforced_splicer:
+            abort(403)
+
     db.session.delete(rec)
     db.session.commit()
     flash("Registro removido.", "success")
