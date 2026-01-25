@@ -12,7 +12,16 @@ from functools import wraps
 # --------- App & DB setup ---------
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY", "dev-key")
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///data.db"
+# configuração de banco de dados:
+# - Em desenvolvimento/local: SQLite (arquivo data.db)
+# - Em produção (Render): variável de ambiente DATABASE_URL (PostgreSQL)
+db_url = os.getenv("DATABASE_URL", "sqlite:///data.db")
+
+# Render costuma fornecer URL começando com "postgres://", mas o SQLAlchemy espera "postgresql://"
+if db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db = SQLAlchemy(app)
