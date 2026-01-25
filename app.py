@@ -2,7 +2,7 @@ from flask import Flask, render_template, request, redirect, url_for, flash, sen
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from datetime import datetime, date
-from sqlalchemy import text, case, or_
+from sqlalchemy import text, case, or_, inspect
 import os
 from fpdf import FPDF
 from io import BytesIO
@@ -89,11 +89,14 @@ with app.app_context():
         db.session.add(User(username="admin", password="admin", is_admin=True, splicer_name="ADMIN"))
         db.session.commit()
 
-    # migração simples de colunas (caso use um data.db antigo)
+    # migração simples de colunas (funciona tanto em SQLite quanto em Postgres)
     def ensure(table, col, typ):
-        existing = [r[1] for r in db.session.execute(text(f"PRAGMA table_info({table})"))]
+        """Garante que uma coluna exista na tabela informada."""
+        inspector = inspect(db.engine)
+        existing = [c["name"] for c in inspector.get_columns(table)]
         if col not in existing:
-            db.session.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {typ}"))
+            # Em Postgres, usar aspas duplas no nome da tabela evita problemas de case
+            db.session.execute(text(f'ALTER TABLE "{table}" ADD COLUMN {col} {typ}'))
             db.session.commit()
 
     ensure("record", "company", "VARCHAR(120)")
