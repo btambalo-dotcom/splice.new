@@ -201,10 +201,14 @@ def index():
     start_raw = request.args.get("start") or None
     end_raw = request.args.get("end") or None
 
+    # base da consulta
     query = Record.query
+
+    # filtros principais
     if company_filter:
         query = query.filter(Record.company == company_filter)
-    if splicer_filter:
+    if splicer_filter and getattr(current_user, "is_admin", False):
+        # só admin pode aplicar filtro por splicer diferente
         query = query.filter(Record.splicer == splicer_filter)
     if map_filter:
         query = query.filter(Record.map.ilike(f"%{map_filter}%"))
@@ -222,7 +226,8 @@ def index():
         except ValueError:
             pass
 
-    # se não for admin, restringe aos lançamentos do próprio usuário
+    # se não for admin, restringe SEMPRE aos lançamentos do próprio usuário
+    enforced_splicer = None
     if not getattr(current_user, "is_admin", False):
         enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
         query = query.filter(Record.splicer == enforced_splicer)
@@ -249,6 +254,16 @@ def index():
         if (u.splicer_name or u.username)
     }
     all_splicers = sorted(splicers_from_records | splicers_from_users)
+
+    # para usuários comuns, o dropdown não deve listar outros nomes
+    if not getattr(current_user, "is_admin", False):
+        if enforced_splicer:
+            all_splicers = [enforced_splicer]
+            splicer_filter = enforced_splicer
+        else:
+            enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
+            all_splicers = [enforced_splicer]
+            splicer_filter = enforced_splicer
 
     return render_template(
         "index.html",

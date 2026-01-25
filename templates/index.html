@@ -41,12 +41,16 @@
         </div>
         <div class="col-md-6">
           <label class="form-label">Splicer / Usuário</label>
+          {% if current_user.is_admin %}
           <select name="splicer" class="form-control">
             <option value="">Todos</option>
             {% for s in splicers %}
               <option value="{{ s }}" {% if splicer_filter == s %}selected{% endif %}>{{ s }}</option>
             {% endfor %}
           </select>
+          {% else %}
+          <input class="form-control" value="{{ current_user.splicer_name or current_user.username }}" disabled>
+          {% endif %}
         </div>
         <div class="col-md-6">
           <label class="form-label">Map</label>
