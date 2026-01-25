@@ -2,7 +2,6 @@ from flask import Flask, render_template, request, redirect, url_for, flash, sen
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from datetime import datetime, date
-import pandas as pd
 from sqlalchemy import text, case, or_
 import os
 from fpdf import FPDF
@@ -170,66 +169,9 @@ def compute_prices(splices: int, device_name: str, company: str | None):
     return price_splices, price_device, price_splices + price_device
 
 
-def apply_prices(df: pd.DataFrame, default_company: str | None = None) -> pd.DataFrame:
-    if "Company" not in df.columns:
-        df["Company"] = default_company
-
-    def calc(row: pd.Series):
-        company = row.get("Company") or default_company
-        splices = int(row.get("Splices") or 0)
-        included = included_splices_for(company)
-        charge = max(splices - included, 0)
-        price_splices = charge * tier_price_for(charge, company)
-        price_device = device_value_for(str(row.get("Device") or ""), company)
-        return pd.Series([price_splices, price_device, price_splices + price_device])
-
-    df[["price_splices_usd", "price_device_usd", "total_usd"]] = df.apply(calc, axis=1)
-    return df
-
-def parse_excel(file_storage, default_company: str | None = None) -> pd.DataFrame:
-    if not file_storage:
-        raise ValueError("Nenhum arquivo enviado.")
-    df = pd.read_excel(file_storage)
-    df.columns = [str(c).strip() for c in df.columns]
-
-    required = ["Type", "Map", "Splices", "Device", "Splicer", "Created"]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        raise ValueError("Colunas ausentes: " + ", ".join(missing))
-
-    # garante colunas mínimas
-    out = df[required].copy()
-    if "Company" in df.columns:
-        out["Company"] = df["Company"].fillna(default_company)
-    else:
-        out["Company"] = default_company
-
-    out["Splices"] = pd.to_numeric(out["Splices"], errors="coerce").fillna(0).astype(int)
-    out["Created"] = pd.to_datetime(out["Created"], errors="coerce")
-    return out
-
-def persist_df(df: pd.DataFrame):
-    rows = []
-    for _, r in df.iterrows():
-        rec = Record(
-            map=str(r.get("Map") or ""),
-            type=str(r.get("Type") or ""),
-            splices=int(r.get("Splices") or 0),
-            device=str(r.get("Device") or ""),
-            splicer=str(r.get("Splicer") or ""),
-            created_date=r.get("Created"),
-            company=r.get("Company"),
-            price_splices_usd=float(r.get("price_splices_usd") or 0),
-            price_device_usd=float(r.get("price_device_usd") or 0),
-            total_usd=float(r.get("total_usd") or 0),
-        )
-        rows.append(rec)
-    if rows:
-        db.session.bulk_save_objects(rows)
-        db.session.commit()
-
 
 # --------- Decorators ---------
+
 def admin_required(f):
     @wraps(f)
     @login_required
@@ -244,16 +186,9 @@ def admin_required(f):
 @app.route("/", methods=["GET", "POST"])
 @login_required
 def index():
+    # Importar planilha foi removido do sistema; qualquer POST apenas mostra aviso.
     if request.method == "POST":
-        company = request.form.get("company") or None
-        file = request.files.get("file")
-        try:
-            df = parse_excel(file, default_company=company)
-            df = apply_prices(df, default_company=company)
-            persist_df(df)
-            flash("Planilha importada com sucesso!", "success")
-        except Exception as e:
-            flash(f"Erro ao importar planilha: {e}", "danger")
+        flash("A importação de planilha foi desativada neste sistema.", "warning")
         return redirect(url_for("index"))
 
     # filtros
