@@ -7,6 +7,9 @@ import os
 from fpdf import FPDF
 from io import BytesIO
 from functools import wraps
+import csv
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, Border, Side
 
 # --------- App & DB setup ---------
 app = Flask(__name__)
@@ -37,6 +40,30 @@ class CompanyConfig(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), unique=True, nullable=False)
     included_splices = db.Column(db.Integer, default=1, nullable=False)  # fusões inclusas por lançamento
+    invoice_address = db.Column(db.Text, nullable=True)  # nome + endereço p/ usar na invoice
+
+
+class SystemConfig(db.Model):
+    """Configurações gerais do sistema (dados da sua empresa para sair na invoice)."""
+    id = db.Column(db.Integer, primary_key=True)
+    my_company_name = db.Column(db.String(200), nullable=True)
+    my_company_address = db.Column(db.Text, nullable=True)
+    my_company_tax_id = db.Column(db.String(120), nullable=True)
+    my_company_email = db.Column(db.String(120), nullable=True)
+    my_company_phone = db.Column(db.String(60), nullable=True)
+
+
+
+class Invoice(db.Model):
+    """Invoices geradas para controle contábil."""
+    id = db.Column(db.Integer, primary_key=True)
+    number = db.Column(db.String(50), nullable=False, unique=True)
+    company = db.Column(db.String(120), nullable=False)
+    start_date = db.Column(db.Date, nullable=True)
+    end_date = db.Column(db.Date, nullable=True)
+    total_usd = db.Column(db.Float, nullable=False, default=0.0)
+    status = db.Column(db.String(20), nullable=False, default="pending")  # pending / paid
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
 class DeviceType(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -102,6 +129,7 @@ with app.app_context():
     ensure("record", "company", "VARCHAR(120)")
     ensure("device_type", "company", "VARCHAR(120)")
     ensure("splice_tier", "company", "VARCHAR(120)")
+    ensure("company_config", "invoice_address", "TEXT")
     ensure("user", "is_admin", "BOOLEAN")
     ensure("user", "splicer_name", "VARCHAR(120)")
 
@@ -369,7 +397,12 @@ def logout():
 def settings():
     """Tela principal de cadastro de empresas."""
     companies = CompanyConfig.query.order_by(CompanyConfig.name).all()
-    return render_template("settings.html", companies=companies)
+    syscfg = SystemConfig.query.first()
+    if not syscfg:
+        syscfg = SystemConfig()
+        db.session.add(syscfg)
+        db.session.commit()
+    return render_template("settings.html", companies=companies, syscfg=syscfg)
 
 @app.route("/settings/company/add", methods=["POST"])
 @login_required
@@ -377,6 +410,7 @@ def settings_company_add():
     name = (request.form.get("name") or "").strip()
     included_raw = request.form.get("included_splices") or "0"
     included = int(included_raw or 0)
+    invoice_address = (request.form.get("invoice_address") or "").strip() or None
 
     if not name:
         flash("Nome da empresa é obrigatório.", "danger")
@@ -385,8 +419,9 @@ def settings_company_add():
     cfg = CompanyConfig.query.filter_by(name=name).first()
     if cfg:
         cfg.included_splices = included
+        cfg.invoice_address = invoice_address
     else:
-        cfg = CompanyConfig(name=name, included_splices=included)
+        cfg = CompanyConfig(name=name, included_splices=included, invoice_address=invoice_address)
         db.session.add(cfg)
     db.session.commit()
     flash("Empresa / fusões inclusas salva.", "success")
@@ -430,6 +465,32 @@ def settings_company_detail(cid: int):
         maps=maps,
     )
 
+
+
+@app.route("/settings/system", methods=["POST"])
+@admin_required
+def settings_system_update():
+    """Atualiza os dados da sua empresa (emitente da invoice)."""
+    name = (request.form.get("my_company_name") or "").strip() or None
+    addr = (request.form.get("my_company_address") or "").strip() or None
+    taxid = (request.form.get("my_company_tax_id") or "").strip() or None
+    email = (request.form.get("my_company_email") or "").strip() or None
+    phone = (request.form.get("my_company_phone") or "").strip() or None
+
+    cfg = SystemConfig.query.first()
+    if not cfg:
+        cfg = SystemConfig()
+        db.session.add(cfg)
+
+    cfg.my_company_name = name
+    cfg.my_company_address = addr
+    cfg.my_company_tax_id = taxid
+    cfg.my_company_email = email
+    cfg.my_company_phone = phone
+
+    db.session.commit()
+    flash("Dados da sua empresa atualizados.", "success")
+    return redirect(url_for("settings"))
 
 @app.route("/settings/device/add", methods=["POST"])
 @login_required
@@ -679,6 +740,355 @@ def export_pdf():
     return send_file(buf, as_attachment=True, download_name=filename, mimetype="application/pdf")
 
 
+
+@app.route("/invoices")
+@admin_required
+def invoices_list():
+    """Lista simples de todas as invoices para controle contábil."""
+    status_filter = request.args.get("status") or None
+    query = Invoice.query.order_by(Invoice.created_at.desc())
+    if status_filter in ("pending", "paid"):
+        query = query.filter(Invoice.status == status_filter)
+    invoices = query.all()
+    return render_template("invoices.html", invoices=invoices, status_filter=status_filter)
+
+
+@app.route("/invoice/<int:iid>/toggle", methods=["POST"])
+@admin_required
+def invoice_toggle_status(iid: int):
+    inv = Invoice.query.get_or_404(iid)
+    inv.status = "paid" if inv.status != "paid" else "pending"
+    db.session.commit()
+    flash("Invoice status updated.", "success")
+    return redirect(url_for("invoices_list"))
+
+@app.route("/invoice/<int:iid>/delete", methods=["POST"])
+@admin_required
+def invoice_delete(iid: int):
+    inv = Invoice.query.get_or_404(iid)
+    db.session.delete(inv)
+    db.session.commit()
+    flash("Invoice deleted.", "success")
+    return redirect(url_for("invoices_list"))
+@app.route("/export/invoice")
+@login_required
+def export_invoice():
+    """Gera uma invoice (nota de cobrança) em PDF para o intervalo de datas e filtros informados.
+
+    A invoice contém: nome do mapa, número do dispositivo, número de fusões,
+    valor do dispositivo e total, somados por mapa/dispositivo no período.
+    """
+    # mesmos filtros do index / export_pdf
+    company_filter = request.args.get("company") or None
+    splicer_filter = request.args.get("splicer") or None
+    map_filter = request.args.get("map") or None
+    start_raw = request.args.get("start") or None
+    end_raw = request.args.get("end") or None
+    no_values = False  # sempre com valores na invoice
+
+    # invoice só pode ser gerada para UMA empresa específica
+    if not company_filter:
+        flash("Para gerar invoice, selecione uma empresa específica (filtro de empresa).", "danger")
+        return redirect(url_for("index"))
+
+    query = Record.query
+
+    if company_filter:
+        query = query.filter(Record.company == company_filter)
+    if splicer_filter and getattr(current_user, "is_admin", False):
+        query = query.filter(Record.splicer == splicer_filter)
+    if map_filter:
+        query = query.filter(Record.map.ilike(f"%{map_filter}%"))
+
+    if start_raw:
+        try:
+            start_dt = datetime.fromisoformat(start_raw)
+            query = query.filter(Record.created_date >= start_dt)
+        except ValueError:
+            start_dt = None
+    else:
+        start_dt = None
+
+    if end_raw:
+        try:
+            end_dt = datetime.fromisoformat(end_raw)
+            query = query.filter(Record.created_date <= end_dt)
+        except ValueError:
+            end_dt = None
+    else:
+        end_dt = None
+
+    from datetime import datetime as _dt
+    inv_date = _dt.utcnow().date().isoformat()
+    inv_number = _dt.utcnow().strftime("INV-%Y%m%d-%H%M%S")
+
+    # se não for admin, força o filtro para o próprio splicer
+    if not getattr(current_user, "is_admin", False):
+        enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
+        query = query.filter(Record.splicer == enforced_splicer)
+
+    records = query.order_by(Record.created_date.asc().nullslast(), Record.id.asc()).all()
+
+    # agrupar por mapa + dispositivo
+    grouped = {}
+    for r in records:
+        key = ((r.map or "").strip(), (r.device or "").strip())
+        if key not in grouped:
+            grouped[key] = {
+                "map": key[0] or "-",
+                "device": key[1] or "-",
+                "splices": 0,
+                "price_device_usd": float(r.price_device_usd or 0.0),
+                "total_usd": 0.0,
+            }
+        grouped[key]["splices"] += int(r.splices or 0)
+        grouped[key]["total_usd"] += float(r.total_usd or 0.0)
+        # se o preço do dispositivo vier zero mas houver total,
+        # tenta inferir um valor médio por dispositivo
+        if grouped[key]["price_device_usd"] == 0.0 and (r.total_usd or 0) and (r.splices or 0):
+            grouped[key]["price_device_usd"] = float(r.total_usd or 0.0) / float(r.splices or 1)
+
+    lines = list(grouped.values())
+    lines.sort(key=lambda x: (x["map"], x["device"]))
+
+    total_invoice = sum(l["total_usd"] for l in lines)
+
+    # persist invoice for accounting
+    inv_start_date = start_dt.date() if start_dt else None
+    inv_end_date = end_dt.date() if end_dt else None
+    inv_rec = Invoice(number=inv_number, company=company_filter or "", start_date=inv_start_date, end_date=inv_end_date, total_usd=float(total_invoice or 0.0))
+    db.session.add(inv_rec)
+    db.session.commit()
+
+    # montar PDF da invoice
+    # buscar dados da sua empresa (emitente)
+    syscfg = SystemConfig.query.first()
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    # header - your company (FROM)
+    pdf.set_font("Arial", "B", 12)
+    if syscfg and syscfg.my_company_name:
+        pdf.cell(0, 6, syscfg.my_company_name, ln=1)
+    if syscfg and syscfg.my_company_address:
+        for line in (syscfg.my_company_address or "").splitlines():
+            if line.strip():
+                pdf.set_font("Arial", "", 9)
+                pdf.cell(0, 5, line.strip(), ln=1)
+    if syscfg and (syscfg.my_company_email or syscfg.my_company_phone):
+        contact_parts = []
+        if syscfg.my_company_email:
+            contact_parts.append(syscfg.my_company_email)
+        if syscfg.my_company_phone:
+            contact_parts.append(syscfg.my_company_phone)
+        pdf.cell(0, 5, " | ".join(contact_parts), ln=1)
+    pdf.ln(4)
+
+    # invoice title and metadata
+    pdf.set_font("Arial", "B", 14)
+    pdf.cell(0, 8, "INVOICE", ln=1)
+
+    pdf.set_font("Arial", "", 10)
+    pdf.cell(0, 6, f"Invoice date: {inv_date}", ln=1)
+    pdf.cell(0, 6, f"Invoice #: {inv_number}", ln=1)
+    pdf.ln(4)
+
+    # BILL TO (client)
+    cfg_cli = CompanyConfig.query.filter_by(name=company_filter).first()
+    pdf.set_font("Arial", "B", 10)
+    pdf.cell(0, 6, "BILL TO:", ln=1)
+    pdf.set_font("Arial", "", 9)
+    if cfg_cli:
+        if cfg_cli.invoice_address:
+            for line in (cfg_cli.invoice_address or "").splitlines():
+                if line.strip():
+                    pdf.cell(0, 5, line.strip(), ln=1)
+        else:
+            pdf.cell(0, 5, cfg_cli.name, ln=1)
+    else:
+        pdf.cell(0, 5, company_filter or "", ln=1)
+
+    pdf.ln(4)
+
+    # table header
+    col_widths = [60, 40, 25, 30, 30]
+    headers = ["Map", "Device", "Splices", "Device price", "Total"]
+
+    pdf.set_font("Arial", "B", 10)
+    for w, h in zip(col_widths, headers):
+        pdf.cell(w, 7, h, border=1)
+    pdf.ln()
+
+    pdf.set_font("Arial", "", 9)
+    for l in lines:
+        row = [
+            l["map"],
+            l["device"],
+            str(l["splices"]),
+            f"$ {l['price_device_usd']:.2f}",
+            f"$ {l['total_usd']:.2f}",
+        ]
+        for w, val in zip(col_widths, row):
+            pdf.cell(w, 6, str(val)[:30], border=1)
+        pdf.ln()
+
+    pdf.ln(4)
+    pdf.set_font("Arial", "B", 11)
+    pdf.cell(0, 8, f"Invoice total: $ {total_invoice:.2f}", ln=1)
+
+    buf = BytesIO()
+    pdf.output(buf)
+    buf.seek(0)
+    filename = "invoice_splicer.pdf"
+    return send_file(buf, as_attachment=True, download_name=filename, mimetype="application/pdf")
+
+
+
+
+
+@app.route("/export/excel")
+@login_required
+def export_excel():
+    """Exporta os dados de produção em formato Excel (CSV) por empresa e período.
+
+    O arquivo contém: nome do mapa, nome do dispositivo e número de fusões,
+    já somados por mapa/dispositivo dentro do filtro.
+    """
+    company_filter = request.args.get("company") or None
+    splicer_filter = request.args.get("splicer") or None
+    map_filter = request.args.get("map") or None
+    start_raw = request.args.get("start") or None
+    end_raw = request.args.get("end") or None
+
+    if not company_filter:
+        flash("To export Excel, select a company in the filter.", "danger")
+        return redirect(url_for("index"))
+
+    query = Record.query
+
+    if company_filter:
+        query = query.filter(Record.company == company_filter)
+    if splicer_filter:
+        query = query.filter(Record.splicer == splicer_filter)
+    if map_filter:
+        query = query.filter(Record.map == map_filter)
+
+    start_dt = None
+    end_dt = None
+    if start_raw:
+        try:
+            start_dt = datetime.fromisoformat(start_raw)
+            query = query.filter(Record.created_date >= start_dt)
+        except ValueError:
+            start_dt = None
+    if end_raw:
+        try:
+            end_dt = datetime.fromisoformat(end_raw)
+            query = query.filter(Record.created_date <= end_dt)
+        except ValueError:
+            end_dt = None
+
+    # se não for admin, força o filtro para o próprio splicer
+    if not getattr(current_user, "is_admin", False):
+        enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
+        query = query.filter(Record.splicer == enforced_splicer)
+
+    records = query.order_by(Record.created_date.asc().nullslast(), Record.id.asc()).all()
+
+    if not records:
+        flash("No records found for this filter.", "warning")
+        return redirect(url_for("index"))
+
+    # agrupar por mapa + dispositivo + data
+    grouped = {}
+    devices_unique = set()
+    for r in records:
+        map_name = (r.map or "").strip()
+        device_name = (r.device or "").strip()
+        date_value = r.created_date.date().isoformat() if r.created_date else None
+
+        key = (map_name, device_name, date_value)
+        if key not in grouped:
+            grouped[key] = {
+                "map": map_name or "-",
+                "device": device_name or "-",
+                "date": date_value or "",
+                "splices": 0,
+            }
+        grouped[key]["splices"] += int(r.splices or 0)
+
+        if device_name:
+            devices_unique.add(device_name)
+
+    lines = list(grouped.values())
+    lines.sort(key=lambda x: (x["date"], x["map"], x["device"]))
+
+    # gerar planilha Excel (XLSX) em memória
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Production"
+
+    # cabeçalho (Date | Map | Device | Splices)
+    headers = ["Date", "Map", "Device", "Splices"]
+    ws.append(headers)
+
+    # linhas de dados
+    total_splices = 0
+    for line in lines:
+        ws.append([line["date"], line["map"], line["device"], line["splices"]])
+        total_splices += int(line["splices"] or 0)
+
+    # linhas de totais
+    total_devices = len(devices_unique)
+    ws.append([])
+    total_row_devices = ws.max_row + 1
+    ws.cell(row=total_row_devices, column=1, value="TOTAL DEVICES")
+    ws.cell(row=total_row_devices, column=2, value=total_devices)
+
+    total_row_splices = total_row_devices + 1
+    ws.cell(row=total_row_splices, column=1, value="TOTAL SPLICES")
+    ws.cell(row=total_row_splices, column=4, value=total_splices)
+
+    # aplicar estilos (negrito cabeçalho e totais, bordas)
+    thin = Side(border_style="thin", color="000000")
+    border = Border(top=thin, left=thin, right=thin, bottom=thin)
+
+    # cabeçalho em negrito
+    for col in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=col)
+        cell.font = Font(bold=True)
+        cell.border = border
+
+    # dados + bordas
+    last_row = total_row_splices
+    for row in range(2, last_row + 1):
+        for col in range(1, 5):
+            cell = ws.cell(row=row, column=col)
+            # destacar totais
+            if row in (total_row_devices, total_row_splices):
+                cell.font = Font(bold=True)
+            cell.border = border
+
+    # autoajustar largura das colunas
+    for col in range(1, 5):
+        max_len = 0
+        col_letter = ws.cell(row=1, column=col).column_letter
+        for row in range(1, last_row + 1):
+            val = ws.cell(row=row, column=col).value
+            if val is None:
+                continue
+            max_len = max(max_len, len(str(val)))
+        ws.column_dimensions[col_letter].width = max_len + 2
+
+    buf = BytesIO()
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    filename = f"splicer_{company_filter or 'all'}_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
+    return send_file(buf, as_attachment=True, download_name=filename, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 @app.route("/record/<int:rid>/delete")
 @login_required
 def record_delete(rid: int):
