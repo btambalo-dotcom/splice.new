@@ -7,12 +7,16 @@
 <div class="row g-4">
   <div class="col-lg-4">
     <div class="card p-4 h-100">
-      <h5>Fusões inclusas</h5>
+      <h5>Fusões &amp; endereço para invoice</h5>
       <form method="post" action="{{ url_for('settings_company_add') }}" class="row g-2 mb-3">
         <input type="hidden" name="name" value="{{ company.name }}">
         <div class="col-12">
           <label class="form-label">Fusões inclusas por lançamento</label>
           <input class="form-control" name="included_splices" type="number" min="0" value="{{ company.included_splices }}">
+        </div>
+        <div class="col-12">
+          <label class="form-label">Endereço para invoice (nome + endereço completos)</label>
+          <textarea class="form-control" name="invoice_address" rows="3" placeholder="Nome da empresa + endereço que aparecerá na invoice">{{ company.invoice_address or '' }}</textarea>
         </div>
         <div class="col-12">
           <button class="btn btn-primary w-100" type="submit">Atualizar</button>

@@ -1,0 +1,68 @@
+
+{% extends 'base.html' %}
+{% block title %}Invoices · SPLICER{% endblock %}
+{% block content %}
+<h3 class="mb-3">Invoices</h3>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <a href="{{ url_for('invoices_list') }}" class="btn btn-sm {% if not status_filter %}btn-primary{% else %}btn-outline-primary{% endif %}">All</a>
+    <a href="{{ url_for('invoices_list', status='pending') }}" class="btn btn-sm {% if status_filter == 'pending' %}btn-primary{% else %}btn-outline-primary{% endif %} ms-1">Pending</a>
+    <a href="{{ url_for('invoices_list', status='paid') }}" class="btn btn-sm {% if status_filter == 'paid' %}btn-primary{% else %}btn-outline-primary{% endif %} ms-1">Paid</a>
+  </div>
+  <small class="text-secondary">Every invoice generated from the system appears here.</small>
+</div>
+
+<table class="table table-dark table-striped align-middle">
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Company</th>
+      <th>Date</th>
+      <th>Service period</th>
+      <th class="text-end">Total (USD)</th>
+      <th>Status</th>
+      <th class="text-end">Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for inv in invoices %}
+      <tr>
+        <td>{{ inv.number }}</td>
+        <td>{{ inv.company }}</td>
+        <td>{{ inv.created_at.strftime('%Y-%m-%d') if inv.created_at else '' }}</td>
+        <td>
+          {% if inv.start_date or inv.end_date %}
+            {% if inv.start_date %}{{ inv.start_date }}{% endif %}
+            {% if inv.end_date %} – {{ inv.end_date }}{% endif %}
+          {% else %}
+            <span class="text-secondary small">–</span>
+          {% endif %}
+        </td>
+        <td class="text-end">$ {{ '%.2f'|format(inv.total_usd or 0) }}</td>
+        <td>
+          {% if inv.status == 'paid' %}
+            <span class="badge bg-success">Paid</span>
+          {% else %}
+            <span class="badge bg-warning text-dark">Pending</span>
+          {% endif %}
+        </td>
+        <td class="text-end">
+          <form method="post" action="{{ url_for('invoice_toggle_status', iid=inv.id) }}" class="d-inline">
+            <button class="btn btn-sm {% if inv.status == 'paid' %}btn-outline-secondary{% else %}btn-outline-success{% endif %}" type="submit">
+              {% if inv.status == 'paid' %}Mark as pending{% else %}Mark as paid{% endif %}
+            </button>
+          </form>
+          <form method="post" action="{{ url_for('invoice_delete', iid=inv.id) }}" class="d-inline ms-1" onsubmit="return confirm('Delete this invoice?');">
+            <button class="btn btn-sm btn-outline-danger" type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+    {% else %}
+      <tr>
+        <td colspan="7" class="text-center text-secondary">No invoices created yet.</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

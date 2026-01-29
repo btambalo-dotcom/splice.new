@@ -22,6 +22,7 @@
             <a href="{{ url_for('entry') }}" class="btn btn-sm btn-outline-light me-2">Lançar</a>
             {% if current_user.is_admin %}
               <a href="{{ url_for('settings') }}" class="btn btn-sm btn-outline-light me-2">Configurações</a>
+              <a href="{{ url_for('invoices_list') }}" class="btn btn-sm btn-outline-info me-2">Invoices</a>
               <a href="{{ url_for('manage_users') }}" class="btn btn-sm btn-outline-warning me-2">Usuários</a>
             {% endif %}
             <a href="{{ url_for('logout') }}" class="btn btn-sm btn-outline-danger">Sair</a>

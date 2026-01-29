@@ -11,11 +11,15 @@
       <form method="post" action="{{ url_for('settings_company_add') }}" class="row g-2 mb-3">
         <div class="col-12">
           <label class="form-label">Empresa</label>
-          <input class="form-control" name="name" placeholder="Ex.: AT&T" required>
+          <input class="form-control" name="name" placeholder="Ex.: AT&amp;T" required>
         </div>
         <div class="col-12">
           <label class="form-label">Fusões inclusas por lançamento</label>
           <input class="form-control" name="included_splices" type="number" min="0" value="1">
+        </div>
+        <div class="col-12">
+          <label class="form-label">Endereço para invoice (nome + endereço completos)</label>
+          <textarea class="form-control" name="invoice_address" rows="3" placeholder="Ex.:&#10;AT&amp;T&#10;123 Main St&#10;Cidade - Estado"></textarea>
         </div>
         <div class="col-12">
           <button class="btn btn-primary w-100" type="submit">Salvar empresa</button>
@@ -34,7 +38,12 @@
         <tbody>
           {% for c in companies %}
             <tr>
-              <td>{{ c.name }}</td>
+              <td>
+                {{ c.name }}<br>
+                {% if c.invoice_address %}
+                  <small class="text-secondary">{{ c.invoice_address.replace('\n', ' · ') }}</small>
+                {% endif %}
+              </td>
               <td class="text-center">{{ c.included_splices }}</td>
               <td class="text-end">
                 <a class="btn btn-sm btn-outline-info" href="{{ url_for('settings_company_detail', cid=c.id) }}">Configurar</a>
@@ -51,12 +60,42 @@
   </div>
 
   <div class="col-lg-7">
+    <div class="card p-4 mb-4">
+      <h5>Dados da minha empresa (emitente da invoice)</h5>
+      <form method="post" action="{{ url_for('settings_system_update') }}" class="row g-2">
+        <div class="col-12">
+          <label class="form-label">Nome da sua empresa</label>
+          <input class="form-control" name="my_company_name" value="{{ syscfg.my_company_name or '' }}" placeholder="Ex.: King All Service LLC">
+        </div>
+        <div class="col-12">
+          <label class="form-label">Endereço completo</label>
+          <textarea class="form-control" name="my_company_address" rows="3" placeholder="Rua, número, cidade, estado, CEP">{{ syscfg.my_company_address or '' }}</textarea>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">CNPJ / Tax ID (opcional)</label>
+          <input class="form-control" name="my_company_tax_id" value="{{ syscfg.my_company_tax_id or '' }}">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Telefone</label>
+          <input class="form-control" name="my_company_phone" value="{{ syscfg.my_company_phone or '' }}">
+        </div>
+        <div class="col-12">
+          <label class="form-label">E-mail</label>
+          <input class="form-control" name="my_company_email" type="email" value="{{ syscfg.my_company_email or '' }}">
+        </div>
+        <div class="col-12">
+          <button class="btn btn-success w-100" type="submit">Salvar dados da minha empresa</button>
+        </div>
+      </form>
+    </div>
+
     <div class="card p-4 h-100">
       <h5>Como funciona</h5>
       <ul class="small mb-0">
         <li>Use esta tela para <b>cadastrar as empresas</b> com as quais você trabalha.</li>
-        <li>Depois, clique em <b>Configurar</b> para definir dispositivos, faixas de fusão e mapas específicos de cada empresa.</li>
-        <li>Na tela de <b>Lançamento</b>, você escolhe a empresa e o campo de mapa só mostra os mapas cadastrados para ela.</li>
+        <li>Em cada empresa você pode configurar <b>fusões inclusas, dispositivos, faixas de fusão e mapas específicos</b>.</li>
+        <li>Na tela de <b>Lançamento</b>, você escolhe a empresa e o sistema já aplica os valores e mapas configurados.</li>
+        <li>Os campos de <b>endereço da empresa</b> e <b>dados da sua empresa</b> são usados na geração da <b>invoice em PDF</b>.</li>
       </ul>
     </div>
   </div>
