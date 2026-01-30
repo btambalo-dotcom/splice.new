@@ -56,6 +56,10 @@
           <label class="form-label">Map</label>
           <input name="map" class="form-control" value="{{ map_filter }}">
         </div>
+        <div class="col-md-6">
+          <label class="form-label">Buscar por dispositivo</label>
+          <input name="device" class="form-control" value="{{ device_filter }}">
+        </div>
         <div class="col-md-3">
           <label class="form-label">Data início</label>
           <input type="date" name="start" class="form-control" value="{{ start }}">
@@ -100,6 +104,7 @@ mb-3">Registros</h5>
           <th>Map</th>
           <th>Type</th>
           <th>Device</th>
+          <th>Splicer</th>
           <th>Splices</th>
           <th>$ Fusões</th>
           <th>$ Device</th>
@@ -116,11 +121,15 @@ mb-3">Registros</h5>
             <td>{{ r.map }}</td>
             <td>{{ r.type }}</td>
             <td>{{ r.device }}</td>
+            <td>{{ r.splicer }}</td>
             <td>{{ r.splices }}</td>
             <td>$ {{ '%.2f'|format(r.price_splices_usd or 0) }}</td>
             <td>$ {{ '%.2f'|format(r.price_device_usd or 0) }}</td>
             <td>$ {{ '%.2f'|format(r.total_usd or 0) }}</td>
             <td class="text-end">
+              {% if current_user.is_admin or r.splicer == current_user.username %}
+              <a href="{{ url_for('record_edit', rid=r.id) }}" class="btn btn-sm btn-outline-primary me-1">Editar</a>
+              {% endif %}
               <a href="{{ url_for('record_delete', rid=r.id) }}" class="btn btn-sm btn-outline-danger" onclick="return confirm('Excluir este registro?');">✕</a>
             </td>
           </tr>

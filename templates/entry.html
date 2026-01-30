@@ -7,14 +7,25 @@
 <div class="row g-4">
   <div class="col-lg-6">
     <div class="card p-4">
-      <h5 class="mb-3">Novo lançamento</h5>
+      <h5 class="mb-3">
+        {% if is_edit %}Editar lançamento{% else %}Novo lançamento{% endif %}
+      </h5>
       <form method="post">
+        {% if duplicate_record %}
+        <div class="alert alert-warning small">
+          Dispositivo <b>{{ duplicate_record.device }}</b> já foi lançado no mapa
+          <b>{{ duplicate_record.map }}</b> em
+          <b>{{ duplicate_record.created_date.date() if duplicate_record.created_date else '-' }}</b>
+          pelo splicer <b>{{ duplicate_record.splicer }}</b>.
+          Se desejar lançar novamente, confirme salvando o formulário mais uma vez.
+        </div>
+        {% endif %}
         <div class="mb-3">
           <label class="form-label">Empresa</label>
           <select name="company" id="company-select" class="form-control" required>
             <option value="">Selecione a empresa</option>
             {% for c in companies %}
-              <option value="{{ c }}">{{ c }}</option>
+              <option value="{{ c }}" {% if form_company is defined and form_company == c %}selected{% endif %}>{{ c }}</option>
             {% endfor %}
           </select>
         </div>
@@ -34,19 +45,22 @@
 
         <div class="mb-3">
           <label class="form-label">Nome do dispositivo</label>
-          <input name="device_name" class="form-control" placeholder="Ex.: CAM 01, CTO 02">
+          <input name="device_name" class="form-control" placeholder="Ex.: CAM 01, CTO 02" value="{{ form_device_name|default('') }}">
         </div>
         <div class="row g-2">
           <div class="col-6">
             <label class="form-label">Splices</label>
-            <input name="splices" type="number" min="0" class="form-control" value="0">
+            <input name="splices" type="number" min="0" class="form-control" value="{{ form_splices|default('0') }}">
           </div>
           <div class="col-6">
             <label class="form-label">Data</label>
-            <input name="created" type="date" class="form-control" value="{{ today }}">
+            <input name="created" type="date" class="form-control" value="{{ form_created|default(today) }}">
           </div>
         </div>
         <input type="hidden" name="splicer" value="{{ default_splicer }}">
+        {% if confirm_duplicate %}
+        <input type="hidden" name="confirm_duplicate" value="yes">
+        {% endif %}
         <button class="btn btn-primary w-100" type="submit">Salvar lançamento</button>
       </form>
     </div>

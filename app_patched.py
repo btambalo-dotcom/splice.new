@@ -226,6 +226,7 @@ def index():
     company_filter = request.args.get("company") or None
     splicer_filter = request.args.get("splicer") or None
     map_filter = request.args.get("map") or None
+    device_filter = request.args.get("device") or None
     start_raw = request.args.get("start") or None
     end_raw = request.args.get("end") or None
 
@@ -240,6 +241,8 @@ def index():
         query = query.filter(Record.splicer == splicer_filter)
     if map_filter:
         query = query.filter(Record.map.ilike(f"%{map_filter}%"))
+    if device_filter:
+        query = query.filter(Record.device.ilike(f"%{device_filter}%"))
 
     if start_raw:
         try:
@@ -303,6 +306,7 @@ def index():
         company_filter=company_filter or "",
         splicer_filter=splicer_filter or "",
         map_filter=map_filter or "",
+        device_filter=device_filter or "",
         start=start_raw or "",
         end=end_raw or "",
     )
@@ -338,12 +342,50 @@ def entry():
         device_for_price = type_val or device_name
 
         splices_raw = request.form.get("splices") or "0"
+        created_raw = request.form.get("created") or ""
+        splicer = (request.form.get("splicer") or "").strip() or default_splicer
+        confirm_duplicate = (request.form.get("confirm_duplicate") == "yes")
+
+        # checagem de duplicidade: mesmo map + mesmo nome de dispositivo (+ mesma empresa, se informada)
+        existing = None
+        if map_val and device_name:
+            dup_query = Record.query.filter(Record.map == map_val, Record.device == device_name)
+            if company:
+                dup_query = dup_query.filter(Record.company == company)
+            existing = dup_query.order_by(Record.created_date.desc().nullslast(), Record.id.desc()).first()
+
+        if existing and not confirm_duplicate:
+            # Primeiro aviso: já existe lançamento para este dispositivo neste mapa.
+            # Mostra data e splicer e pede confirmação para lançar novamente.
+            flash(
+                "Este dispositivo já foi lançado neste map. Data: "
+                + (existing.created_date.date().isoformat() if existing.created_date else "-")
+                + f", Splicer: {existing.splicer}. Se desejar lançar novamente, confirme o lançamento.",
+                "warning",
+            )
+            return render_template(
+                "entry.html",
+                companies=companies,
+                maps_by_company=maps_by_company,
+                devices_by_company=devices_by_company,
+                default_splicer=default_splicer,
+                today=date.today().isoformat(),
+                duplicate_record=existing,
+                form_company=company,
+                form_map=map_val,
+                form_type=type_val,
+                form_device_name=device_name,
+                form_splices=splices_raw,
+                form_created=created_raw or date.today().isoformat(),
+                confirm_duplicate=True,
+            )
+
+        # conversões finais para salvar o registro
         try:
             splices = int(splices_raw or 0)
         except ValueError:
             splices = 0
-        splicer = (request.form.get("splicer") or "").strip() or default_splicer
-        created_raw = request.form.get("created") or ""
+
         if created_raw:
             try:
                 # campo vem como YYYY-MM-DD
@@ -375,7 +417,7 @@ def entry():
         # após salvar, permanece na tela de lançamento para permitir novo registro
         return redirect(url_for("entry"))
 
-    # GET
+# GET
     return render_template(
         "entry.html",
         companies=companies,
@@ -383,6 +425,91 @@ def entry():
         devices_by_company=devices_by_company,
         default_splicer=default_splicer,
         today=date.today().isoformat(),
+    )
+
+
+@app.route("/record/<int:rid>/edit", methods=["GET", "POST"])
+@login_required
+def record_edit(rid):
+    """Editar um lançamento existente."""
+    rec = Record.query.get_or_404(rid)
+
+    # mesmas estruturas de apoio usadas na tela de lançamento
+    companies = [c.name for c in CompanyConfig.query.order_by(CompanyConfig.name).all()]
+
+    maps_by_company = {}
+    for m in CompanyMap.query.order_by(CompanyMap.company, CompanyMap.name).all():
+        maps_by_company.setdefault(m.company, []).append(m.name)
+
+    devices_by_company = {}
+    for dt in DeviceType.query.order_by(DeviceType.company, DeviceType.name).all():
+        key = dt.company or "__global__"
+        devices_by_company.setdefault(key, []).append(dt.name)
+
+    default_splicer = getattr(current_user, "splicer_name", None) or current_user.username
+
+    if request.method == "POST":
+        company = (request.form.get("company") or "").strip() or None
+        map_val = (request.form.get("map") or "").strip()
+        type_val = (request.form.get("type") or "").strip()
+        device_name = (request.form.get("device_name") or "").strip()
+
+        device_for_price = type_val or device_name
+
+        splices_raw = request.form.get("splices") or "0"
+        created_raw = request.form.get("created") or ""
+        splicer = (request.form.get("splicer") or "").strip() or default_splicer
+
+        try:
+            splices = int(splices_raw or 0)
+        except ValueError:
+            splices = 0
+
+        if created_raw:
+            try:
+                created_date = datetime.strptime(created_raw, "%Y-%m-%d")
+            except ValueError:
+                created_date = datetime.utcnow()
+        else:
+            today = date.today()
+            created_date = datetime(today.year, today.month, today.day)
+
+        price_splices, price_device, total = compute_prices(splices, device_for_price, company)
+
+        # atualiza o registro existente
+        rec.company = company
+        rec.map = map_val
+        rec.type = type_val
+        rec.device = device_name
+        rec.splices = splices
+        rec.splicer = splicer
+        rec.created_date = created_date
+        rec.price_splices_usd = price_splices
+        rec.price_device_usd = price_device
+        rec.total_usd = total
+
+        db.session.commit()
+        flash("Lançamento atualizado.", "success")
+        return redirect(url_for("index"))
+
+    # GET: preenche o formulário com os dados atuais
+    form_created = rec.created_date.date().isoformat() if rec.created_date else date.today().isoformat()
+
+    return render_template(
+        "entry.html",
+        companies=companies,
+        maps_by_company=maps_by_company,
+        devices_by_company=devices_by_company,
+        default_splicer=default_splicer,
+        today=date.today().isoformat(),
+        is_edit=True,
+        record=rec,
+        form_company=rec.company,
+        form_map=rec.map,
+        form_type=rec.type,
+        form_device_name=rec.device,
+        form_splices=str(rec.splices or 0),
+        form_created=form_created,
     )
 
 @app.route("/logout")
@@ -645,6 +772,7 @@ def export_pdf():
     company_filter = request.args.get("company") or None
     splicer_filter = request.args.get("splicer") or None
     map_filter = request.args.get("map") or None
+    device_filter = request.args.get("device") or None
     start_raw = request.args.get("start") or None
     end_raw = request.args.get("end") or None
     no_values = request.args.get("no_values") == "1"
@@ -656,6 +784,8 @@ def export_pdf():
         query = query.filter(Record.splicer == splicer_filter)
     if map_filter:
         query = query.filter(Record.map.ilike(f"%{map_filter}%"))
+    if device_filter:
+        query = query.filter(Record.device.ilike(f"%{device_filter}%"))
 
     if start_raw:
         try:
@@ -782,6 +912,7 @@ def export_invoice():
     company_filter = request.args.get("company") or None
     splicer_filter = request.args.get("splicer") or None
     map_filter = request.args.get("map") or None
+    device_filter = request.args.get("device") or None
     start_raw = request.args.get("start") or None
     end_raw = request.args.get("end") or None
     no_values = False  # sempre com valores na invoice
@@ -799,6 +930,8 @@ def export_invoice():
         query = query.filter(Record.splicer == splicer_filter)
     if map_filter:
         query = query.filter(Record.map.ilike(f"%{map_filter}%"))
+    if device_filter:
+        query = query.filter(Record.device.ilike(f"%{device_filter}%"))
 
     if start_raw:
         try:
@@ -959,6 +1092,7 @@ def export_excel():
     company_filter = request.args.get("company") or None
     splicer_filter = request.args.get("splicer") or None
     map_filter = request.args.get("map") or None
+    device_filter = request.args.get("device") or None
     start_raw = request.args.get("start") or None
     end_raw = request.args.get("end") or None
 
