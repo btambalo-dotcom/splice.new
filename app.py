@@ -414,10 +414,14 @@ def entry():
         db.session.add(rec)
         db.session.commit()
         flash("Lançamento salvo.", "success")
-        # após salvar, permanece na tela de lançamento para permitir novo registro
-        return redirect(url_for("entry"))
+        # após salvar, volta para a tela de lançamento já com a mesma empresa e mapa
+        return redirect(url_for("entry", company=company or "", map=map_val or "", dtype=type_val or ""))
 
 # GET
+    pre_company = request.args.get("company") or None
+    pre_map = request.args.get("map") or ""
+    pre_type = request.args.get("dtype") or ""
+
     return render_template(
         "entry.html",
         companies=companies,
@@ -425,6 +429,9 @@ def entry():
         devices_by_company=devices_by_company,
         default_splicer=default_splicer,
         today=date.today().isoformat(),
+        form_company=pre_company,
+        form_map=pre_map,
+        form_type=pre_type,
     )
 
 

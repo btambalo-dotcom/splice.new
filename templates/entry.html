@@ -45,7 +45,13 @@
 
         <div class="mb-3">
           <label class="form-label">Nome do dispositivo</label>
-          <input name="device_name" class="form-control" placeholder="Ex.: CAM 01, CTO 02" value="{{ form_device_name|default('') }}">
+          <input id="device-name-input"
+           name="device_name"
+           class="form-control"
+           placeholder="Ex.: CAM 01, CTO 02"
+           value="{{ form_device_name|default('') }}"
+           autocomplete="off"
+           autofocus>
         </div>
         <div class="row g-2">
           <div class="col-6">
@@ -160,5 +166,30 @@
   }
 
   companySelect.addEventListener('change', () => { updateMaps(); updateTypes(); });
+
+  document.addEventListener('DOMContentLoaded', () => {
+    if (companySelect && companySelect.value) {
+      updateMaps();
+      updateTypes();
+
+      const preselectedMap = "{{ form_map|default('') }}";
+      if (preselectedMap) {
+        mapSelect.value = preselectedMap;
+      }
+    }
+
+    // manter o último TIPO de dispositivo selecionado
+    const preselectedType = "{{ form_type|default('') }}";
+    if (preselectedType && typeSelect) {
+      typeSelect.value = preselectedType;
+    }
+
+    // focar diretamente no campo Nome do dispositivo
+    const deviceInput = document.getElementById('device-name-input');
+    if (deviceInput) {
+      deviceInput.focus();
+      deviceInput.select();
+    }
+  });
 </script>
 {% endblock %}
