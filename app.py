@@ -8,7 +8,7 @@ from fpdf import FPDF
 from werkzeug.utils import secure_filename
 from io import BytesIO
 import zipfile
-from PIL import Image, ImageOps
+from PIL import Image
 from functools import wraps
 import csv
 from openpyxl import Workbook
@@ -30,11 +30,6 @@ def process_uploaded_photo(file_storage, max_size=(1600, 1600), quality=80):
             return None, None, None
 
         img = Image.open(BytesIO(raw))
-        # Corrige orientação baseada no EXIF (fotos de celular)
-        try:
-            img = ImageOps.exif_transpose(img)
-        except Exception:
-            pass
         # garante que sempre teremos um formato compatível
         img = img.convert("RGB")
         img.thumbnail(max_size)
@@ -1045,52 +1040,16 @@ def user_delete(uid: int):
 
 @login_required
 def export_pdf():
-    """Gera um PDF simples com os registros filtrados (mesma lógica da tela principal)."""
-    # mesmos filtros do index
-    company_filter = request.args.get("company") or None
-    splicer_filter = request.args.get("splicer") or None
-    map_filter = request.args.get("map") or None
-    device_filter = request.args.get("device") or None
-    start_raw = request.args.get("start") or None
-    end_raw = request.args.get("end") or None
-    no_values = request.args.get("no_values") == "1"
 
-    query = Record.query
-    if company_filter:
-        query = query.filter(Record.company == company_filter)
-    if splicer_filter:
-        query = query.filter(Record.splicer == splicer_filter)
-    if map_filter:
-        query = query.filter(Record.map.ilike(f"%{map_filter}%"))
-    if device_filter:
-        query = query.filter(Record.device.ilike(f"%{device_filter}%"))
+    # usa exatamente os mesmos filtros da tela principal
+    query = build_filtered_record_query_from_request()
+    records = query.order_by(
+        Record.created_date.asc().nullslast(),
+        Record.id.asc()
+    ).all()
 
-    if start_raw:
-        try:
-            start_dt = datetime.fromisoformat(start_raw)
-            query = query.filter(Record.created_date >= start_dt)
-        except ValueError:
-            pass
-    if end_raw:
-        try:
-            end_dt = datetime.fromisoformat(end_raw)
-            query = query.filter(Record.created_date <= end_dt)
-        except ValueError:
-            pass
-
-    # se não for admin, restringe aos lançamentos do próprio usuário
-    if not getattr(current_user, "is_admin", False):
-        enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
-        query = query.filter(Record.splicer == enforced_splicer)
-
-    records = query.order_by(Record.created_date.desc().nullslast(), Record.id.desc()).all()
-
-    # totais do período
-    total_amount = sum((r.total_usd or 0) for r in records)
-    total_splices = sum((r.splices or 0) for r in records)
-    total_hubs = sum(1 for r in records if (r.type or "").upper() == "HUB")
-
-    pdf = FPDF()
+    no_values = False
+pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     pdf.set_font("Arial", "B", 12)
