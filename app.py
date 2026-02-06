@@ -1409,6 +1409,11 @@ def record_delete(rid: int):
         if rec.splicer != enforced_splicer:
             abort(403)
 
+    # Apaga primeiro as fotos vinculadas a esse lançamento.
+    # Isso evita erro de integridade no PostgreSQL, pois a FK de record_photo
+    # não aceita valor NULL em record_id.
+    RecordPhoto.query.filter_by(record_id=rec.id).delete(synchronize_session=False)
+
     db.session.delete(rec)
     db.session.commit()
     flash("Registro removido.", "success")
@@ -1416,3 +1421,4 @@ def record_delete(rid: int):
 
 if __name__ == "__main__":
     app.run(debug=True)
+
