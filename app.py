@@ -1182,11 +1182,10 @@ def user_delete(uid: int):
     return redirect(url_for("manage_users"))
 
 @app.route("/export/pdf")
-
 @login_required
 def export_pdf():
-    """Gera um PDF simples com os registros filtrados (mesma lógica da tela principal)."""
-    # mesmos filtros do index
+    """Gera um PDF com os registros filtrados (mesma lógica da tela principal)."""
+    # filtros recebidos da tela
     company_filter = request.args.get("company") or None
     splicer_filter = request.args.get("splicer") or None
     map_filter = request.args.get("map") or None
@@ -1197,7 +1196,9 @@ def export_pdf():
 
     query = Record.query
 
-    # 1) Regra de visibilidade (igual à tela principal)
+    # 1) Regra de visibilidade – igual à tela principal
+    #    Admin vê tudo; dono de empresa vê apenas a própria empresa;
+    #    usuário comum vê apenas seus próprios lançamentos.
     enforced_splicer = None
     if not getattr(current_user, "is_admin", False):
         # não permite PDF "sem valores" para não-admin
@@ -1230,8 +1231,8 @@ def export_pdf():
             query = query.filter(Record.created_date <= end_dt)
         except ValueError:
             pass
-ery.filter(Record.splicer == enforced_splicer)
 
+    # ordenação igual à tela principal
     records = query.order_by(Record.created_date.desc().nullslast(), Record.id.desc()).all()
 
     # totais do período
@@ -1249,11 +1250,10 @@ ery.filter(Record.splicer == enforced_splicer)
     # linha de totais
     pdf.cell(0, 8, f"Total de splices: {total_splices}", ln=1)
     pdf.cell(0, 8, f"Total de hubs: {total_hubs}", ln=1)
-    if not no_values:
-        pdf.cell(0, 8, f"Total no período: $ {total_amount:.2f}", ln=1)
+    pdf.cell(0, 8, f"Total no periodo: $ {total_amount:.2f}", ln=1)
     pdf.ln(4)
 
-    # cabeçalho
+    # cabeçalho da tabela
     if no_values:
         col_widths = [20, 22, 20, 18, 40, 18]
         headers = ["Data", "Empresa", "Map", "Type", "Dispositivo", "Splices"]
@@ -1265,6 +1265,7 @@ ery.filter(Record.splicer == enforced_splicer)
         pdf.cell(w, 7, h, border=1)
     pdf.ln()
 
+    # linhas
     for r in records:
         if no_values:
             row = [
@@ -1287,7 +1288,7 @@ ery.filter(Record.splicer == enforced_splicer)
                 f"{(r.total_usd or 0):.2f}",
             ]
         for w, val in zip(col_widths, row):
-            pdf.cell(w, 6, str(val)[:30], border=1)  # corta textos muito grandes
+            pdf.cell(w, 6, str(val)[:30], border=1)
         pdf.ln()
 
     buf = BytesIO()
@@ -1295,8 +1296,6 @@ ery.filter(Record.splicer == enforced_splicer)
     buf.seek(0)
     filename = "relatorio_producao.pdf"
     return send_file(buf, as_attachment=True, download_name=filename, mimetype="application/pdf")
-
-
 
 @app.route("/invoices")
 @admin_required
