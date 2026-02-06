@@ -1037,19 +1037,26 @@ def user_delete(uid: int):
     return redirect(url_for("manage_users"))
 
 @app.route("/export/pdf")
-
 @login_required
 def export_pdf():
+    """Gera um PDF simples com os registros filtrados (mesma lógica da tela principal)."""
 
-    # usa exatamente os mesmos filtros da tela principal
+    # Flag opcional: se "no_values=1", não mostra colunas de valores em dinheiro.
+    no_values = request.args.get("no_values") == "1"
+
+    # Usa exatamente a mesma lógica de filtros/permissões da tela principal
     query = build_filtered_record_query_from_request()
     records = query.order_by(
         Record.created_date.asc().nullslast(),
         Record.id.asc()
     ).all()
 
-    no_values = False
-pdf = FPDF()
+    # totais do período
+    total_amount = sum((r.total_usd or 0) for r in records)
+    total_splices = sum((r.splices or 0) for r in records)
+    total_hubs = sum(1 for r in records if (r.type or "").upper() == "HUB")
+
+    pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     pdf.set_font("Arial", "B", 12)
@@ -1105,6 +1112,7 @@ pdf = FPDF()
     buf.seek(0)
     filename = "relatorio_producao.pdf"
     return send_file(buf, as_attachment=True, download_name=filename, mimetype="application/pdf")
+
 
 
 
