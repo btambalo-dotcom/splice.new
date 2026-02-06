@@ -156,7 +156,7 @@ mb-3">Registros</h5>
             <td>$ {{ '%.2f'|format(r.price_device_usd or 0) }}</td>
             <td>$ {{ '%.2f'|format(r.total_usd or 0) }}</td>
             <td>
-              {% if r.photos.count() %}
+              {% if r.photos|length > 0 %}
               <button type="button"
                       class="btn btn-sm btn-outline-light"
                       title="Ver fotos"
@@ -186,7 +186,7 @@ mb-3">Registros</h5>
 
 {# Modais de fotos por registro #}
 {% for r in records %}
-  {% if r.photos.count() %}
+  {% if r.photos|length > 0 %}
   <div class="modal fade" id="photosModal-{{ r.id }}" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-fullscreen modal-dialog-centered">
       <div class="modal-content bg-dark">
