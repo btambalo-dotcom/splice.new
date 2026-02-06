@@ -5,7 +5,9 @@ from datetime import datetime, date
 from sqlalchemy import text, case, or_, inspect
 import os
 from fpdf import FPDF
+from werkzeug.utils import secure_filename
 from io import BytesIO
+import zipfile
 from functools import wraps
 import csv
 from openpyxl import Workbook
@@ -100,6 +102,18 @@ class Record(db.Model):
     price_device_usd = db.Column(db.Float, default=0.0)
     total_usd = db.Column(db.Float, default=0.0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class RecordPhoto(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    record_id = db.Column(db.Integer, db.ForeignKey('record.id'), nullable=False)
+    filename = db.Column(db.String(255), nullable=False)
+    content_type = db.Column(db.String(100))
+    data = db.Column(db.LargeBinary, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    record = db.relationship('Record', backref=db.backref('photos', lazy=True))
+
 
 # --------- User loader ---------
 @login_manager.user_loader
@@ -313,6 +327,105 @@ def index():
         end=end_raw or "",
     )
 
+
+def build_filtered_record_query_from_request():
+    """Reaproveita os filtros da tela principal para buscar os registros."""
+    company_filter = request.args.get("company") or None
+    map_filter = request.args.get("map") or None
+    device_filter = request.args.get("device") or None
+    splicer_filter = request.args.get("splicer") or None
+    start_raw = request.args.get("start") or None
+    end_raw = request.args.get("end") or None
+
+    query = Record.query
+
+    # Restrições de visibilidade por usuário
+    if not getattr(current_user, "is_admin", False):
+        enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
+        query = query.filter(Record.splicer == enforced_splicer)
+    else:
+        if splicer_filter:
+            query = query.filter(Record.splicer == splicer_filter)
+
+    if company_filter:
+        query = query.filter(Record.company == company_filter)
+
+    if map_filter:
+        query = query.filter(Record.map.ilike(f"%{map_filter}%"))
+
+    if device_filter:
+        query = query.filter(Record.device.ilike(f"%{device_filter}%"))
+
+    if start_raw:
+        try:
+            start_dt = datetime.strptime(start_raw, "%Y-%m-%d")
+            query = query.filter(Record.created_date >= start_dt)
+        except ValueError:
+            pass
+
+    if end_raw:
+        try:
+            end_dt = datetime.strptime(end_raw, "%Y-%m-%d")
+            query = query.filter(Record.created_date <= end_dt)
+        except ValueError:
+            pass
+
+    return query
+
+
+@app.route("/photo/<int:photo_id>")
+@login_required
+def photo_file(photo_id: int):
+    """Retorna o binário de uma foto única salva em RecordPhoto."""
+    photo = RecordPhoto.query.get_or_404(photo_id)
+    return send_file(
+        BytesIO(photo.data),
+        mimetype=photo.content_type or "image/jpeg",
+        as_attachment=False,
+        download_name=photo.filename,
+    )
+
+
+@app.route("/photos_filtered_zip")
+@login_required
+def photos_filtered_zip():
+    """Gera um .zip com TODAS as fotos dos registros filtrados na tela principal."""
+
+    query = build_filtered_record_query_from_request()
+    records = query.all()
+
+    if not records:
+        flash("Nenhum registro encontrado para gerar o .zip de fotos.", "warning")
+        return redirect(request.referrer or url_for("index"))
+
+    record_ids = [r.id for r in records]
+    photos = RecordPhoto.query.filter(RecordPhoto.record_id.in_(record_ids)).all()
+
+    if not photos:
+        flash("Nenhuma foto encontrada para os filtros selecionados.", "warning")
+        return redirect(request.referrer or url_for("index"))
+
+    mem = BytesIO()
+    with zipfile.ZipFile(mem, "w", zipfile.ZIP_DEFLATED) as zf:
+        rec_by_id = {r.id: r for r in records}
+        for photo in photos:
+            rec = rec_by_id.get(photo.record_id)
+            company_part = (rec.company or "SEM_EMPRESA").replace("/", "-") if rec else "SEM_EMPRESA"
+            map_part = (rec.map or "SEM_MAP").replace("/", "-") if rec else "SEM_MAP"
+            device_part = (rec.device or f"ID-{photo.record_id}").replace("/", "-") if rec else f"ID-{photo.record_id}"
+            safe_filename = photo.filename or f"foto_{photo.id}.jpg"
+            zip_path = f"{company_part}/{map_part}/{device_part}/ID-{photo.record_id}_PH-{photo.id}_{safe_filename}"
+            zf.writestr(zip_path, photo.data)
+
+    mem.seek(0)
+    return send_file(
+        mem,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name="fotos_filtradas.zip",
+    )
+
+
 @app.route("/entry", methods=["GET", "POST"])
 @login_required
 def entry():
@@ -415,6 +528,26 @@ def entry():
         )
         db.session.add(rec)
         db.session.commit()
+
+        # Salva até 5 fotos diretamente na tabela RecordPhoto
+        files = request.files.getlist("photos")
+        if files:
+            for f in files[:5]:
+                if not f or not f.filename:
+                    continue
+                filename = secure_filename(f.filename) or f"foto_{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}.jpg"
+                data = f.read()
+                if not data:
+                    continue
+                photo = RecordPhoto(
+                    record_id=rec.id,
+                    filename=filename[:255],
+                    content_type=f.mimetype or "application/octet-stream",
+                    data=data,
+                )
+                db.session.add(photo)
+            db.session.commit()
+
         flash("Lançamento salvo.", "success")
         # após salvar, permanece na tela de lançamento para permitir novo registro
         return redirect(url_for("entry"))
