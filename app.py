@@ -119,6 +119,36 @@ except Exception as _e:
     print("WARN: erro ao forçar migração SQLite:", _e)
 
 
+
+
+@app.route("/_fix_user_columns_once_bruno")
+def _fix_user_columns_once_bruno():
+    """Endpoint manual para ajustar colunas da tabela user no PostgreSQL do Render.
+
+    Use apenas uma vez: acesse /_fix_user_columns_once_bruno na URL do app no Render.
+    Não depende de login e não usa o ORM, só executa ALTER TABLE com segurança.
+    """
+    from sqlalchemy import text as _text
+    try:
+        engine = db.engine
+        conn = engine.connect()
+        stmts = [
+            'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS is_admin boolean DEFAULT false;',
+            'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS splicer_name varchar(120);',
+            'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS is_company_owner boolean DEFAULT false;',
+            'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS company_name varchar(120);',
+        ]
+        for s in stmts:
+            try:
+                conn.execute(_text(s))
+            except Exception:
+                # ignora erros individuais
+                pass
+        conn.close()
+        return "Migração concluída. Agora você já pode fazer login normalmente.", 200
+    except Exception as e:
+        return f"Erro ao executar migração: {e}", 500
+
 login_manager = LoginManager(app)
 login_manager.login_view = "login"
 
