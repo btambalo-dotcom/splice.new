@@ -339,38 +339,56 @@ def build_filtered_record_query_from_request():
 
     query = Record.query
 
-    # Restrições de visibilidade por usuário
-    if not getattr(current_user, "is_admin", False):
+    # Restrições de visibilidade por tipo de usuário
+    is_admin = getattr(current_user, "is_admin", False)
+    is_owner = getattr(current_user, "is_company_owner", False)
+
+    if is_admin:
+        # Admin enxerga todos os registros; os filtros são aplicados mais abaixo.
+        pass
+    elif is_owner:
+        # Dono de empresa enxerga todos os registros da própria empresa.
+        # Ignoramos o filtro de empresa vindo da URL, se houver.
+        owner_company = getattr(current_user, "company", None) or getattr(current_user, "company_name", None)
+        if owner_company:
+            company_filter = owner_company
+    else:
+        # Splicer comum: sempre vê apenas os próprios registros.
         enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
         query = query.filter(Record.splicer == enforced_splicer)
-    else:
-        if splicer_filter:
-            query = query.filter(Record.splicer == splicer_filter)
+        # Evita que o splicer tente ver registros de outra pessoa via URL.
+        splicer_filter = None
 
+    # Filtros por campos principais
     if company_filter:
         query = query.filter(Record.company == company_filter)
-
     if map_filter:
-        query = query.filter(Record.map.ilike(f"%{map_filter}%"))
-
+        query = query.filter(Record.map == map_filter)
     if device_filter:
-        query = query.filter(Record.device.ilike(f"%{device_filter}%"))
+        query = query.filter(Record.device == device_filter)
 
+    # Filtro de splicer (somente admin ou dono de empresa)
+    if splicer_filter and (is_admin or is_owner):
+        query = query.filter(Record.splicer == splicer_filter)
+
+    # Filtro por datas
     if start_raw:
         try:
-            start_dt = datetime.strptime(start_raw, "%Y-%m-%d")
-            query = query.filter(Record.created_date >= start_dt)
+            start_date = datetime.strptime(start_raw, "%Y-%m-%d")
+            query = query.filter(Record.date >= start_date.date())
         except ValueError:
             pass
 
     if end_raw:
         try:
-            end_dt = datetime.strptime(end_raw, "%Y-%m-%d")
-            query = query.filter(Record.created_date <= end_dt)
+            end_date = datetime.strptime(end_raw, "%Y-%m-%d")
+            query = query.filter(Record.date <= end_date.date())
         except ValueError:
             pass
 
     return query
+
+
 
 
 @app.route("/photo/<int:photo_id>")
