@@ -35,6 +35,8 @@ class User(UserMixin, db.Model):
     password = db.Column(db.String(120), nullable=False)  # simples, sem hash, uso local
     is_admin = db.Column(db.Boolean, default=False)
     splicer_name = db.Column(db.String(120), nullable=True)  # nome que aparece como Splicer nos lançamentos
+    is_company_owner = db.Column(db.Boolean, default=False, nullable=False)  # dono de empresa: vê registros da própria empresa
+    company_name = db.Column(db.String(120), nullable=True)  # nome da empresa a que o usuário pertence
 
 class CompanyConfig(db.Model):
     id = db.Column(db.Integer, primary_key=True)
