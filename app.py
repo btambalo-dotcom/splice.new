@@ -467,11 +467,24 @@ def index():
     # base da consulta
     query = Record.query
 
-    # filtros principais
-    if company_filter:
+    # 1) Regra de visibilidade SEMPRE aplicada primeiro
+    # - Admin: vê tudo
+    # - Dono de empresa: vê apenas registros da própria empresa (todos os splicers)
+    # - Usuário normal: vê apenas seus próprios lançamentos
+    enforced_splicer = None
+    if not getattr(current_user, "is_admin", False):
+        if getattr(current_user, "is_company_owner", False) and getattr(current_user, "company_name", None):
+            query = query.filter(Record.company == current_user.company_name)
+        else:
+            enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
+            query = query.filter(Record.splicer == enforced_splicer)
+
+    # 2) Depois aplicamos os filtros da tela
+    #    - company_filter só é considerado para ADMIN
+    #    - splicer_filter só é considerado para ADMIN
+    if company_filter and getattr(current_user, "is_admin", False):
         query = query.filter(Record.company == company_filter)
     if splicer_filter and getattr(current_user, "is_admin", False):
-        # só admin pode aplicar filtro por splicer diferente
         query = query.filter(Record.splicer == splicer_filter)
     if map_filter:
         query = query.filter(Record.map.ilike(f"%{map_filter}%"))
@@ -490,17 +503,6 @@ def index():
             query = query.filter(Record.created_date <= end_dt)
         except ValueError:
             pass
-
-    # se não for admin, aplica regra de visibilidade:
-    # - dono de empresa: vê somente registros da própria empresa (todos os splicers)
-    # - usuário normal: vê apenas seus próprios lançamentos (campo Splicer)
-    enforced_splicer = None
-    if not getattr(current_user, "is_admin", False):
-        if getattr(current_user, "is_company_owner", False) and getattr(current_user, "company_name", None):
-            query = query.filter(Record.company == current_user.company_name)
-        else:
-            enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
-            query = query.filter(Record.splicer == enforced_splicer)
 
     records = query.order_by(Record.created_date.desc().nullslast(), Record.id.desc()).all()
     total_rows = len(records)
@@ -1194,9 +1196,22 @@ def export_pdf():
     no_values = request.args.get("no_values") == "1"
 
     query = Record.query
-    if company_filter:
+
+    # 1) Regra de visibilidade (igual à tela principal)
+    enforced_splicer = None
+    if not getattr(current_user, "is_admin", False):
+        # não permite PDF "sem valores" para não-admin
+        no_values = False
+        if getattr(current_user, "is_company_owner", False) and getattr(current_user, "company_name", None):
+            query = query.filter(Record.company == current_user.company_name)
+        else:
+            enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
+            query = query.filter(Record.splicer == enforced_splicer)
+
+    # 2) Filtros opcionais – company e splicer só valem para ADMIN
+    if company_filter and getattr(current_user, "is_admin", False):
         query = query.filter(Record.company == company_filter)
-    if splicer_filter:
+    if splicer_filter and getattr(current_user, "is_admin", False):
         query = query.filter(Record.splicer == splicer_filter)
     if map_filter:
         query = query.filter(Record.map.ilike(f"%{map_filter}%"))
@@ -1215,16 +1230,7 @@ def export_pdf():
             query = query.filter(Record.created_date <= end_dt)
         except ValueError:
             pass
-
-    # se não for admin, aplica mesma regra de visibilidade da tela principal
-    if not getattr(current_user, "is_admin", False):
-        # não permite PDF "sem valores" para não-admin
-        no_values = False
-        if getattr(current_user, "is_company_owner", False) and getattr(current_user, "company_name", None):
-            query = query.filter(Record.company == current_user.company_name)
-        else:
-            enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
-            query = query.filter(Record.splicer == enforced_splicer)
+ery.filter(Record.splicer == enforced_splicer)
 
     records = query.order_by(Record.created_date.desc().nullslast(), Record.id.desc()).all()
 

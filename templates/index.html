@@ -32,12 +32,21 @@
       <form method="get" class="row g-2">
         <div class="col-md-6">
           <label class="form-label">Empresa</label>
+          {% if current_user.is_admin %}
           <select name="company" class="form-control">
             <option value="">Todas</option>
             {% for c in companies %}
               <option value="{{ c }}" {% if company_filter == c %}selected{% endif %}>{{ c }}</option>
             {% endfor %}
           </select>
+          {% elif current_user.is_company_owner and current_user.company_name %}
+          <!-- Dono de empresa: empresa fixa, sem possibilidade de trocar -->
+          <input class="form-control" value="{{ current_user.company_name }}" disabled>
+          <input type="hidden" name="company" value="{{ current_user.company_name }}">
+          {% else %}
+          <!-- Usuário comum: não escolhe empresa, apenas vê a empresa do lançamento -->
+          <input class="form-control" value="(empresa do seu lançamento)" disabled>
+          {% endif %}
         </div>
         <div class="col-md-6">
           <label class="form-label">Splicer / Usuário</label>
