@@ -10,7 +10,7 @@
       <h5 class="mb-3">
         {% if is_edit %}Editar lançamento{% else %}Novo lançamento{% endif %}
       </h5>
-      <form method="post">
+      <form method="post" enctype="multipart/form-data">
         {% if duplicate_record %}
         <div class="alert alert-warning small">
           Dispositivo <b>{{ duplicate_record.device }}</b> já foi lançado no mapa
@@ -63,7 +63,40 @@
             <input name="created" type="date" class="form-control" value="{{ form_created|default(today) }}">
           </div>
         </div>
+
+        <div class="mb-3">
+          <label class="form-label">Fotos do dispositivo (opcional)</label>
+          <input type="file"
+                 name="photos"
+                 accept="image/*"
+                 multiple
+                 class="form-control">
+          <small class="form-text text-muted">
+            Você pode anexar até 5 fotos. O sistema reduz o tamanho automaticamente para salvar mais leve.
+          </small>
+        </div>
+
+        {% if current_user.is_admin %}
+        <div class="mb-3 mt-2">
+          <label class="form-label">Splicer (quem lançou)</label>
+          <select name="splicer" class="form-control">
+            {% for s in splicer_options %}
+            <option value="{{ s }}"
+              {% if is_edit and record.splicer == s %}
+                selected
+              {% elif (not is_edit) and default_splicer == s %}
+                selected
+              {% endif %}>
+              {{ s }}
+            </option>
+            {% endfor %}
+          </select>
+          <div class="form-text">Somente o admin pode alterar quem lançou o dispositivo.</div>
+        </div>
+        {% else %}
         <input type="hidden" name="splicer" value="{{ default_splicer }}">
+        {% endif %}
+
         {% if confirm_duplicate %}
         <input type="hidden" name="confirm_duplicate" value="yes">
         {% endif %}

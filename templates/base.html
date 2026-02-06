@@ -19,7 +19,9 @@
         {% if current_user.is_authenticated %}
           <div class="ms-auto d-flex">
             <a href="{{ url_for('index') }}" class="btn btn-sm btn-outline-light me-2">Produção</a>
+            {% if (not current_user.is_company_owner) or current_user.is_admin %}
             <a href="{{ url_for('entry') }}" class="btn btn-sm btn-outline-light me-2">Lançar</a>
+            {% endif %}
             {% if current_user.is_admin %}
               <a href="{{ url_for('settings') }}" class="btn btn-sm btn-outline-light me-2">Configurações</a>
               <a href="{{ url_for('invoices_list') }}" class="btn btn-sm btn-outline-info me-2">Invoices</a>

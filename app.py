@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, send_file, abort
+from flask import Flask, render_template, request, redirect, url_for, flash, send_file, abort, has_app_context
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from datetime import datetime, date
@@ -6,10 +6,13 @@ from sqlalchemy import text, case, or_, inspect
 import os
 from fpdf import FPDF
 from io import BytesIO
+from zipfile import ZipFile
 from functools import wraps
 import csv
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
+from PIL import Image, ImageOps
+import uuid
 
 # --------- App & DB setup ---------
 app = Flask(__name__)
@@ -23,8 +26,99 @@ if db_url.startswith("postgres://"):
 
 app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["UPLOAD_FOLDER"] = os.path.join(app.root_path, "static", "uploads")
 
 db = SQLAlchemy(app)
+
+
+# ---- Força atualização do schema no SQLite (garante colunas novas no banco antigo) ----
+try:
+    import sqlite3
+    from sqlalchemy.engine.url import make_url
+
+    def _force_sqlite_user_columns():
+        url = make_url(app.config["SQLALCHEMY_DATABASE_URI"])
+        if not str(url.drivername).startswith("sqlite"):
+            return
+
+        db_path = url.database
+        if not db_path:
+            return
+
+        # Se o caminho for relativo, resolve a partir da raiz do app
+        if not os.path.isabs(db_path):
+            db_path = os.path.join(app.root_path, db_path)
+
+        if not os.path.exists(db_path):
+            # Se ainda não existir, o create_all vai criar com o schema correto
+            return
+
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+
+        def ensure_column(table, column, coltype):
+            cur.execute(f"PRAGMA table_info('{table}')")
+            cols = [row[1] for row in cur.fetchall()]
+            if column in cols:
+                return
+            cur.execute(f'ALTER TABLE "{table}" ADD COLUMN {column} {coltype};')
+
+        # Garante as colunas novas da tabela user
+        ensure_column("user", "is_admin", "INTEGER DEFAULT 0")
+        ensure_column("user", "splicer_name", "VARCHAR(120)")
+        ensure_column("user", "is_company_owner", "INTEGER DEFAULT 0")
+        ensure_column("user", "company_name", "VARCHAR(120)")
+
+        conn.commit()
+        conn.close()
+
+    def _force_postgres_user_columns():
+        """Garante as colunas novas na tabela user quando usando PostgreSQL (Render)."""
+        url = make_url(app.config["SQLALCHEMY_DATABASE_URI"])
+        if not str(url.drivername).startswith("postgresql"):
+            return
+
+        try:
+            existing_cols = [c["name"] for c in inspect(db.engine).get_columns("user")]
+        except Exception:
+            # Se não conseguir inspecionar, não derruba o app
+            return
+
+        stmts = []
+        if "is_admin" not in existing_cols:
+            stmts.append('ALTER TABLE "user" ADD COLUMN is_admin boolean DEFAULT false;')
+        if "splicer_name" not in existing_cols:
+            stmts.append('ALTER TABLE "user" ADD COLUMN splicer_name varchar(120);')
+        if "is_company_owner" not in existing_cols:
+            stmts.append('ALTER TABLE "user" ADD COLUMN is_company_owner boolean DEFAULT false;')
+        if "company_name" not in existing_cols:
+            stmts.append('ALTER TABLE "user" ADD COLUMN company_name varchar(120);')
+
+        if not stmts:
+            return
+
+        conn = db.engine.connect()
+        for s in stmts:
+            try:
+                conn.execute(text(s))
+            except Exception:
+                # ignora erros individuais para não derrubar o app
+                pass
+        conn.close()
+
+    # Cria tabelas e aplica migração assim que o app sobe
+    with app.app_context():
+        # cria tabelas, se não existirem
+        db.create_all()
+        # força migração no arquivo sqlite
+        _force_sqlite_user_columns()
+        # força migração no PostgreSQL (Render)
+        _force_postgres_user_columns()
+except Exception as _e:
+    # Não derruba o app se algo der errado aqui; o erro aparece no log apenas
+    print("WARN: erro ao forçar migração SQLite:", _e)
+
+
 login_manager = LoginManager(app)
 login_manager.login_view = "login"
 
@@ -35,6 +129,9 @@ class User(UserMixin, db.Model):
     password = db.Column(db.String(120), nullable=False)  # simples, sem hash, uso local
     is_admin = db.Column(db.Boolean, default=False)
     splicer_name = db.Column(db.String(120), nullable=True)  # nome que aparece como Splicer nos lançamentos
+    is_company_owner = db.Column(db.Boolean, default=False)  # dono de empresa: vê todos os lançamentos da própria empresa
+    company_name = db.Column(db.String(120), nullable=True)  # nome exato da empresa (igual ao campo company nos lançamentos)
+
 
 class CompanyConfig(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -99,6 +196,17 @@ class Record(db.Model):
     total_usd = db.Column(db.Float, default=0.0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+class RecordPhoto(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    record_id = db.Column(db.Integer, db.ForeignKey("record.id"), nullable=False, index=True)
+    filename = db.Column(db.String(255), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    record = db.relationship("Record", backref=db.backref("photos", lazy="dynamic"))
+
+
+
+
 # --------- User loader ---------
 @login_manager.user_loader
 def load_user(user_id: str):
@@ -108,31 +216,70 @@ def load_user(user_id: str):
         return None
 
 # --------- DB init & migrations simples ---------
-with app.app_context():
-    db.create_all()
+# --------- DB init & migrações simples ---------
+_migrations_done = False
 
-    # garante usuário padrão
-    if not User.query.filter_by(username="admin").first():
-        db.session.add(User(username="admin", password="admin", is_admin=True, splicer_name="ADMIN"))
-        db.session.commit()
+def run_simple_migrations():
+    """Cria tabelas e garante colunas novas mesmo em banco antigo."""
+    global _migrations_done
+    if _migrations_done:
+        return
 
-    # migração simples de colunas (funciona tanto em SQLite quanto em Postgres)
-    def ensure(table, col, typ):
-        """Garante que uma coluna exista na tabela informada."""
-        inspector = inspect(db.engine)
-        existing = [c["name"] for c in inspector.get_columns(table)]
-        if col not in existing:
-            # Em Postgres, usar aspas duplas no nome da tabela evita problemas de case
-            db.session.execute(text(f'ALTER TABLE "{table}" ADD COLUMN {col} {typ}'))
+    def _do_migrations():
+        db.create_all()
+
+        # garante usuário padrão
+        if not User.query.filter_by(username="admin").first():
+            db.session.add(User(username="admin", password="admin", is_admin=True, splicer_name="ADMIN"))
             db.session.commit()
 
-    ensure("record", "company", "VARCHAR(120)")
-    ensure("device_type", "company", "VARCHAR(120)")
-    ensure("splice_tier", "company", "VARCHAR(120)")
-    ensure("company_config", "invoice_address", "TEXT")
-    ensure("user", "is_admin", "BOOLEAN")
-    ensure("user", "splicer_name", "VARCHAR(120)")
+        # migração simples de colunas (funciona tanto em SQLite quanto em Postgres)
+        def ensure(table, col, typ):
+            """Garante que uma coluna exista na tabela informada."""
+            conn = db.engine.connect()
+            try:
+                try:
+                    # SQLite
+                    result = conn.execute(text(f"PRAGMA table_info('{table}')"))
+                    existing = [row[1] for row in result]
+                except Exception:
+                    # fallback usando o inspector do SQLAlchemy
+                    from sqlalchemy import inspect as _inspect
+                    inspector = _inspect(db.engine)
+                    existing = [c["name"] for c in inspector.get_columns(table)]
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
+            if col not in existing:
+                db.session.execute(text(f'ALTER TABLE "{table}" ADD COLUMN {col} {typ}'))
+                db.session.commit()
+
+        ensure("record", "company", "VARCHAR(120)")
+        ensure("device_type", "company", "VARCHAR(120)")
+        ensure("splice_tier", "company", "VARCHAR(120)")
+        ensure("company_config", "invoice_address", "TEXT")
+        ensure("user", "is_admin", "BOOLEAN")
+        ensure("user", "splicer_name", "VARCHAR(120)")
+        ensure("user", "is_company_owner", "BOOLEAN")
+        ensure("user", "company_name", "VARCHAR(120)")
+
+        _migrations_done = True
+
+    if has_app_context():
+        _do_migrations()
+    else:
+        with app.app_context():
+            _do_migrations()
+
+# roda na importação
+run_simple_migrations()
+
+@app.before_request
+def _ensure_migrations_before_request():
+    run_simple_migrations()
 # --------- Login ---------
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -153,6 +300,63 @@ def login():
         flash("Usuário ou senha inválidos.", "danger")
 
     return render_template("login.html")
+
+
+# --------- Helpers de imagens ---------
+def _allowed_image(filename: str) -> bool:
+    if not filename or "." not in filename:
+        return False
+    ext = filename.rsplit(".", 1)[1].lower()
+    return ext in {"jpg", "jpeg", "png", "webp"}
+
+
+def save_record_photos(record, files):
+    """
+    Salva fotos redimensionadas/comprimidas para um lançamento.
+    - Reduz para no máximo 1280x1280
+    - Salva como JPEG qualidade 70
+    - Grava apenas o nome do arquivo no banco (tabela RecordPhoto)
+    """
+    if not files:
+        return
+
+    upload_folder = app.config.get("UPLOAD_FOLDER") or os.path.join(app.root_path, "static", "uploads")
+    os.makedirs(upload_folder, exist_ok=True)
+
+    max_photos = 5
+    for idx, file in enumerate(files[:max_photos]):
+        if not file or not getattr(file, "filename", None):
+            continue
+        if not _allowed_image(file.filename):
+            continue
+
+        try:
+            img = Image.open(file.stream)
+        except Exception:
+            continue
+
+        # Corrige orientação com base no EXIF (para não "deitar" a foto)
+        try:
+            img = ImageOps.exif_transpose(img)
+        except Exception:
+            pass
+
+        img = img.convert("RGB")
+        img.thumbnail((1280, 1280))
+
+        filename = f"{record.id}_{uuid.uuid4().hex}.jpg"
+        filepath = os.path.join(upload_folder, filename)
+
+        try:
+            img.save(filepath, format="JPEG", quality=70, optimize=True)
+        except Exception:
+            continue
+
+        photo = RecordPhoto(record_id=record.id, filename=filename)
+        db.session.add(photo)
+
+    db.session.commit()
+
 
 # --------- Helpers de preço ---------
 def included_splices_for(company: str | None) -> int:
@@ -257,11 +461,16 @@ def index():
         except ValueError:
             pass
 
-    # se não for admin, restringe SEMPRE aos lançamentos do próprio usuário
+    # se não for admin, aplica regra de visibilidade:
+    # - dono de empresa: vê somente registros da própria empresa (todos os splicers)
+    # - usuário normal: vê apenas seus próprios lançamentos (campo Splicer)
     enforced_splicer = None
     if not getattr(current_user, "is_admin", False):
-        enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
-        query = query.filter(Record.splicer == enforced_splicer)
+        if getattr(current_user, "is_company_owner", False) and getattr(current_user, "company_name", None):
+            query = query.filter(Record.company == current_user.company_name)
+        else:
+            enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
+            query = query.filter(Record.splicer == enforced_splicer)
 
     records = query.order_by(Record.created_date.desc().nullslast(), Record.id.desc()).all()
     total_rows = len(records)
@@ -311,10 +520,152 @@ def index():
         end=end_raw or "",
     )
 
+
+
+@app.route("/record/<int:rid>/photos_zip")
+@login_required
+def record_photos_zip(rid):
+    """Download de todas as fotos de um único lançamento em um .zip."""
+    record = Record.query.get_or_404(rid)
+
+    # regras de acesso: não-admin só acessa o que veria na tela principal
+    if not getattr(current_user, "is_admin", False):
+        if getattr(current_user, "is_company_owner", False) and getattr(current_user, "company_name", None):
+            if record.company != current_user.company_name:
+                abort(403)
+        else:
+            enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
+            if record.splicer != enforced_splicer:
+                abort(403)
+
+    photos = record.photos.order_by(RecordPhoto.created_at).all()
+    if not photos:
+        flash("Este lançamento não possui fotos para download.", "warning")
+        return redirect(url_for("index"))
+
+    upload_folder = app.config.get("UPLOAD_FOLDER") or os.path.join(app.root_path, "static", "uploads")
+
+    mem = BytesIO()
+    with ZipFile(mem, "w") as zf:
+        for photo in photos:
+            filepath = os.path.join(upload_folder, photo.filename)
+            if not os.path.exists(filepath):
+                continue
+            arcname = f"record_{record.id}/{photo.filename}"
+            zf.write(filepath, arcname=arcname)
+
+    mem.seek(0)
+    filename = f"record_{record.id}_fotos.zip"
+    return send_file(
+        mem,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/zip",
+    )
+
+
+@app.route("/photos/filtered_zip")
+@login_required
+def photos_filtered_zip():
+    """Download .zip com fotos de todos os lançamentos que batem com os filtros atuais."""
+    company_filter = request.args.get("company") or None
+    splicer_filter = request.args.get("splicer") or None
+    map_filter = request.args.get("map") or None
+    device_filter = request.args.get("device") or None
+    start_raw = request.args.get("start") or None
+    end_raw = request.args.get("end") or None
+
+    query = Record.query
+
+    if company_filter:
+        query = query.filter(Record.company == company_filter)
+    if splicer_filter and getattr(current_user, "is_admin", False):
+        query = query.filter(Record.splicer == splicer_filter)
+    if map_filter:
+        query = query.filter(Record.map.ilike(f"%{map_filter}%"))
+    if device_filter:
+        query = query.filter(Record.device.ilike(f"%{device_filter}%"))
+
+    if start_raw:
+        try:
+            start_dt = datetime.fromisoformat(start_raw)
+            query = query.filter(Record.created_date >= start_dt)
+        except ValueError:
+            pass
+
+    if end_raw:
+        try:
+            end_dt = datetime.fromisoformat(end_raw)
+            query = query.filter(Record.created_date <= end_dt)
+        except ValueError:
+            pass
+
+    # regras de visibilidade para não-admin
+    enforced_splicer = None
+    if not getattr(current_user, "is_admin", False):
+        if getattr(current_user, "is_company_owner", False) and getattr(current_user, "company_name", None):
+            query = query.filter(Record.company == current_user.company_name)
+        else:
+            enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
+            query = query.filter(Record.splicer == enforced_splicer)
+
+    records = query.order_by(Record.created_date.desc().nullslast(), Record.id.desc()).all()
+
+    all_photos = []
+    for record in records:
+        for photo in record.photos.order_by(RecordPhoto.created_at).all():
+            all_photos.append((record, photo))
+
+    if not all_photos:
+        flash("Nenhuma foto encontrada para os filtros atuais.", "warning")
+        return redirect(
+            url_for(
+                "index",
+                company=company_filter or "",
+                splicer=splicer_filter or "",
+                map=map_filter or "",
+                device=device_filter or "",
+                start=start_raw or "",
+                end=end_raw or "",
+            )
+        )
+
+    upload_folder = app.config.get("UPLOAD_FOLDER") or os.path.join(app.root_path, "static", "uploads")
+
+    mem = BytesIO()
+    name_counters = {}
+    with ZipFile(mem, "w") as zf:
+        for record, photo in all_photos:
+            filepath = os.path.join(upload_folder, photo.filename)
+            if not os.path.exists(filepath):
+                continue
+            # nome base do arquivo = nome do device, para facilitar identificação
+            device_slug = (record.device or "device").strip().replace(" ", "_")
+            base, ext = os.path.splitext(photo.filename)
+            key = (record.id, device_slug)
+            idx = name_counters.get(key, 0) + 1
+            name_counters[key] = idx
+            arcname = f"{device_slug}_{idx}{ext}"
+            zf.write(filepath, arcname=arcname)
+
+    mem.seek(0)
+    filename = "fotos_filtradas.zip"
+    return send_file(
+        mem,
+        as_attachment=True,
+        download_name=filename,
+        mimetype="application/zip",
+    )
+
+
 @app.route("/entry", methods=["GET", "POST"])
 @login_required
 def entry():
     """Lançamento manual de produção (uma linha por vez)."""
+    # Dono de empresa não lança registros; apenas visualiza relatórios
+    if getattr(current_user, "is_company_owner", False) and not getattr(current_user, "is_admin", False):
+        flash("Dono de empresa não pode lançar registros. Use apenas os relatórios.", "warning")
+        return redirect(url_for("index"))
     # empresas configuradas
     companies = [c.name for c in CompanyConfig.query.order_by(CompanyConfig.name).all()]
 
@@ -328,6 +679,9 @@ def entry():
     for dt in DeviceType.query.order_by(DeviceType.company, DeviceType.name).all():
         key = dt.company or "__global__"
         devices_by_company.setdefault(key, []).append(dt.name)
+
+    # opções de splicer (para admin poder escolher quem lançou)
+    splicer_options = [u.splicer_name or u.username for u in User.query.order_by(User.username).all()]
 
     default_splicer = getattr(current_user, "splicer_name", None) or current_user.username
 
@@ -368,6 +722,7 @@ def entry():
                 companies=companies,
                 maps_by_company=maps_by_company,
                 devices_by_company=devices_by_company,
+                splicer_options=splicer_options,
                 default_splicer=default_splicer,
                 today=date.today().isoformat(),
                 duplicate_record=existing,
@@ -413,8 +768,13 @@ def entry():
         )
         db.session.add(rec)
         db.session.commit()
+
+        # salva fotos do dispositivo (se anexadas), redimensionadas e comprimidas
+        photos = request.files.getlist("photos")
+        save_record_photos(rec, photos)
+
         flash("Lançamento salvo.", "success")
-        # após salvar, volta para a tela de lançamento já com a mesma empresa e mapa
+        # após salvar, volta para a tela de lançamento já com a mesma empresa, mapa e tipo
         return redirect(url_for("entry", company=company or "", map=map_val or "", dtype=type_val or ""))
 
 # GET
@@ -427,6 +787,7 @@ def entry():
         companies=companies,
         maps_by_company=maps_by_company,
         devices_by_company=devices_by_company,
+        splicer_options=splicer_options,
         default_splicer=default_splicer,
         today=date.today().isoformat(),
         form_company=pre_company,
@@ -458,7 +819,11 @@ def record_edit(rid):
         key = dt.company or "__global__"
         devices_by_company.setdefault(key, []).append(dt.name)
 
-    default_splicer = getattr(current_user, "splicer_name", None) or current_user.username
+    # mesmas opções de splicer da tela de lançamento
+    splicer_options = [u.splicer_name or u.username for u in User.query.order_by(User.username).all()]
+
+    # padrão sugerido para o admin: mantém o splicer já salvo no registro
+    default_splicer = rec.splicer or (getattr(current_user, "splicer_name", None) or current_user.username)
 
     if request.method == "POST":
         company = (request.form.get("company") or "").strip() or None
@@ -512,6 +877,7 @@ def record_edit(rid):
         companies=companies,
         maps_by_company=maps_by_company,
         devices_by_company=devices_by_company,
+        splicer_options=splicer_options,
         default_splicer=default_splicer,
         today=date.today().isoformat(),
         is_edit=True,
@@ -734,7 +1100,9 @@ def manage_users():
         username = (request.form.get("username") or "").strip()
         password = (request.form.get("password") or "").strip()
         splicer_name = (request.form.get("splicer_name") or "").strip() or None
+        company_name = (request.form.get("company_name") or "").strip() or None
         is_admin = bool(request.form.get("is_admin"))
+        is_company_owner = bool(request.form.get("is_company_owner"))
 
         if not username or not password:
             flash("Usuário e senha são obrigatórios.", "danger")
@@ -745,12 +1113,16 @@ def manage_users():
             user.password = password
             user.splicer_name = splicer_name
             user.is_admin = is_admin
+            user.is_company_owner = is_company_owner
+            user.company_name = company_name
         else:
             user = User(
                 username=username,
                 password=password,
                 splicer_name=splicer_name,
                 is_admin=is_admin,
+                is_company_owner=is_company_owner,
+                company_name=company_name,
             )
             db.session.add(user)
         db.session.commit()
@@ -758,7 +1130,9 @@ def manage_users():
         return redirect(url_for("manage_users"))
 
     users = User.query.order_by(User.username).all()
-    return render_template("users.html", users=users)
+    companies = CompanyConfig.query.order_by(CompanyConfig.name).all()
+    return render_template("users.html", users=users, companies=companies)
+
 
 @app.route("/users/<int:uid>/delete")
 @admin_required
@@ -812,10 +1186,15 @@ def export_pdf():
         except ValueError:
             pass
 
-    # se não for admin, restringe aos lançamentos do próprio usuário
+    # se não for admin, aplica mesma regra de visibilidade da tela principal
     if not getattr(current_user, "is_admin", False):
-        enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
-        query = query.filter(Record.splicer == enforced_splicer)
+        # não permite PDF "sem valores" para não-admin
+        no_values = False
+        if getattr(current_user, "is_company_owner", False) and getattr(current_user, "company_name", None):
+            query = query.filter(Record.company == current_user.company_name)
+        else:
+            enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
+            query = query.filter(Record.splicer == enforced_splicer)
 
     records = query.order_by(Record.created_date.desc().nullslast(), Record.id.desc()).all()
 
@@ -840,10 +1219,10 @@ def export_pdf():
 
     # cabeçalho
     if no_values:
-        col_widths = [24, 24, 24, 22, 32, 18]
+        col_widths = [20, 22, 20, 18, 40, 18]
         headers = ["Data", "Empresa", "Map", "Type", "Dispositivo", "Splices"]
     else:
-        col_widths = [22, 22, 22, 20, 25, 18, 18, 18]
+        col_widths = [18, 22, 20, 18, 40, 16, 18, 18]
         headers = ["Data", "Empresa", "Map", "Type", "Dispositivo", "Splices", "Fusoes $", "Total $"]
 
     for w, h in zip(col_widths, headers):
@@ -872,7 +1251,7 @@ def export_pdf():
                 f"{(r.total_usd or 0):.2f}",
             ]
         for w, val in zip(col_widths, row):
-            pdf.cell(w, 6, str(val)[:16], border=1)  # corta textos muito grandes
+            pdf.cell(w, 6, str(val)[:30], border=1)  # corta textos muito grandes
         pdf.ln()
 
     buf = BytesIO()
@@ -967,10 +1346,13 @@ def export_invoice():
     inv_date = _dt.utcnow().date().isoformat()
     inv_number = _dt.utcnow().strftime("INV-%Y%m%d-%H%M%S")
 
-    # se não for admin, força o filtro para o próprio splicer
+    # se não for admin, aplica mesma regra de visibilidade da tela principal
     if not getattr(current_user, "is_admin", False):
-        enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
-        query = query.filter(Record.splicer == enforced_splicer)
+        if getattr(current_user, "is_company_owner", False) and getattr(current_user, "company_name", None):
+            query = query.filter(Record.company == current_user.company_name)
+        else:
+            enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
+            query = query.filter(Record.splicer == enforced_splicer)
 
     records = query.order_by(Record.created_date.asc().nullslast(), Record.id.asc()).all()
 
@@ -1136,10 +1518,13 @@ def export_excel():
         except ValueError:
             end_dt = None
 
-    # se não for admin, força o filtro para o próprio splicer
+    # se não for admin, aplica mesma regra de visibilidade da tela principal
     if not getattr(current_user, "is_admin", False):
-        enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
-        query = query.filter(Record.splicer == enforced_splicer)
+        if getattr(current_user, "is_company_owner", False) and getattr(current_user, "company_name", None):
+            query = query.filter(Record.company == current_user.company_name)
+        else:
+            enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
+            query = query.filter(Record.splicer == enforced_splicer)
 
     records = query.order_by(Record.created_date.asc().nullslast(), Record.id.asc()).all()
 
@@ -1240,7 +1625,12 @@ def export_excel():
 def record_delete(rid: int):
     rec = Record.query.get_or_404(rid)
 
-    # Apenas admin ou o próprio splicer podem editar
+    # Dono de empresa não pode excluir lançamentos (somente admin)
+    if getattr(current_user, "is_company_owner", False) and not getattr(current_user, "is_admin", False):
+        flash("Dono de empresa não pode excluir lançamentos.", "danger")
+        return redirect(url_for("index"))
+
+    # Apenas admin ou o próprio splicer podem editar/apagar
     if not getattr(current_user, "is_admin", False) and rec.splicer != current_user.username:
         flash("Você não tem permissão para editar este lançamento.", "danger")
         return redirect(url_for("index"))

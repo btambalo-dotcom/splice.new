@@ -6,3 +6,5 @@ Werkzeug
 fpdf2
 openpyxl
 psycopg2-binary
+
+Pillow
