@@ -426,6 +426,45 @@ def photos_filtered_zip():
     )
 
 
+
+
+@app.route("/record/<int:rid>/photos_zip")
+@login_required
+def record_photos_zip(rid):
+    """Gera um .zip com TODAS as fotos de um único lançamento (record)."""
+    record = Record.query.get_or_404(rid)
+
+    photos = (
+        db.session.query(RecordPhoto)
+        .filter(RecordPhoto.record_id == rid)
+        .order_by(RecordPhoto.created_at.asc())
+        .all()
+    )
+
+    if not photos:
+        flash("Este dispositivo não possui fotos para download.", "warning")
+        return redirect(request.referrer or url_for("index"))
+
+    mem = BytesIO()
+    with zipfile.ZipFile(mem, "w", zipfile.ZIP_DEFLATED) as zf:
+        for photo in photos:
+            safe_filename = photo.filename or f"foto_{photo.id}.jpg"
+            device_part = (record.device or f"ID-{record.id}").replace("/", "-")
+            zip_path = f"{device_part}/ID-{record.id}_PH-{photo.id}_{safe_filename}"
+            zf.writestr(zip_path, photo.data)
+
+    mem.seek(0)
+    ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    zip_name = f"fotos_dispositivo_{(record.device or record.id)}_{ts}.zip"
+
+    return send_file(
+        mem,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=zip_name,
+    )
+
+
 @app.route("/entry", methods=["GET", "POST"])
 @login_required
 def entry():
