@@ -238,7 +238,7 @@ def index():
         flash("A importação de planilha foi desativada neste sistema.", "warning")
         return redirect(url_for("index"))
 
-    # filtros
+    # filtros vindos da URL
     company_filter = request.args.get("company") or None
     splicer_filter = request.args.get("splicer") or None
     map_filter = request.args.get("map") or None
@@ -249,17 +249,39 @@ def index():
     # base da consulta
     query = Record.query
 
+    # regras de visibilidade por tipo de usuário
+    is_admin = getattr(current_user, "is_admin", False)
+    is_owner = getattr(current_user, "is_company_owner", False)
+    enforced_splicer = None
+
+    if is_admin:
+        # Admin enxerga todos os registros, sem restrição adicional.
+        pass
+    elif is_owner:
+        # Dono de empresa enxerga todos os registros da PRÓPRIA empresa.
+        owner_company = getattr(current_user, "company_name", None)
+        if owner_company:
+            company_filter = owner_company
+            # ignoramos qualquer empresa passada manualmente na URL
+    else:
+        # Splicer normal vê apenas os lançamentos feitos por ele mesmo.
+        enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
+        query = query.filter(Record.splicer == enforced_splicer)
+        # evita que tente filtrar manualmente outro splicer pela URL
+        splicer_filter = None
+
     # filtros principais
     if company_filter:
         query = query.filter(Record.company == company_filter)
-    if splicer_filter and getattr(current_user, "is_admin", False):
-        # só admin pode aplicar filtro por splicer diferente
+    if splicer_filter and (is_admin or is_owner):
+        # apenas admin / dono de empresa podem filtrar por outro splicer
         query = query.filter(Record.splicer == splicer_filter)
     if map_filter:
         query = query.filter(Record.map.ilike(f"%{map_filter}%"))
     if device_filter:
         query = query.filter(Record.device.ilike(f"%{device_filter}%"))
 
+    # filtros por data
     if start_raw:
         try:
             start_dt = datetime.fromisoformat(start_raw)
@@ -273,22 +295,14 @@ def index():
         except ValueError:
             pass
 
-    # se não for admin, restringe SEMPRE aos lançamentos do próprio usuário
-    enforced_splicer = None
-    if not getattr(current_user, "is_admin", False):
-        enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
-        query = query.filter(Record.splicer == enforced_splicer)
-
     records = query.order_by(Record.created_date.desc().nullslast(), Record.id.desc()).all()
     total_rows = len(records)
     total_amount = sum(r.total_usd or 0 for r in records)
 
     companies = [c.name for c in CompanyConfig.query.order_by(CompanyConfig.name).all()]
-    # também empresas já usadas em registros
     companies_from_records = {
         c for (c,) in db.session.query(Record.company).distinct().all() if c
     }
-
     all_companies = sorted(set(companies) | companies_from_records)
 
     # lista de splicers / usuários cadastrados (para o filtro)
@@ -302,13 +316,10 @@ def index():
     }
     all_splicers = sorted(splicers_from_records | splicers_from_users)
 
-    # para usuários comuns, o dropdown não deve listar outros nomes
-    if not getattr(current_user, "is_admin", False):
+    # Para usuários normais, o dropdown DEVE mostrar só ele mesmo.
+    # Para dono de empresa, mantemos a lista completa (pode filtrar por qualquer splicer da empresa).
+    if not is_admin and not is_owner:
         if enforced_splicer:
-            all_splicers = [enforced_splicer]
-            splicer_filter = enforced_splicer
-        else:
-            enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
             all_splicers = [enforced_splicer]
             splicer_filter = enforced_splicer
 
@@ -326,7 +337,6 @@ def index():
         start=start_raw or "",
         end=end_raw or "",
     )
-
 
 def build_filtered_record_query_from_request():
     """Reaproveita os filtros da tela principal para buscar os registros."""
@@ -500,6 +510,15 @@ def entry():
     for dt in DeviceType.query.order_by(DeviceType.company, DeviceType.name).all():
         key = dt.company or "__global__"
         devices_by_company.setdefault(key, []).append(dt.name)
+    # opções de splicer (para o admin poder escolher quem lançou)
+    splicer_options = []
+    if getattr(current_user, "is_admin", False):
+        splicer_options = [
+            (u.splicer_name or u.username)
+            for u in User.query.order_by(User.username).all()
+            if (u.splicer_name or u.username)
+        ]
+
 
     default_splicer = getattr(current_user, "splicer_name", None) or current_user.username
 
@@ -537,6 +556,7 @@ def entry():
             )
             return render_template(
                 "entry.html",
+                splicer_options=splicer_options,
                 companies=companies,
                 maps_by_company=maps_by_company,
                 devices_by_company=devices_by_company,
@@ -612,13 +632,13 @@ def entry():
 # GET
     return render_template(
         "entry.html",
+        splicer_options=splicer_options,
         companies=companies,
         maps_by_company=maps_by_company,
         devices_by_company=devices_by_company,
         default_splicer=default_splicer,
         today=date.today().isoformat(),
     )
-
 
 @app.route("/record/<int:rid>/edit", methods=["GET", "POST"])
 @login_required
@@ -637,6 +657,15 @@ def record_edit(rid):
     for dt in DeviceType.query.order_by(DeviceType.company, DeviceType.name).all():
         key = dt.company or "__global__"
         devices_by_company.setdefault(key, []).append(dt.name)
+    # opções de splicer (para o admin poder escolher quem lançou)
+    splicer_options = []
+    if getattr(current_user, "is_admin", False):
+        splicer_options = [
+            (u.splicer_name or u.username)
+            for u in User.query.order_by(User.username).all()
+            if (u.splicer_name or u.username)
+        ]
+
 
     default_splicer = getattr(current_user, "splicer_name", None) or current_user.username
 
@@ -689,6 +718,7 @@ def record_edit(rid):
 
     return render_template(
         "entry.html",
+        splicer_options=splicer_options,
         companies=companies,
         maps_by_company=maps_by_company,
         devices_by_company=devices_by_company,
@@ -703,7 +733,6 @@ def record_edit(rid):
         form_splices=str(rec.splices or 0),
         form_created=form_created,
     )
-
 @app.route("/logout")
 @login_required
 def logout():
@@ -914,6 +943,8 @@ def manage_users():
         username = (request.form.get("username") or "").strip()
         password = (request.form.get("password") or "").strip()
         splicer_name = (request.form.get("splicer_name") or "").strip() or None
+        company_name = (request.form.get("company_name") or "").strip() or None
+        is_company_owner = bool(request.form.get("is_company_owner"))
         is_admin = bool(request.form.get("is_admin"))
 
         if not username or not password:
@@ -924,12 +955,16 @@ def manage_users():
         if user:
             user.password = password
             user.splicer_name = splicer_name
+            user.company_name = company_name
+            user.is_company_owner = is_company_owner
             user.is_admin = is_admin
         else:
             user = User(
                 username=username,
                 password=password,
                 splicer_name=splicer_name,
+                company_name=company_name,
+                is_company_owner=is_company_owner,
                 is_admin=is_admin,
             )
             db.session.add(user)
@@ -937,8 +972,10 @@ def manage_users():
         flash("Usuário salvo com sucesso.", "success")
         return redirect(url_for("manage_users"))
 
+        companies = CompanyConfig.query.order_by(CompanyConfig.name).all()
     users = User.query.order_by(User.username).all()
-    return render_template("users.html", users=users)
+    return render_template("users.html", users=users, companies=companies)
+
 
 @app.route("/users/<int:uid>/delete")
 @admin_required
