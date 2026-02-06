@@ -201,7 +201,7 @@ mb-3">Registros</h5>
               <div class="carousel-item {% if loop.first %}active{% endif %}">
                 <img src="{{ url_for('photo_file', photo_id=photo.id) }}"
                      class="d-block mx-auto img-fluid"
-                     style="max-height: calc(100vh - 220px); width: auto; object-fit: contain;"
+                     style="max-width: 100%; max-height: calc(100vh - 220px); object-fit: contain;"
                      alt="Foto {{ loop.index }} do dispositivo {{ r.device }}">
               </div>
               {% endfor %}
