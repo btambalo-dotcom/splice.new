@@ -197,7 +197,7 @@ mb-3">Registros</h5>
         <div class="modal-body">
           <div id="carousel-{{ r.id }}" class="carousel slide" data-bs-ride="carousel">
             <div class="carousel-inner">
-              {% for photo in r.photos.order_by('created_at') %}
+              {% for photo in r.photos|sort(attribute='created_at') %}
               <div class="carousel-item {% if loop.first %}active{% endif %}">
                 <img src="{{ url_for('photo_file', photo_id=photo.id) }}"
                      class="d-block mx-auto img-fluid"
@@ -222,7 +222,7 @@ mb-3">Registros</h5>
              class="btn btn-sm btn-warning me-2 mb-2">
             Download todas as fotos (.zip)
           </a>
-          {% for photo in r.photos.order_by('created_at') %}
+          {% for photo in r.photos|sort(attribute='created_at') %}
           <a href="{{ url_for('static', filename='uploads/' ~ photo.filename) }}"
              download
              class="btn btn-sm btn-outline-light me-2 mb-2">
