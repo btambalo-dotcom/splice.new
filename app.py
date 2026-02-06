@@ -972,7 +972,7 @@ def manage_users():
         flash("Usuário salvo com sucesso.", "success")
         return redirect(url_for("manage_users"))
 
-        companies = CompanyConfig.query.order_by(CompanyConfig.name).all()
+    companies = CompanyConfig.query.order_by(CompanyConfig.name).all()
     users = User.query.order_by(User.username).all()
     return render_template("users.html", users=users, companies=companies)
 
