@@ -120,22 +120,6 @@ try:
                 # ignora erros individuais para não derrubar o app
                 pass
         conn.close()
-existing_cols:
-            stmts.append('ALTER TABLE "user" ADD COLUMN is_company_owner boolean DEFAULT false;')
-        if "company_name" not in existing_cols:
-            stmts.append('ALTER TABLE "user" ADD COLUMN company_name varchar(120);')
-
-        if not stmts:
-            return
-
-        conn = db.engine.connect()
-        for s in stmts:
-            try:
-                conn.execute(text(s))
-            except Exception:
-                # ignora erros individuais para não derrubar o app
-                pass
-        conn.close()
 
     # Cria tabelas e aplica migração assim que o app sobe
     with app.app_context():
