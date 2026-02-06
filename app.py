@@ -68,6 +68,9 @@ try:
         ensure_column("user", "splicer_name", "VARCHAR(120)")
         ensure_column("user", "is_company_owner", "INTEGER DEFAULT 0")
         ensure_column("user", "company_name", "VARCHAR(120)")
+        # Garante colunas para armazenamento de fotos no próprio banco (SQLite)
+        ensure_column("record_photo", "mime_type", "VARCHAR(120)")
+        ensure_column("record_photo", "data", "BLOB")
 
         conn.commit()
         conn.close()
@@ -78,11 +81,12 @@ try:
         if not str(url.drivername).startswith("postgresql"):
             return
 
+        # Ajusta tabela "user"
         try:
             existing_cols = [c["name"] for c in inspect(db.engine).get_columns("user")]
         except Exception:
             # Se não conseguir inspecionar, não derruba o app
-            return
+            existing_cols = []
 
         stmts = []
         if "is_admin" not in existing_cols:
@@ -90,6 +94,33 @@ try:
         if "splicer_name" not in existing_cols:
             stmts.append('ALTER TABLE "user" ADD COLUMN splicer_name varchar(120);')
         if "is_company_owner" not in existing_cols:
+            stmts.append('ALTER TABLE "user" ADD COLUMN is_company_owner boolean DEFAULT false;')
+        if "company_name" not in existing_cols:
+            stmts.append('ALTER TABLE "user" ADD COLUMN company_name varchar(120);')
+
+        # Ajusta tabela "record_photo" para armazenar dados binários
+        try:
+            photo_cols = [c["name"] for c in inspect(db.engine).get_columns("record_photo")]
+        except Exception:
+            photo_cols = []
+
+        if "mime_type" not in photo_cols:
+            stmts.append('ALTER TABLE record_photo ADD COLUMN mime_type varchar(120);')
+        if "data" not in photo_cols:
+            stmts.append('ALTER TABLE record_photo ADD COLUMN data bytea;')
+
+        if not stmts:
+            return
+
+        conn = db.engine.connect()
+        for s in stmts:
+            try:
+                conn.execute(text(s))
+            except Exception:
+                # ignora erros individuais para não derrubar o app
+                pass
+        conn.close()
+existing_cols:
             stmts.append('ALTER TABLE "user" ADD COLUMN is_company_owner boolean DEFAULT false;')
         if "company_name" not in existing_cols:
             stmts.append('ALTER TABLE "user" ADD COLUMN company_name varchar(120);')
@@ -123,7 +154,7 @@ except Exception as _e:
 
 @app.route("/_fix_user_columns_once_bruno")
 def _fix_user_columns_once_bruno():
-    """Endpoint manual para ajustar colunas da tabela user no PostgreSQL do Render.
+    """Endpoint manual para ajustar colunas na tabela user e record_photo no PostgreSQL do Render.
 
     Use apenas uma vez: acesse /_fix_user_columns_once_bruno na URL do app no Render.
     Não depende de login e não usa o ORM, só executa ALTER TABLE com segurança.
@@ -137,6 +168,8 @@ def _fix_user_columns_once_bruno():
             'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS splicer_name varchar(120);',
             'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS is_company_owner boolean DEFAULT false;',
             'ALTER TABLE "user" ADD COLUMN IF NOT EXISTS company_name varchar(120);',
+            'ALTER TABLE record_photo ADD COLUMN IF NOT EXISTS mime_type varchar(120);',
+            'ALTER TABLE record_photo ADD COLUMN IF NOT EXISTS data bytea;',
         ]
         for s in stmts:
             try:
@@ -148,17 +181,7 @@ def _fix_user_columns_once_bruno():
         return "Migração concluída. Agora você já pode fazer login normalmente.", 200
     except Exception as e:
         return f"Erro ao executar migração: {e}", 500
-
-login_manager = LoginManager(app)
-login_manager.login_view = "login"
-
-# --------- Models ---------
-class User(UserMixin, db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
-    password = db.Column(db.String(120), nullable=False)  # simples, sem hash, uso local
-    is_admin = db.Column(db.Boolean, default=False)
-    splicer_name = db.Column(db.String(120), nullable=True)  # nome que aparece como Splicer nos lançamentos
+cer_name = db.Column(db.String(120), nullable=True)  # nome que aparece como Splicer nos lançamentos
     is_company_owner = db.Column(db.Boolean, default=False)  # dono de empresa: vê todos os lançamentos da própria empresa
     company_name = db.Column(db.String(120), nullable=True)  # nome exato da empresa (igual ao campo company nos lançamentos)
 
@@ -230,8 +253,11 @@ class RecordPhoto(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     record_id = db.Column(db.Integer, db.ForeignKey("record.id"), nullable=False, index=True)
     filename = db.Column(db.String(255), nullable=False)
+    mime_type = db.Column(db.String(120), nullable=True)  # tipo MIME da imagem (image/jpeg, etc.)
+    data = db.Column(db.LargeBinary, nullable=True)       # conteúdo binário da foto
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+    # relacionamento com Record
     record = db.relationship("Record", backref=db.backref("photos", lazy="dynamic"))
 
 
@@ -342,19 +368,24 @@ def _allowed_image(filename: str) -> bool:
 
 def save_record_photos(record, files):
     """
-    Salva fotos redimensionadas/comprimidas para um lançamento.
+    Salva fotos redimensionadas/comprimidas para um lançamento direto no banco.
     - Reduz para no máximo 1280x1280
     - Salva como JPEG qualidade 70
-    - Grava apenas o nome do arquivo no banco (tabela RecordPhoto)
+    - Grava o binário na coluna RecordPhoto.data (além de um nome lógico em filename)
     """
     if not files:
         return
 
-    upload_folder = app.config.get("UPLOAD_FOLDER") or os.path.join(app.root_path, "static", "uploads")
-    os.makedirs(upload_folder, exist_ok=True)
-
     max_photos = 5
-    for idx, file in enumerate(files[:max_photos]):
+    from io import BytesIO
+
+    # Garante no máximo 5 fotos por lançamento (considerando as existentes)
+    current_count = record.photos.count() if hasattr(record, "photos") else 0
+    remaining = max_photos - current_count
+    if remaining <= 0:
+        return
+
+    for idx, file in enumerate(files[:remaining]):
         if not file or not getattr(file, "filename", None):
             continue
         if not _allowed_image(file.filename):
@@ -374,40 +405,30 @@ def save_record_photos(record, files):
         img = img.convert("RGB")
         img.thumbnail((1280, 1280))
 
-        filename = f"{record.id}_{uuid.uuid4().hex}.jpg"
-        filepath = os.path.join(upload_folder, filename)
-
+        # Converte para JPEG em memória
+        buf = BytesIO()
         try:
-            img.save(filepath, format="JPEG", quality=70, optimize=True)
+            img.save(buf, format="JPEG", quality=70, optimize=True)
         except Exception:
             continue
 
-        photo = RecordPhoto(record_id=record.id, filename=filename)
+        data = buf.getvalue()
+        if not data:
+            continue
+
+        # Nome lógico baseado no id do lançamento e índice
+        filename = f"{record.id}_{uuid.uuid4().hex}.jpg"
+
+        photo = RecordPhoto(
+            record_id=record.id,
+            filename=filename,
+            mime_type="image/jpeg",
+            data=data,
+        )
         db.session.add(photo)
 
     db.session.commit()
-
-
-# --------- Helpers de preço ---------
-def included_splices_for(company: str | None) -> int:
-    """Quantas fusões são inclusas para essa empresa."""
-    if not company:
-        return 1  # padrão antigo: 1 fusão inclusa
-    cfg = CompanyConfig.query.filter_by(name=company).first()
-    if cfg:
-        return int(cfg.included_splices or 0)
-    return 1
-
-def device_value_for(name: str, company: str | None) -> float:
-    if not name:
-        return 0.0
-    q = DeviceType.query.filter(DeviceType.name.ilike(name))
-    if company:
-        q = q.filter(or_(DeviceType.company == company, DeviceType.company.is_(None)))
-        dt = q.order_by(case((DeviceType.company == company, 0), else_=1)).first()
-    else:
-        dt = q.first()
-    return float(dt.value_usd) if dt else 0.0
+dt else 0.0
 
 def tier_price_for(count: int, company: str | None) -> float:
     from sqlalchemy import or_ as _or, case as _case
@@ -557,7 +578,7 @@ def index():
 @app.route("/record/<int:rid>/photos_zip")
 @login_required
 def record_photos_zip(rid):
-    """Download de todas as fotos de um único lançamento em um .zip."""
+    """Download de todas as fotos de um único lançamento em um .zip (dados vindos do banco)."""
     record = Record.query.get_or_404(rid)
 
     # regras de acesso: não-admin só acessa o que veria na tela principal
@@ -575,16 +596,21 @@ def record_photos_zip(rid):
         flash("Este lançamento não possui fotos para download.", "warning")
         return redirect(url_for("index"))
 
-    upload_folder = app.config.get("UPLOAD_FOLDER") or os.path.join(app.root_path, "static", "uploads")
-
     mem = BytesIO()
     with ZipFile(mem, "w") as zf:
         for photo in photos:
-            filepath = os.path.join(upload_folder, photo.filename)
-            if not os.path.exists(filepath):
-                continue
-            arcname = f"record_{record.id}/{photo.filename}"
-            zf.write(filepath, arcname=arcname)
+            # Prioriza dados vindos do banco
+            if photo.data:
+                data = photo.data
+                arcname = f"record_{record.id}/{photo.filename}"
+                zf.writestr(arcname, data)
+            else:
+                # compatibilidade com fotos antigas salvas em disco
+                upload_folder = app.config.get("UPLOAD_FOLDER") or os.path.join(app.root_path, "static", "uploads")
+                filepath = os.path.join(upload_folder, photo.filename)
+                if os.path.exists(filepath):
+                    arcname = f"record_{record.id}/{photo.filename}"
+                    zf.write(filepath, arcname=arcname)
 
     mem.seek(0)
     filename = f"record_{record.id}_fotos.zip"
@@ -596,10 +622,43 @@ def record_photos_zip(rid):
     )
 
 
+
+@app.route("/photo/<int:photo_id>")
+@login_required
+def photo_file(photo_id):
+    """Retorna o binário de uma única foto (para exibir na tela ou baixar).
+
+    Usa as mesmas regras de permissão da tela principal / relatórios.
+    """
+    photo = RecordPhoto.query.get_or_404(photo_id)
+    record = photo.record
+
+    # regras de acesso
+    if not getattr(current_user, "is_admin", False):
+        if getattr(current_user, "is_company_owner", False) and getattr(current_user, "company_name", None):
+            if record.company != current_user.company_name:
+                abort(403)
+        else:
+            enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
+            if record.splicer != enforced_splicer:
+                abort(403)
+
+    data = photo.data
+    if not data:
+        # compatibilidade com discos antigos
+        upload_folder = app.config.get("UPLOAD_FOLDER") or os.path.join(app.root_path, "static", "uploads")
+        filepath = os.path.join(upload_folder, photo.filename)
+        if not os.path.exists(filepath):
+            abort(404)
+        return send_file(filepath, mimetype="image/jpeg")
+
+    mime = photo.mime_type or "image/jpeg"
+    return send_file(BytesIO(data), mimetype=mime)
+
 @app.route("/photos/filtered_zip")
 @login_required
 def photos_filtered_zip():
-    """Download .zip com fotos de todos os lançamentos que batem com os filtros atuais."""
+    """Gera um ZIP com todas as fotos dos lançamentos filtrados na tela principal."""
     company_filter = request.args.get("company") or None
     splicer_filter = request.args.get("splicer") or None
     map_filter = request.args.get("map") or None
@@ -632,8 +691,7 @@ def photos_filtered_zip():
         except ValueError:
             pass
 
-    # regras de visibilidade para não-admin
-    enforced_splicer = None
+    # Filtro adicional para donos de empresa e usuários comuns
     if not getattr(current_user, "is_admin", False):
         if getattr(current_user, "is_company_owner", False) and getattr(current_user, "company_name", None):
             query = query.filter(Record.company == current_user.company_name)
@@ -641,44 +699,44 @@ def photos_filtered_zip():
             enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
             query = query.filter(Record.splicer == enforced_splicer)
 
-    records = query.order_by(Record.created_date.desc().nullslast(), Record.id.desc()).all()
+    records = query.order_by(Record.created_date.desc()).all()
+    if not records:
+        flash("Não há lançamentos com fotos para exportar neste filtro.", "warning")
+        return redirect(url_for("index"))
 
-    all_photos = []
-    for record in records:
-        for photo in record.photos.order_by(RecordPhoto.created_at).all():
-            all_photos.append((record, photo))
-
-    if not all_photos:
-        flash("Nenhuma foto encontrada para os filtros atuais.", "warning")
-        return redirect(
-            url_for(
-                "index",
-                company=company_filter or "",
-                splicer=splicer_filter or "",
-                map=map_filter or "",
-                device=device_filter or "",
-                start=start_raw or "",
-                end=end_raw or "",
-            )
-        )
-
-    upload_folder = app.config.get("UPLOAD_FOLDER") or os.path.join(app.root_path, "static", "uploads")
+    # pega todas as fotos relacionadas
+    all_photos = (
+        db.session.query(Record, RecordPhoto)
+        .join(RecordPhoto, RecordPhoto.record_id == Record.id)
+        .filter(Record.id.in_([r.id for r in records]))
+        .order_by(Record.created_date.desc(), RecordPhoto.created_at.asc())
+        .all()
+    )
 
     mem = BytesIO()
     name_counters = {}
     with ZipFile(mem, "w") as zf:
         for record, photo in all_photos:
-            filepath = os.path.join(upload_folder, photo.filename)
-            if not os.path.exists(filepath):
+            if photo.data:
+                data = photo.data
+            else:
+                upload_folder = app.config.get("UPLOAD_FOLDER") or os.path.join(app.root_path, "static", "uploads")
+                filepath = os.path.join(upload_folder, photo.filename)
+                if not os.path.exists(filepath):
+                    continue
+                with open(filepath, "rb") as f:
+                    data = f.read()
+
+            if not data:
                 continue
-            # nome base do arquivo = nome do device, para facilitar identificação
+
             device_slug = (record.device or "device").strip().replace(" ", "_")
             base, ext = os.path.splitext(photo.filename)
             key = (record.id, device_slug)
             idx = name_counters.get(key, 0) + 1
             name_counters[key] = idx
-            arcname = f"{device_slug}_{idx}{ext}"
-            zf.write(filepath, arcname=arcname)
+            arcname = f"{device_slug}_{idx}{ext or '.jpg'}"
+            zf.writestr(arcname, data)
 
     mem.seek(0)
     filename = "fotos_filtradas.zip"
@@ -688,42 +746,7 @@ def photos_filtered_zip():
         download_name=filename,
         mimetype="application/zip",
     )
-
-
-@app.route("/entry", methods=["GET", "POST"])
-@login_required
-def entry():
-    """Lançamento manual de produção (uma linha por vez)."""
-    # Dono de empresa não lança registros; apenas visualiza relatórios
-    if getattr(current_user, "is_company_owner", False) and not getattr(current_user, "is_admin", False):
-        flash("Dono de empresa não pode lançar registros. Use apenas os relatórios.", "warning")
-        return redirect(url_for("index"))
-    # empresas configuradas
-    companies = [c.name for c in CompanyConfig.query.order_by(CompanyConfig.name).all()]
-
-    # mapas cadastrados por empresa
-    maps_by_company = {}
-    for m in CompanyMap.query.order_by(CompanyMap.company, CompanyMap.name).all():
-        maps_by_company.setdefault(m.company, []).append(m.name)
-
-    # dispositivos cadastrados por empresa
-    devices_by_company = {}
-    for dt in DeviceType.query.order_by(DeviceType.company, DeviceType.name).all():
-        key = dt.company or "__global__"
-        devices_by_company.setdefault(key, []).append(dt.name)
-
-    # opções de splicer (para admin poder escolher quem lançou)
-    splicer_options = [u.splicer_name or u.username for u in User.query.order_by(User.username).all()]
-
-    default_splicer = getattr(current_user, "splicer_name", None) or current_user.username
-
-    if request.method == "POST":
-        company = (request.form.get("company") or "").strip() or None
-        map_val = (request.form.get("map") or "").strip()
-        type_val = (request.form.get("type") or "").strip()
-        device_name = (request.form.get("device_name") or "").strip()
-
-        # para cálculo de preço usamos o tipo (dispositivo configurado),
+para cálculo de preço usamos o tipo (dispositivo configurado),
         # e guardamos o nome digitado separado
         device_for_price = type_val or device_name
 
