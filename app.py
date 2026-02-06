@@ -8,7 +8,7 @@ from fpdf import FPDF
 from werkzeug.utils import secure_filename
 from io import BytesIO
 import zipfile
-from PIL import Image
+from PIL import Image, ImageOps
 from functools import wraps
 import csv
 from openpyxl import Workbook
@@ -30,6 +30,11 @@ def process_uploaded_photo(file_storage, max_size=(1600, 1600), quality=80):
             return None, None, None
 
         img = Image.open(BytesIO(raw))
+        # Corrige orientação baseada no EXIF (fotos de celular)
+        try:
+            img = ImageOps.exif_transpose(img)
+        except Exception:
+            pass
         # garante que sempre teremos um formato compatível
         img = img.convert("RGB")
         img.thumbnail(max_size)
