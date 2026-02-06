@@ -8,10 +8,55 @@ from fpdf import FPDF
 from werkzeug.utils import secure_filename
 from io import BytesIO
 import zipfile
+from PIL import Image
 from functools import wraps
 import csv
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
+
+
+# --------- Util: compress/resize uploaded photos ---------
+def process_uploaded_photo(file_storage, max_size=(1600, 1600), quality=80):
+    """Resize/compress an uploaded image to keep DB small.
+
+    Returns (filename, content_type, data_bytes) or (None, None, None) on failure.
+    """
+    if not file_storage or not file_storage.filename:
+        return None, None, None
+
+    try:
+        raw = file_storage.read()
+        if not raw:
+            return None, None, None
+
+        img = Image.open(BytesIO(raw))
+        # garante que sempre teremos um formato compatível
+        img = img.convert("RGB")
+        img.thumbnail(max_size)
+
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=quality, optimize=True)
+        buf.seek(0)
+        data = buf.read()
+
+        base_name, _ = os.path.splitext(file_storage.filename or "foto.jpg")
+        safe_name = secure_filename(base_name) or "foto"
+        filename = f"{safe_name}.jpg"
+
+        return filename[:255], "image/jpeg", data
+    except Exception:
+        # Se der qualquer erro ao processar a imagem, salva o arquivo original
+        try:
+            file_storage.seek(0)
+            data = file_storage.read()
+            if not data:
+                return None, None, None
+            filename = secure_filename(file_storage.filename) or "arquivo.bin"
+            return filename[:255], (file_storage.mimetype or "application/octet-stream"), data
+        except Exception:
+            return None, None, None
+
+
 
 # --------- App & DB setup ---------
 app = Flask(__name__)
@@ -612,14 +657,13 @@ def entry():
             for f in files[:5]:
                 if not f or not f.filename:
                     continue
-                filename = secure_filename(f.filename) or f"foto_{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}.jpg"
-                data = f.read()
+                filename, content_type, data = process_uploaded_photo(f)
                 if not data:
                     continue
                 photo = RecordPhoto(
                     record_id=rec.id,
                     filename=filename[:255],
-                    content_type=f.mimetype or "application/octet-stream",
+                    content_type=content_type,
                     data=data,
                 )
                 db.session.add(photo)
