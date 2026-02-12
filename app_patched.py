@@ -1087,23 +1087,45 @@ def export_invoice():
         pdf.cell(w, 7, h, border=1)
     pdf.ln()
 
-    def _break_for_table(txt: str) -> str:
-        """Força quebra de linha em tokens longos (device costuma vir com _ e -).
-
-        FPDF com fontes "core" (Arial) não lida bem com zero-width space unicode.
-        Então usamos '\n' após '_' e '-' para manter o texto fiel e permitir quebra.
+    def _wrap_device_for_col(s: str, max_w: float) -> str:
+        """Quebra o nome do device em linhas SEM ficar 1 pedaço por linha.
+        - Mantém o texto completo dentro da coluna
+        - Só quebra quando passar da largura da coluna
+        - Prioriza quebra após '_' e '-' (se existir perto do limite)
         """
-        s = (txt or "").strip()
+        s = (s or '').strip()
         if not s:
-            return "-"
-        return s.replace("_", "_\n").replace("-", "-\n")
-
+            return '-'
+        lines = []
+        cur = ''
+        last_bp = -1  # índice do último '_' ou '-' dentro de cur
+        for ch in s:
+            cur += ch
+            if ch in ['_', '-']:
+                last_bp = len(cur) - 1
+            if pdf.get_string_width(cur) > max_w:
+                if last_bp != -1:
+                    cut = last_bp + 1
+                    line = cur[:cut]
+                    cur = cur[cut:].lstrip()
+                else:
+                    # se não tem '_'/'-' pra quebrar, faz quebra “na marra”
+                    line = cur[:-1] if len(cur) > 1 else cur
+                    cur = cur[-1:] if len(cur) > 1 else ''
+                lines.append(line)
+                last_bp = -1
+                for k, c2 in enumerate(cur):
+                    if c2 in ['_', '-']:
+                        last_bp = k
+        if cur:
+            lines.append(cur)
+        return '\n'.join(lines)
     line_h = 6
     pdf.set_font("Arial", "", 9)
     for l in lines:
         row = [
             str(l["map"] or "-"),
-            _break_for_table(str(l["device"] or "-")),
+            _wrap_device_for_col(str(l["device"] or "-"), col_widths[1]-2),
             str(l["splices"]),
             f"$ {l['price_device_usd']:.2f}",
             f"$ {l['total_usd']:.2f}",
@@ -1115,9 +1137,15 @@ def export_invoice():
         x0 = pdf.get_x()
         y0 = pdf.get_y()
         x = x0
-        for w, val in zip(col_widths, row):
+        # desenha a borda de cada célula só 1 vez (sem linhas internas)
+        for idx_col, (w, val) in enumerate(zip(col_widths, row)):
             pdf.set_xy(x, y0)
-            pdf.multi_cell(w, line_h, str(val), border=1)
+            pdf.rect(x, y0, w, row_h)
+            # coluna Device (idx 1) pode ter múltiplas linhas; as outras ficam 1 linha
+            if idx_col == 1:
+                pdf.multi_cell(w, line_h, str(val), border=0)
+            else:
+                pdf.cell(w, row_h, str(val), border=0)
             x += w
         pdf.set_xy(x0, y0 + row_h)
 
