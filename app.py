@@ -118,6 +118,12 @@ class Invoice(db.Model):
     total_usd = db.Column(db.Float, nullable=False, default=0.0)
     status = db.Column(db.String(20), nullable=False, default="pending")  # pending / paid
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    pdf_filename = db.Column(db.String(255), nullable=True)
+    pdf_content_type = db.Column(db.String(100), nullable=True)
+    pdf_data = db.Column(db.LargeBinary, nullable=True)
+
+    created_by_user = db.relationship('User', foreign_keys=[created_by], backref=db.backref('invoices_created', lazy=True))
 
 class DeviceType(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -219,6 +225,11 @@ with app.app_context():
     ensure("expense", "paid", "BOOLEAN")
     ensure("expense", "paid_at", "TIMESTAMP")
     ensure("expense", "paid_by", "INTEGER")
+    ensure("invoice", "created_by", "INTEGER")
+    ensure("invoice", "pdf_filename", "VARCHAR(255)")
+    ensure("invoice", "pdf_content_type", "VARCHAR(100)")
+    ensure("invoice", "pdf_data", "BYTEA" if 'postgres' in db.engine.name else "BLOB")
+
     # garante valor padrão para despesas antigas
     try:
         db.session.execute(text('UPDATE "expense" SET paid = 0 WHERE paid IS NULL'))
@@ -1159,6 +1170,21 @@ def invoices_list():
     invoices = query.all()
     return render_template("invoices.html", invoices=invoices, status_filter=status_filter)
 
+@app.route("/invoice/<int:iid>/pdf")
+@login_required
+def invoice_pdf(iid: int):
+    """Exibe/baixa o PDF salvo de uma invoice já criada."""
+    inv = Invoice.query.get_or_404(iid)
+    # permissões: admin vê tudo; (futuro) dono da empresa pode ver da própria empresa
+    if not getattr(current_user, 'is_admin', False):
+        if not (getattr(current_user, 'is_company_owner', False) and (inv.company == (current_user.company_name or ''))):
+            abort(403)
+    if not inv.pdf_data:
+        flash('Esta invoice não tem PDF salvo. Gere novamente.', 'warning')
+        return redirect(url_for('invoices_list'))
+    download = (request.args.get('download') or '').lower() in ('1','true','yes')
+    return send_file(BytesIO(inv.pdf_data), as_attachment=download, download_name=inv.pdf_filename or f"{inv.number}.pdf", mimetype=(inv.pdf_content_type or 'application/pdf'))
+
 
 @app.route("/invoice/<int:iid>/toggle", methods=["POST"])
 @admin_required
@@ -1263,13 +1289,18 @@ def export_invoice():
 
     total_invoice = sum(l["total_usd"] for l in lines)
 
-    # persist invoice for accounting
+    # persist invoice for accounting (PDF será salvo no banco para visualizar depois)
     inv_start_date = start_dt.date() if start_dt else None
     inv_end_date = end_dt.date() if end_dt else None
-    inv_rec = Invoice(number=inv_number, company=company_filter or "", start_date=inv_start_date, end_date=inv_end_date, total_usd=float(total_invoice or 0.0))
+    inv_rec = Invoice(
+        number=inv_number,
+        company=company_filter or "",
+        start_date=inv_start_date,
+        end_date=inv_end_date,
+        total_usd=float(total_invoice or 0.0),
+        created_by=getattr(current_user, 'id', None),
+    )
     db.session.add(inv_rec)
-    db.session.commit()
-
     # montar PDF da invoice
     # buscar dados da sua empresa (emitente)
     syscfg = SystemConfig.query.first()
@@ -1334,45 +1365,27 @@ def export_invoice():
         pdf.cell(w, 7, h, border=1)
     pdf.ln()
 
-    def _wrap_device_for_col(s: str, max_w: float) -> str:
-        """Quebra o nome do device em linhas SEM ficar 1 pedaço por linha.
-        - Mantém o texto completo dentro da coluna
-        - Só quebra quando passar da largura da coluna
-        - Prioriza quebra após '_' e '-' (se existir perto do limite)
+    def _break_for_table(txt: str) -> str:
+        """Ajuda o FPDF a quebrar nomes longos SEM picotar.
+
+        O FPDF quebra linha em espaços. Como o device costuma vir com '_' e '-',
+        inserimos um espaço APÓS esses separadores (ex: 'A_B' vira 'A_ B') para
+        permitir quebra somente quando precisar, mantendo o nome completo dentro
+        da coluna.
         """
-        s = (s or '').strip()
+        s = (txt or "").strip()
         if not s:
-            return '-'
-        lines = []
-        cur = ''
-        last_bp = -1  # índice do último '_' ou '-' dentro de cur
-        for ch in s:
-            cur += ch
-            if ch in ['_', '-']:
-                last_bp = len(cur) - 1
-            if pdf.get_string_width(cur) > max_w:
-                if last_bp != -1:
-                    cut = last_bp + 1
-                    line = cur[:cut]
-                    cur = cur[cut:].lstrip()
-                else:
-                    # se não tem '_'/'-' pra quebrar, faz quebra “na marra”
-                    line = cur[:-1] if len(cur) > 1 else cur
-                    cur = cur[-1:] if len(cur) > 1 else ''
-                lines.append(line)
-                last_bp = -1
-                for k, c2 in enumerate(cur):
-                    if c2 in ['_', '-']:
-                        last_bp = k
-        if cur:
-            lines.append(cur)
-        return '\n'.join(lines)
+            return "-"
+        s = s.replace("_", "_ ")
+        s = s.replace("-", "- ")
+        return s
+
     line_h = 6
     pdf.set_font("Arial", "", 9)
     for l in lines:
         row = [
             str(l["map"] or "-"),
-            _wrap_device_for_col(str(l["device"] or "-"), col_widths[1]-2),
+            _break_for_table(str(l["device"] or "-")),
             str(l["splices"]),
             f"$ {l['price_device_usd']:.2f}",
             f"$ {l['total_usd']:.2f}",
@@ -1387,15 +1400,9 @@ def export_invoice():
 
         # desenha cada célula como multi_cell mantendo a mesma altura de linha
         x = x0
-        # desenha a borda de cada célula só 1 vez (sem linhas internas)
-        for idx_col, (w, val) in enumerate(zip(col_widths, row)):
+        for w, val in zip(col_widths, row):
             pdf.set_xy(x, y0)
-            pdf.rect(x, y0, w, row_h)
-            # coluna Device (idx 1) pode ter múltiplas linhas; as outras ficam 1 linha
-            if idx_col == 1:
-                pdf.multi_cell(w, line_h, str(val), border=0)
-            else:
-                pdf.cell(w, row_h, str(val), border=0)
+            pdf.multi_cell(w, line_h, str(val), border=1)
             x += w
 
         # vai para a próxima linha
@@ -1405,11 +1412,26 @@ def export_invoice():
     pdf.set_font("Arial", "B", 11)
     pdf.cell(0, 8, f"Invoice total: $ {total_invoice:.2f}", ln=1)
 
-    buf = BytesIO()
-    pdf.output(buf)
-    buf.seek(0)
-    filename = "invoice_splicer.pdf"
-    return send_file(buf, as_attachment=True, download_name=filename, mimetype="application/pdf")
+    # gerar bytes do PDF e salvar na Invoice para poder visualizar depois
+    try:
+        pdf_bytes = pdf.output(dest='S').encode('latin-1')
+    except Exception:
+        buf = BytesIO()
+        pdf.output(buf)
+        pdf_bytes = buf.getvalue()
+
+    inv_rec.pdf_filename = f"{inv_number}.pdf"
+    inv_rec.pdf_content_type = "application/pdf"
+    inv_rec.pdf_data = pdf_bytes
+    db.session.commit()
+
+    download = (request.args.get('download') or '').lower() in ('1', 'true', 'yes')
+    return send_file(
+        BytesIO(pdf_bytes),
+        as_attachment=download,
+        download_name=inv_rec.pdf_filename or "invoice.pdf",
+        mimetype="application/pdf",
+    )
 
 
 
@@ -1809,3 +1831,4 @@ def expenses_delete(expense_id):
 
 if __name__ == "__main__":
     app.run(debug=True)
+

@@ -48,7 +48,14 @@
           {% endif %}
         </td>
         <td class="text-end">
-          <form method="post" action="{{ url_for('invoice_toggle_status', iid=inv.id) }}" class="d-inline">
+          {% if inv.pdf_data %}
+          <a class="btn btn-sm btn-outline-info" href="{{ url_for('invoice_pdf', iid=inv.id) }}" target="_blank">View</a>
+          <a class="btn btn-sm btn-outline-info ms-1" href="{{ url_for('invoice_pdf', iid=inv.id, download=1) }}">Download</a>
+        {% else %}
+          <span class="badge bg-secondary">No PDF</span>
+        {% endif %}
+
+          <form method="post" action="{{ url_for('invoice_toggle_status', iid=inv.id) }}" class="d-inline ms-1">
             <button class="btn btn-sm {% if inv.status == 'paid' %}btn-outline-secondary{% else %}btn-outline-success{% endif %}" type="submit">
               {% if inv.status == 'paid' %}Mark as pending{% else %}Mark as paid{% endif %}
             </button>
