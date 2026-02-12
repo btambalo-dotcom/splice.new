@@ -2,7 +2,7 @@ from flask import Flask, render_template, request, redirect, url_for, flash, sen
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from datetime import datetime, date
-from sqlalchemy import text, case, or_, inspect
+from sqlalchemy import text, case, or_, inspect, func
 import os
 from fpdf import FPDF
 from io import BytesIO
@@ -101,6 +101,25 @@ class Record(db.Model):
     total_usd = db.Column(db.Float, default=0.0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+
+class Expense(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    user = db.relationship("User", foreign_keys=[user_id], backref=db.backref("expenses", lazy=True))
+    description = db.Column(db.String(255), nullable=False)
+    category = db.Column(db.String(120), nullable=True)
+    amount = db.Column(db.Float, nullable=False, default=0.0)
+    date = db.Column(db.Date, nullable=False, default=date.today)
+
+    paid = db.Column(db.Boolean, nullable=False, default=False)
+    paid_at = db.Column(db.DateTime, nullable=True)
+    paid_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+
+
+    paid_by_user = db.relationship("User", foreign_keys=[paid_by], backref=db.backref("expenses_paid", lazy=True))
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+
 # --------- User loader ---------
 @login_manager.user_loader
 def load_user(user_id: str):
@@ -134,6 +153,15 @@ with app.app_context():
     ensure("company_config", "invoice_address", "TEXT")
     ensure("user", "is_admin", "BOOLEAN")
     ensure("user", "splicer_name", "VARCHAR(120)")
+    ensure("expense", "paid", "BOOLEAN")
+    ensure("expense", "paid_at", "TIMESTAMP")
+    ensure("expense", "paid_by", "INTEGER")
+    # garante valor padrão para despesas antigas
+    try:
+        db.session.execute(text('UPDATE "expense" SET paid = 0 WHERE paid IS NULL'))
+        db.session.commit()
+    except Exception:
+        pass
 
 # --------- Login ---------
 @app.route("/login", methods=["GET", "POST"])
@@ -1241,6 +1269,212 @@ def record_delete(rid: int):
     db.session.commit()
     flash("Registro removido.", "success")
     return redirect(url_for("index"))
+
+@app.route("/expenses", methods=["GET", "POST"])
+@login_required
+def expenses():
+    is_admin = getattr(current_user, "is_admin", False)
+    is_owner = getattr(current_user, "is_company_owner", False)
+
+    # Dono de empresa não tem acesso ao módulo de despesas (a não ser que também seja admin)
+    if is_owner and not is_admin:
+        flash("Você não tem acesso a este módulo.", "danger")
+        return redirect(url_for("index"))
+
+    # --- Gravar nova despesa ---
+    if request.method == "POST":
+        description = (request.form.get("description") or "").strip()
+        category = (request.form.get("category") or "").strip()
+        amount_raw = (request.form.get("amount") or "").replace(",", ".")
+        date_raw = request.form.get("date") or ""
+
+        if not description:
+            flash("Descrição é obrigatória.", "danger")
+            return redirect(url_for("expenses"))
+
+        try:
+            amount = float(amount_raw)
+        except ValueError:
+            flash("Valor inválido para despesa.", "danger")
+            return redirect(url_for("expenses"))
+
+        if amount <= 0:
+            flash("O valor da despesa deve ser maior que zero.", "danger")
+            return redirect(url_for("expenses"))
+
+        try:
+            if date_raw:
+                y, m, d = map(int, date_raw.split("-"))
+                d = date(y, m, d)
+            else:
+                d = date.today()
+        except Exception:
+            d = date.today()
+
+        exp = Expense(
+            user_id=current_user.id,
+            description=description,
+            category=category or None,
+            amount=amount,
+            date=d,
+        )
+        db.session.add(exp)
+        db.session.commit()
+        flash("Despesa lançada com sucesso.", "success")
+        return redirect(url_for("expenses"))
+
+    # --- Filtros para listagem ---
+    user_filter = request.args.get("user_id") or None
+    start_raw = request.args.get("start") or None
+    end_raw = request.args.get("end") or None
+
+    q = Expense.query
+
+    show_paid = (request.args.get("show_paid") == "1")
+
+    # por padrão mostra só despesas em aberto; com show_paid=1 mostra pagas
+    if show_paid:
+        q = q.filter(Expense.paid == True)
+    else:
+        q = q.filter(Expense.paid == False)
+
+    # Regras de visualização:
+    # - Admin: vê todo mundo e pode filtrar por usuário
+    # - Splicer comum: vê só as próprias despesas
+    if is_admin:
+        if user_filter:
+            try:
+                q = q.filter(Expense.user_id == int(user_filter))
+            except ValueError:
+                pass
+    else:
+        q = q.filter(Expense.user_id == current_user.id)
+
+    # Filtro por datas
+    if start_raw:
+        try:
+            y, m, d = map(int, start_raw.split("-"))
+            q = q.filter(Expense.date >= date(y, m, d))
+        except Exception:
+            pass
+
+    if end_raw:
+        try:
+            y, m, d = map(int, end_raw.split("-"))
+            q = q.filter(Expense.date <= date(y, m, d))
+        except Exception:
+            pass
+
+    q = q.order_by(Expense.date.desc(), Expense.id.desc())
+    expenses_list = q.all()
+    total_amount = sum(e.amount for e in expenses_list)
+
+    # Resumo por usuário: apenas admin
+    per_user = []
+    if is_admin:
+        agg_q = (
+            db.session.query(
+                User.id,
+                User.username,
+                User.splicer_name,
+                func.sum(Expense.amount).label("total")
+            )
+            .join(Expense, Expense.user_id == User.id)
+        )
+
+        if show_paid:
+            agg_q = agg_q.filter(Expense.paid == True)
+        else:
+            agg_q = agg_q.filter(Expense.paid == False)
+
+
+        if start_raw:
+            try:
+                y, m, d = map(int, start_raw.split("-"))
+                agg_q = agg_q.filter(Expense.date >= date(y, m, d))
+            except Exception:
+                pass
+
+        if end_raw:
+            try:
+                y, m, d = map(int, end_raw.split("-"))
+                agg_q = agg_q.filter(Expense.date <= date(y, m, d))
+            except Exception:
+                pass
+
+        agg_q = agg_q.group_by(User.id, User.username, User.splicer_name)
+        per_user = agg_q.all()
+
+    # Lista de usuários para filtro (apenas admin)
+    users_for_filter = []
+    if is_admin:
+        users_for_filter = User.query.order_by(User.username).all()
+
+    return render_template(
+        "expenses.html",
+        expenses=expenses_list,
+        total_amount=total_amount,
+        per_user=per_user,
+        users_for_filter=users_for_filter,
+        user_filter=user_filter,
+        start_raw=start_raw,
+        end_raw=end_raw,
+        show_paid=show_paid,
+    )
+
+
+@app.route("/expenses/mark_paid", methods=["POST"])
+@login_required
+def expenses_mark_paid():
+    is_admin = getattr(current_user, "is_admin", False)
+    if not is_admin:
+        flash("Acesso negado.", "danger")
+        return redirect(url_for("expenses"))
+
+    user_filter = request.form.get("user_id") or None
+    start_raw = request.form.get("start") or None
+    end_raw = request.form.get("end") or None
+
+    q = Expense.query.filter(Expense.paid == False)
+
+    if user_filter:
+        try:
+            q = q.filter(Expense.user_id == int(user_filter))
+        except ValueError:
+            pass
+
+    if start_raw:
+        try:
+            y, m, d = map(int, start_raw.split("-"))
+            q = q.filter(Expense.date >= date(y, m, d))
+        except Exception:
+            pass
+
+    if end_raw:
+        try:
+            y, m, d = map(int, end_raw.split("-"))
+            q = q.filter(Expense.date <= date(y, m, d))
+        except Exception:
+            pass
+
+    try:
+        updated = q.update(
+            {
+                Expense.paid: True,
+                Expense.paid_at: datetime.utcnow(),
+                Expense.paid_by: current_user.id,
+            },
+            synchronize_session=False,
+        )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        updated = 0
+
+    flash(f"{updated} despesas marcadas como pagas.", "success")
+    return redirect(url_for("expenses", user_id=user_filter or "", start=start_raw or "", end=end_raw or ""))
+
+
 
 if __name__ == "__main__":
     app.run(debug=True)
