@@ -1476,5 +1476,33 @@ def expenses_mark_paid():
 
 
 
+@app.route("/expenses/delete/<int:expense_id>", methods=["POST"])
+@login_required
+def expenses_delete(expense_id):
+    is_admin = getattr(current_user, "is_admin", False)
+    is_owner = getattr(current_user, "is_company_owner", False)
+
+    # Dono de empresa não tem acesso ao módulo de despesas (mantém sistema como estava)
+    if is_owner and not is_admin:
+        flash("Você não tem acesso a este módulo.", "danger")
+        return redirect(url_for("index"))
+
+    exp = Expense.query.get_or_404(expense_id)
+
+    # Splicer só pode excluir as próprias despesas
+    if not is_admin and exp.user_id != current_user.id:
+        flash("Você não pode excluir despesas de outro usuário.", "danger")
+        return redirect(url_for("expenses"))
+
+    try:
+        db.session.delete(exp)
+        db.session.commit()
+        flash("Despesa excluída com sucesso.", "success")
+    except Exception:
+        db.session.rollback()
+        flash("Erro ao excluir despesa.", "danger")
+
+    return redirect(request.referrer or url_for("expenses"))
+
 if __name__ == "__main__":
     app.run(debug=True)

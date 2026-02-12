@@ -125,6 +125,7 @@
                 <th>Descrição</th>
                 <th>Categoria</th>
                 <th class="text-end">Valor (USD)</th>
+                <th class="text-end">Ações</th>
               </tr>
             </thead>
             <tbody>
@@ -136,11 +137,24 @@
                   <td>{{ e.description }}</td>
                   <td>{{ e.category or "-" }}</td>
                   <td class="text-end">$ {{ "%.2f"|format(e.amount) }}</td>
-                </tr>
+                
+                  <td class="text-end">
+                    {% if current_user.is_admin or e.user_id == current_user.id %}
+                      <form method="post" action="{{ url_for('expenses_delete', expense_id=e.id) }}" style="display:inline;">
+                        <button type="submit" class="btn btn-danger btn-sm"
+                                onclick="return confirm('Tem certeza que deseja excluir esta despesa?')">
+                          Excluir
+                        </button>
+                      </form>
+                    {% else %}
+                      -
+                    {% endif %}
+                  </td>
+</tr>
                 {% endfor %}
               {% else %}
                 <tr>
-                  <td colspan="5" class="text-center">Nenhuma despesa encontrada.</td>
+                  <td colspan="6" class="text-center">Nenhuma despesa encontrada.</td>
                 </tr>
               {% endif %}
             </tbody>
