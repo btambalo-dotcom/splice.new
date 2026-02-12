@@ -1076,7 +1076,10 @@ def export_invoice():
     pdf.ln(4)
 
     # table header
-    col_widths = [60, 40, 25, 30, 30]
+    # OBS: FPDF "cell" não faz quebra de linha. Para não "estourar" a tabela e
+    # mostrar o nome COMPLETO do device dentro da coluna, desenhamos a linha com
+    # multi_cell e quebra manual (principalmente em '_' e '-').
+    col_widths = [55, 70, 20, 22, 23]
     headers = ["Map", "Device", "Splices", "Device price", "Total"]
 
     pdf.set_font("Arial", "B", 10)
@@ -1084,18 +1087,39 @@ def export_invoice():
         pdf.cell(w, 7, h, border=1)
     pdf.ln()
 
+    def _break_for_table(txt: str) -> str:
+        """Força quebra de linha em tokens longos (device costuma vir com _ e -).
+
+        FPDF com fontes "core" (Arial) não lida bem com zero-width space unicode.
+        Então usamos '\n' após '_' e '-' para manter o texto fiel e permitir quebra.
+        """
+        s = (txt or "").strip()
+        if not s:
+            return "-"
+        return s.replace("_", "_\n").replace("-", "-\n")
+
+    line_h = 6
     pdf.set_font("Arial", "", 9)
     for l in lines:
         row = [
-            l["map"],
-            l["device"],
+            str(l["map"] or "-"),
+            _break_for_table(str(l["device"] or "-")),
             str(l["splices"]),
             f"$ {l['price_device_usd']:.2f}",
             f"$ {l['total_usd']:.2f}",
         ]
+
+        n_lines = max((str(v).count("\n") + 1) for v in row)
+        row_h = line_h * n_lines
+
+        x0 = pdf.get_x()
+        y0 = pdf.get_y()
+        x = x0
         for w, val in zip(col_widths, row):
-            pdf.cell(w, 6, str(val)[:30], border=1)
-        pdf.ln()
+            pdf.set_xy(x, y0)
+            pdf.multi_cell(w, line_h, str(val), border=1)
+            x += w
+        pdf.set_xy(x0, y0 + row_h)
 
     pdf.ln(4)
     pdf.set_font("Arial", "B", 11)
