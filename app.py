@@ -1116,45 +1116,51 @@ def export_pdf():
         pdf.cell(0, 8, f"Total no período: $ {total_amount:.2f}", ln=1)
     pdf.ln(4)
 
-    # tabela
-    pdf.set_font("Arial", "", 8)
+    # cabeçalho (tabela sem quebrar colunas)
+    pdf.set_font("Arial", "B", 8)
+
+    page_w = pdf.w - pdf.l_margin - pdf.r_margin  # largura útil da página
+
+    def _scale_widths(base_widths):
+        s = float(sum(base_widths)) or 1.0
+        scale = page_w / s
+        return [w * scale for w in base_widths]
+
+    def fit_text(text, width):
+        """Trunca o texto para caber na célula, sem invadir a coluna seguinte."""
+        if text is None:
+            text = ""
+        text = str(text)
+        if width <= 0:
+            return ""
+        if pdf.get_string_width(text) <= width:
+            return text
+        ell = "..."
+        # garante que o ellipsis cabe
+        while pdf.get_string_width(ell) > width and len(ell) > 0:
+            ell = ell[:-1]
+        if not ell:
+            return ""
+        # vai cortando até caber com "..."
+        cut = text
+        while cut and pdf.get_string_width(cut + ell) > width:
+            cut = cut[:-1]
+        return cut + ell
+
+    if no_values:
+        headers = ["Data", "Empresa", "Map", "Type", "Dispositivo", "Splices"]
+        # base (soma ~190mm) -> escala para caber na largura útil
+        col_widths = _scale_widths([20, 35, 35, 15, 65, 20])
+    else:
+        headers = ["Data", "Empresa", "Map", "Type", "Dispositivo", "Splices", "Fusoes $", "Total $"]
+        col_widths = _scale_widths([20, 30, 30, 15, 40, 15, 20, 20])
 
     # cabeçalho
-    if no_values:
-        col_widths = [24, 24, 24, 22, 32, 18]
-        headers = ["Data", "Empresa", "Map", "Type", "Dispositivo", "Splices"]
-    else:
-        col_widths = [22, 22, 22, 20, 25, 18, 18, 18]
-        headers = ["Data", "Empresa", "Map", "Type", "Dispositivo", "Splices", "Fusoes $", "Total $"]
-
-    pdf.set_font("Arial", "B", 8)
     for w, h in zip(col_widths, headers):
         pdf.cell(w, 7, h, border=1)
-
-    def _fit_text(pdf_obj, txt, width):
-        """Garante que o texto não invade a próxima coluna."""
-        if txt is None:
-            txt = ""
-        s = str(txt).replace("\r", " ").replace("\n", " ")
-        inner = max(0.0, float(width) - 2.0)  # margem interna aproximada
-        if pdf_obj.get_string_width(s) <= inner:
-            return s
-        ell = "..."
-        ell_w = pdf_obj.get_string_width(ell)
-        if inner <= ell_w:
-            return ""
-        target = inner - ell_w
-
-        lo, hi = 0, len(s)
-        while lo < hi:
-            mid = (lo + hi + 1) // 2
-            if pdf_obj.get_string_width(s[:mid]) <= target:
-                lo = mid
-            else:
-                hi = mid - 1
-        return s[:lo] + ell
-
     pdf.ln()
+
+    pdf.set_font("Arial", "", 8)
 
     for r in records:
         if no_values:
@@ -1177,8 +1183,9 @@ def export_pdf():
                 f"{(r.price_splices_usd or 0):.2f}",
                 f"{(r.total_usd or 0):.2f}",
             ]
+
         for w, val in zip(col_widths, row):
-            pdf.cell(w, 6, _fit_text(pdf, val, w), border=1)
+            pdf.cell(w, 6, fit_text(val, w - 1), border=1)
         pdf.ln()
 
     buf = BytesIO()
@@ -1392,7 +1399,6 @@ def export_invoice():
     headers = ["Map", "Device", "Splices", "Device price", "Total"]
 
     pdf.set_font("Arial", "B", 10)
-    pdf.set_font("Arial", "B", 8)
     for w, h in zip(col_widths, headers):
         pdf.cell(w, 7, h, border=1)
     pdf.ln()
