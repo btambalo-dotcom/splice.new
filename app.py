@@ -1085,8 +1085,7 @@ def user_delete(uid: int):
 @app.route("/export/pdf")
 @login_required
 def export_pdf():
-    """Gera um PDF simples com os registros filtrados (mesma lógica da tela principal)."""
-
+    """Gera um PDF com os registros filtrados (mesma lógica da tela principal) sem quebrar tabela."""
     # Flag opcional: se "no_values=1", não mostra colunas de valores em dinheiro.
     no_values = request.args.get("no_values") == "1"
 
@@ -1102,36 +1101,105 @@ def export_pdf():
     total_splices = sum((r.splices or 0) for r in records)
     total_hubs = sum(1 for r in records if (r.type or "").upper() == "HUB")
 
-    pdf = FPDF()
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
+
+    # ----- Cabeçalho do relatório -----
     pdf.set_font("Arial", "B", 12)
     pdf.cell(0, 10, "Relatorio de Producao - SPLICER", ln=1)
     pdf.set_font("Arial", "", 9)
-
-    # linha de totais
     pdf.cell(0, 8, f"Total de splices: {total_splices}", ln=1)
     pdf.cell(0, 8, f"Total de hubs: {total_hubs}", ln=1)
     if not no_values:
         pdf.cell(0, 8, f"Total no período: $ {total_amount:.2f}", ln=1)
     pdf.ln(4)
 
-    # cabeçalho
+    # ----- Tabela -----
     if no_values:
-        col_widths = [24, 24, 24, 22, 32, 18]
+        col_widths = [20, 32, 30, 16, 58, 16]
         headers = ["Data", "Empresa", "Map", "Type", "Dispositivo", "Splices"]
     else:
-        col_widths = [22, 22, 22, 20, 25, 18, 18, 18]
+        col_widths = [18, 28, 28, 14, 52, 14, 18, 18]
         headers = ["Data", "Empresa", "Map", "Type", "Dispositivo", "Splices", "Fusoes $", "Total $"]
 
-    for w, h in zip(col_widths, headers):
-        pdf.cell(w, 7, h, border=1)
-    pdf.ln()
+    line_h = 5  # altura de cada linha dentro da célula
+
+    def _wrap_text(txt: str, w: float):
+        """Quebra texto para caber na largura w, evitando estourar célula (sem cortar no meio de palavras quando possível)."""
+        txt = (txt or "").strip()
+        if not txt:
+            return [""]
+        # ajuda a quebrar strings grandes com _ e -
+        soft = txt.replace("_", "_ ").replace("-", "- ")
+        words = soft.split()
+        lines, cur = [], ""
+        for word in words:
+            test = (cur + " " + word).strip() if cur else word
+            if pdf.get_string_width(test) <= (w - 2):
+                cur = test
+            else:
+                if cur:
+                    lines.append(cur.replace("_ ", "_").replace("- ", "-"))
+                # palavra muito grande: quebra por caracteres
+                if pdf.get_string_width(word) > (w - 2):
+                    chunk = ""
+                    for ch in word:
+                        t2 = chunk + ch
+                        if pdf.get_string_width(t2) <= (w - 2):
+                            chunk = t2
+                        else:
+                            if chunk:
+                                lines.append(chunk.replace("_ ", "_").replace("- ", "-"))
+                            chunk = ch
+                    cur = chunk
+                else:
+                    cur = word
+        if cur:
+            lines.append(cur.replace("_ ", "_").replace("- ", "-"))
+        return lines if lines else [""]
+
+    def _row_height(row_vals):
+        max_lines = 1
+        for w, v in zip(col_widths, row_vals):
+            max_lines = max(max_lines, len(_wrap_text(str(v), w)))
+        return max_lines * line_h
+
+    def _draw_header():
+        pdf.set_font("Arial", "B", 8)
+        for w, h in zip(col_widths, headers):
+            pdf.cell(w, 7, h, border=1, align="C")
+        pdf.ln()
+        pdf.set_font("Arial", "", 8)
+
+    def _draw_row(row_vals):
+        # se não couber na página, cria nova e redesenha cabeçalho
+        rh = _row_height(row_vals)
+        if pdf.get_y() + rh > (pdf.h - pdf.b_margin):
+            pdf.add_page()
+            _draw_header()
+
+        x0, y0 = pdf.get_x(), pdf.get_y()
+        max_lines = int(rh / line_h)
+
+        x = x0
+        for w, v in zip(col_widths, row_vals):
+            lines = _wrap_text(str(v), w)
+            cell_txt = "
+".join(lines[:max_lines])
+            pdf.set_xy(x, y0)
+            pdf.multi_cell(w, line_h, cell_txt, border=1, align="L")
+            x += w
+
+        pdf.set_xy(x0, y0 + rh)
+
+    _draw_header()
 
     for r in records:
+        date_str = r.created_date.strftime("%Y-%m-%d") if r.created_date else ""
         if no_values:
             row = [
-                r.created_date.strftime("%Y-%m-%d") if r.created_date else "",
+                date_str,
                 r.company or "",
                 r.map or "",
                 r.type or "",
@@ -1140,7 +1208,7 @@ def export_pdf():
             ]
         else:
             row = [
-                r.created_date.strftime("%Y-%m-%d") if r.created_date else "",
+                date_str,
                 r.company or "",
                 r.map or "",
                 r.type or "",
@@ -1149,15 +1217,14 @@ def export_pdf():
                 f"{(r.price_splices_usd or 0):.2f}",
                 f"{(r.total_usd or 0):.2f}",
             ]
-        for w, val in zip(col_widths, row):
-            pdf.cell(w, 6, str(val)[:16], border=1)  # corta textos muito grandes
-        pdf.ln()
+        _draw_row(row)
 
     buf = BytesIO()
     pdf.output(buf)
     buf.seek(0)
     filename = "relatorio_producao.pdf"
     return send_file(buf, as_attachment=True, download_name=filename, mimetype="application/pdf")
+
 
 
 
@@ -1835,8 +1902,3 @@ def expenses_delete(expense_id):
 if __name__ == "__main__":
     app.run(debug=True)
 
-
-
-@app.route('/__version')
-def __version__():
-    return 'FULL-FIX-503 2026-02-12'
