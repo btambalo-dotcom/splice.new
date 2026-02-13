@@ -1,0 +1,2 @@
+FULL-FIX-503 - 2026-02-12
+Contains Record.created_date filter fix and improved .bat venv installer.

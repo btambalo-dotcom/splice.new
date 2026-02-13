@@ -1835,3 +1835,8 @@ def expenses_delete(expense_id):
 if __name__ == "__main__":
     app.run(debug=True)
 
+
+
+@app.route('/__version')
+def __version__():
+    return 'FULL-FIX-503 2026-02-12'
