@@ -470,17 +470,20 @@ def build_filtered_record_query_from_request():
         query = query.filter(Record.splicer == splicer_filter)
 
     # Filtro por datas
+    # OBS: o modelo Record não possui coluna "date". A data usada no sistema é "created_date" (ou "created_at" como fallback).
+    record_day = func.date(func.coalesce(Record.created_date, Record.created_at))
+
     if start_raw:
         try:
-            start_date = datetime.strptime(start_raw, "%Y-%m-%d")
-            query = query.filter(Record.date >= start_date.date())
+            start_date = datetime.strptime(start_raw, "%Y-%m-%d").date()
+            query = query.filter(record_day >= start_date)
         except ValueError:
             pass
 
     if end_raw:
         try:
-            end_date = datetime.strptime(end_raw, "%Y-%m-%d")
-            query = query.filter(Record.date <= end_date.date())
+            end_date = datetime.strptime(end_raw, "%Y-%m-%d").date()
+            query = query.filter(record_day <= end_date)
         except ValueError:
             pass
 
