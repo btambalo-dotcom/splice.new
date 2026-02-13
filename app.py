@@ -1116,6 +1116,9 @@ def export_pdf():
         pdf.cell(0, 8, f"Total no período: $ {total_amount:.2f}", ln=1)
     pdf.ln(4)
 
+    # tabela
+    pdf.set_font("Arial", "", 8)
+
     # cabeçalho
     if no_values:
         col_widths = [24, 24, 24, 22, 32, 18]
@@ -1124,8 +1127,33 @@ def export_pdf():
         col_widths = [22, 22, 22, 20, 25, 18, 18, 18]
         headers = ["Data", "Empresa", "Map", "Type", "Dispositivo", "Splices", "Fusoes $", "Total $"]
 
+    pdf.set_font("Arial", "B", 8)
     for w, h in zip(col_widths, headers):
         pdf.cell(w, 7, h, border=1)
+
+    def _fit_text(pdf_obj, txt, width):
+        """Garante que o texto não invade a próxima coluna."""
+        if txt is None:
+            txt = ""
+        s = str(txt).replace("\r", " ").replace("\n", " ")
+        inner = max(0.0, float(width) - 2.0)  # margem interna aproximada
+        if pdf_obj.get_string_width(s) <= inner:
+            return s
+        ell = "..."
+        ell_w = pdf_obj.get_string_width(ell)
+        if inner <= ell_w:
+            return ""
+        target = inner - ell_w
+
+        lo, hi = 0, len(s)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if pdf_obj.get_string_width(s[:mid]) <= target:
+                lo = mid
+            else:
+                hi = mid - 1
+        return s[:lo] + ell
+
     pdf.ln()
 
     for r in records:
@@ -1150,7 +1178,7 @@ def export_pdf():
                 f"{(r.total_usd or 0):.2f}",
             ]
         for w, val in zip(col_widths, row):
-            pdf.cell(w, 6, str(val)[:16], border=1)  # corta textos muito grandes
+            pdf.cell(w, 6, _fit_text(pdf, val, w), border=1)
         pdf.ln()
 
     buf = BytesIO()
@@ -1364,6 +1392,7 @@ def export_invoice():
     headers = ["Map", "Device", "Splices", "Device price", "Total"]
 
     pdf.set_font("Arial", "B", 10)
+    pdf.set_font("Arial", "B", 8)
     for w, h in zip(col_widths, headers):
         pdf.cell(w, 7, h, border=1)
     pdf.ln()
