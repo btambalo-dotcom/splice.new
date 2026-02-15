@@ -16,6 +16,10 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
 
 
+import uuid
+import boto3
+from botocore.client import Config as BotoConfig
+from botocore.exceptions import ClientError
 # --------- Util: compress/resize uploaded photos ---------
 def process_uploaded_photo(file_storage, max_size=(1600, 1600), quality=80, thumb_max_size=(480, 480), thumb_quality=65):
     """Resize/compress an uploaded image to keep DB small and fast.
@@ -95,6 +99,52 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 login_manager.login_view = "login"
+
+# --------- R2 (S3-compatible) storage helpers ---------
+_r2_client = None
+
+def r2_enabled() -> bool:
+    return bool(os.environ.get("R2_ACCESS_KEY_ID") and os.environ.get("R2_SECRET_ACCESS_KEY") and os.environ.get("R2_ENDPOINT") and os.environ.get("R2_BUCKET"))
+
+def r2_client():
+    global _r2_client
+    if _r2_client is not None:
+        return _r2_client
+    if not r2_enabled():
+        return None
+    _r2_client = boto3.client(
+        "s3",
+        endpoint_url=os.environ.get("R2_ENDPOINT"),
+        aws_access_key_id=os.environ.get("R2_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.environ.get("R2_SECRET_ACCESS_KEY"),
+        region_name=os.environ.get("R2_REGION", "auto"),
+        config=BotoConfig(signature_version="s3v4"),
+    )
+    return _r2_client
+
+def r2_bucket() -> str:
+    return os.environ.get("R2_BUCKET", "").strip()
+
+def r2_put_bytes(key: str, data: bytes, content_type: str | None = None) -> dict:
+    c = r2_client()
+    if c is None:
+        raise RuntimeError("R2 is not enabled")
+    extra = {}
+    if content_type:
+        extra["ContentType"] = content_type
+    resp = c.put_object(Bucket=r2_bucket(), Key=key, Body=data, **extra)
+    return resp or {}
+
+def r2_get_bytes(key: str) -> bytes:
+    c = r2_client()
+    if c is None:
+        raise RuntimeError("R2 is not enabled")
+    obj = c.get_object(Bucket=r2_bucket(), Key=key)
+    return obj["Body"].read()
+
+def r2_key_for_record_photo(record_id: int, filename: str) -> str:
+    safe = re.sub(r"[^a-zA-Z0-9._-]+", "_", (filename or "photo"))
+    return f"records/{record_id}/{uuid.uuid4().hex}_{safe}"
 
 # --------- Models ---------
 class User(UserMixin, db.Model):
@@ -211,7 +261,10 @@ class RecordPhoto(db.Model):
     record_id = db.Column(db.Integer, db.ForeignKey('record.id'), nullable=False)
     filename = db.Column(db.String(255), nullable=False)
     content_type = db.Column(db.String(100))
-    data = db.Column(db.LargeBinary, nullable=False)
+    data = db.Column(db.LargeBinary, nullable=False)  # may be empty bytes when stored in R2
+    r2_key = db.Column(db.String(512))
+    r2_thumb_key = db.Column(db.String(512))
+    size_bytes = db.Column(db.Integer)
     thumb_data = db.Column(db.LargeBinary)
     thumb_content_type = db.Column(db.String(100))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -245,9 +298,38 @@ def load_user(user_id: str):
     except Exception:
         return None
 
+def ensure_db_schema():
+    """Best-effort schema updates (no destructive changes)."""
+    try:
+        insp = inspect(db.engine)
+        cols = {c["name"] for c in insp.get_columns("record_photo")}
+    except Exception:
+        cols = set()
+
+    needed = {
+        "r2_key": "VARCHAR(512)",
+        "r2_thumb_key": "VARCHAR(512)",
+        "size_bytes": "INTEGER",
+    }
+
+    dialect = getattr(db.engine.dialect, "name", "").lower()
+    for col, coltype in needed.items():
+        if col in cols:
+            continue
+        try:
+            if dialect == "postgresql":
+                db.session.execute(text(f'ALTER TABLE record_photo ADD COLUMN IF NOT EXISTS {col} {coltype}'))
+            else:
+                # SQLite: no IF NOT EXISTS on older versions; we already checked.
+                db.session.execute(text(f'ALTER TABLE record_photo ADD COLUMN {col} {coltype}'))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
 # --------- DB init & migrations simples ---------
 with app.app_context():
     db.create_all()
+    ensure_db_schema()
 
     # garante usuário padrão
     if not User.query.filter_by(username="admin").first():
@@ -599,27 +681,91 @@ def photo_file(photo_id: int):
     Performance:
     - suporte a thumbnail via ?size=thumb
     - cache agressivo (as fotos são imutáveis por ID)
+    - suporta fotos antigas no banco (BLOB) e novas no R2 (r2_key)
     """
     photo = RecordPhoto.query.get_or_404(photo_id)
 
     want_thumb = (request.args.get("size") == "thumb")
-    blob = None
-    mimetype = None
 
-    if want_thumb and getattr(photo, "thumb_data", None):
-        blob = photo.thumb_data
-        mimetype = photo.thumb_content_type or "image/jpeg"
-    else:
-        blob = photo.data
-        mimetype = photo.content_type or "image/jpeg"
-
-    # ETag baseado no conteúdo (evita re-download quando já cacheado)
-    etag = hashlib.md5(blob).hexdigest() if blob else None
-    if etag and request.headers.get("If-None-Match") == etag:
+    # ETag leve (não faz md5 do arquivo inteiro)
+    etag = f'W/"{photo.id}-{"t" if want_thumb else "o"}-{photo.r2_thumb_key or ""}-{photo.r2_key or ""}-{photo.size_bytes or 0}"'
+    if request.headers.get("If-None-Match") == etag:
         resp = make_response("", 304)
         resp.headers["ETag"] = etag
         resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         return resp
+
+    def get_original_bytes() -> tuple[bytes, str]:
+        if getattr(photo, "data", None) and len(photo.data) > 0:
+            return photo.data, (photo.content_type or "image/jpeg")
+        if getattr(photo, "r2_key", None) and r2_enabled():
+            try:
+                b = r2_get_bytes(photo.r2_key)
+                return b, (photo.content_type or "application/octet-stream")
+            except Exception:
+                pass
+        return b"", (photo.content_type or "application/octet-stream")
+
+    blob = b""
+    mimetype = "application/octet-stream"
+
+    if want_thumb:
+        # 1) thumb no banco
+        if getattr(photo, "thumb_data", None):
+            blob = photo.thumb_data
+            mimetype = photo.thumb_content_type or "image/jpeg"
+        # 2) thumb no R2
+        elif getattr(photo, "r2_thumb_key", None) and r2_enabled():
+            try:
+                blob = r2_get_bytes(photo.r2_thumb_key)
+                mimetype = "image/jpeg"
+            except Exception:
+                blob = b""
+        # 3) gerar thumb sob demanda (uma vez) e salvar
+        if not blob:
+            orig, _ct = get_original_bytes()
+            if orig:
+                try:
+                    # gera thumb pequeno (rápido)
+                    img = Image.open(BytesIO(orig))
+                    img = ImageOps.exif_transpose(img)
+                    img.thumbnail((420, 420))
+                    out = BytesIO()
+                    img.save(out, format="JPEG", quality=70, optimize=True, progressive=True)
+                    thumb_bytes = out.getvalue()
+
+                    if getattr(photo, "r2_key", None) and r2_enabled():
+                        tkey = photo.r2_thumb_key or (photo.r2_key + ".thumb.jpg")
+                        r2_put_bytes(tkey, thumb_bytes, content_type="image/jpeg")
+                        photo.r2_thumb_key = tkey
+                    else:
+                        photo.thumb_data = thumb_bytes
+                        photo.thumb_content_type = "image/jpeg"
+
+                    db.session.commit()
+
+                    blob = thumb_bytes
+                    mimetype = "image/jpeg"
+                except Exception:
+                    db.session.rollback()
+
+        if not blob:
+            # fallback: retorna original
+            blob, mimetype = get_original_bytes()
+    else:
+        blob, mimetype = get_original_bytes()
+
+    resp = send_file(
+        BytesIO(blob),
+        mimetype=mimetype,
+        as_attachment=False,
+        download_name=photo.filename,
+        conditional=True,
+    )
+    resp.headers["ETag"] = etag
+    resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return resp
+
 
     resp = send_file(
         BytesIO(blob),
@@ -655,19 +801,45 @@ def record_add_photos(rid: int):
     created = []
     if files:
         for f in files[:5]:
+
             if not f or not f.filename:
                 continue
-            filename, content_type, data, thumb_data, thumb_ct = process_uploaded_photo(f)
-            if not data:
-                continue
-            photo = RecordPhoto(
-                record_id=rec.id,
-                filename=filename,
-                content_type=content_type,
-                data=data,
-                thumb_data=thumb_data,
-                thumb_content_type=thumb_ct,
-            )
+
+            # Fast path: if R2 is configured, upload original bytes to R2 and do NOT generate thumbnail now.
+            if r2_enabled():
+                raw = f.read()
+                if not raw:
+                    continue
+                filename = (f.filename or "photo").strip()
+                content_type = (getattr(f, "mimetype", None) or "application/octet-stream")
+                key = r2_key_for_record_photo(rec.id, filename)
+                r2_put_bytes(key, raw, content_type=content_type)
+
+                photo = RecordPhoto(
+                    record_id=rec.id,
+                    filename=filename,
+                    content_type=content_type,
+                    data=b"",  # keep NOT NULL constraint fast
+                    thumb_data=None,
+                    thumb_content_type=None,
+                    r2_key=key,
+                    r2_thumb_key=None,
+                    size_bytes=int(len(raw)),
+                )
+            else:
+                filename, content_type, data, thumb_data, thumb_ct = process_uploaded_photo(f)
+                if not data:
+                    continue
+                photo = RecordPhoto(
+                    record_id=rec.id,
+                    filename=filename,
+                    content_type=content_type,
+                    data=data,
+                    thumb_data=thumb_data,
+                    thumb_content_type=thumb_ct,
+                    size_bytes=int(len(data)),
+                )
+
             db.session.add(photo)
             db.session.flush()
             created.append(int(photo.id))
