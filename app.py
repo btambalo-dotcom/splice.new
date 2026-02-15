@@ -589,7 +589,9 @@ def build_filtered_record_query_from_request():
             end_date = datetime.strptime(end_raw, "%Y-%m-%d").date()
             query = query.filter(record_day <= end_date)
         except ValueError:
-         @app.route("/photo/<int:photo_id>")
+            pass
+
+@app.route("/photo/<int:photo_id>")
 @login_required
 def photo_file(photo_id: int):
     """Retorna o binário de uma foto salva em RecordPhoto.
