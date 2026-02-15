@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, send_file, abort, session, make_response
+from flask import Flask, render_template, request, redirect, url_for, flash, send_file, abort, session, make_response, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from datetime import datetime, date
@@ -634,6 +634,47 @@ oad_name=photo.filename,
     )
 
 
+@app.route("/record/<int:rid>/photos", methods=["POST"])
+@login_required
+def record_add_photos(rid: int):
+    """Anexa fotos a um lançamento já criado.
+    Usado pelo modo rápido: salva o lançamento primeiro e sobe as fotos depois.
+    """
+    rec = Record.query.get_or_404(rid)
+
+    # Permissões básicas: splicer só mexe nos próprios registros (admin pode tudo)
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_owner = bool(getattr(current_user, "is_owner", False))
+    if not (is_admin or is_owner):
+        # se não for admin/dono, deve ser o mesmo splicer
+        current_splicer = (getattr(current_user, "splicer_name", None) or current_user.username)
+        if (rec.splicer or "") != current_splicer:
+            abort(403)
+
+    files = request.files.getlist("photos")
+    created = []
+    if files:
+        for f in files[:5]:
+            if not f or not f.filename:
+                continue
+            filename, content_type, data, thumb_data, thumb_ct = process_uploaded_photo(f)
+            if not data:
+                continue
+            photo = RecordPhoto(
+                record_id=rec.id,
+                filename=filename,
+                content_type=content_type,
+                data=data,
+                thumb_data=thumb_data,
+                thumb_content_type=thumb_ct,
+            )
+            db.session.add(photo)
+            db.session.flush()
+            created.append(int(photo.id))
+        db.session.commit()
+
+    return jsonify({"ok": True, "photo_ids": created, "record_id": int(rec.id)})
+
 @app.route("/photos_filtered_zip")
 @login_required
 def photos_filtered_zip():
@@ -919,6 +960,18 @@ def entry():
         )
         db.session.add(rec)
         db.session.commit()
+
+        # Se for modo AJAX (usado quando existem fotos), responde rápido com o ID
+        ajax_mode = (request.form.get("_ajax") == "1") or (request.args.get("ajax") == "1")
+        if ajax_mode:
+            # mantém seleções do modo rápido
+            if is_splicer:
+                session["entry_company"] = company
+                if map_obj:
+                    session["entry_map_id"] = int(map_obj.id)
+                session["entry_map_role"] = map_role or ""
+                session["entry_type"] = type_val or ""
+            return jsonify({"ok": True, "record_id": int(rec.id)})
 
         files = request.files.getlist("photos")
         if files:

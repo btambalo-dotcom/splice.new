@@ -10,7 +10,7 @@
       <h5 class="mb-3">
         {% if is_edit %}Editar lançamento{% else %}Novo lançamento{% endif %}
       </h5>
-      <form method="post" enctype="multipart/form-data">
+      <form id="entry-form" method="post" enctype="multipart/form-data">
         {% if duplicate_record %}
         <div class="alert alert-warning small">
           Dispositivo <b>{{ duplicate_record.device }}</b> já foi lançado no mapa
@@ -90,10 +90,12 @@
         <div class="mb-3">
           <label class="form-label">Fotos do dispositivo (opcional)</label>
           <input type="file"
+                 id="photos-input"
                  name="photos"
                  accept="image/*"
                  multiple
                  class="form-control">
+          <div id="photo-upload-status" class="small text-muted mt-2"></div>
           <small class="form-text text-muted">
             Você pode anexar até 5 fotos. O sistema reduz o tamanho automaticamente para salvar mais leve.
           </small>
@@ -362,6 +364,76 @@
     if (deviceInput) {
       deviceInput.focus();
       deviceInput.select();
+    }
+
+    // Upload de fotos em segundo plano (deixa o lançamento rápido)
+    const form = document.getElementById('entry-form');
+    const photosInput = document.getElementById('photos-input');
+    const statusEl = document.getElementById('photo-upload-status');
+
+    if (form) {
+      form.addEventListener('submit', async (ev) => {
+        if (!photosInput || !photosInput.files || photosInput.files.length === 0) {
+          return; // sem fotos: comportamento normal
+        }
+
+        ev.preventDefault();
+
+        const submitBtn = form.querySelector('button[type="submit"], input[type="submit"]');
+        if (submitBtn) submitBtn.disabled = true;
+
+        if (statusEl) statusEl.textContent = 'Salvando lançamento...';
+
+        try {
+          // 1) salva o lançamento SEM as fotos (rápido)
+          const fd = new FormData(form);
+          fd.delete('photos');
+          fd.append('_ajax', '1');
+
+          const saveResp = await fetch(window.location.pathname, { method: 'POST', body: fd });
+          const saveJson = await saveResp.json();
+
+          if (!saveResp.ok || !saveJson.ok || !saveJson.record_id) {
+            throw new Error('Falha ao salvar lançamento');
+          }
+
+          const rid = saveJson.record_id;
+
+          // 2) envia as fotos em segundo plano
+          if (statusEl) statusEl.textContent = 'Enviando fotos...';
+
+          const fdPhotos = new FormData();
+          for (const file of photosInput.files) {
+            fdPhotos.append('photos', file);
+          }
+
+          const upResp = await fetch(`/record/${rid}/photos`, { method: 'POST', body: fdPhotos });
+          const upJson = await upResp.json();
+
+          if (!upResp.ok || !upJson.ok) {
+            throw new Error('Falha ao enviar fotos');
+          }
+
+          if (statusEl) statusEl.textContent = 'Lançamento salvo e fotos enviadas ✅';
+
+          // limpa campos rápidos para próximo lançamento
+          photosInput.value = '';
+          const deviceField = document.getElementById('device-name-input');
+          if (deviceField) deviceField.value = '';
+          const splicesField = document.querySelector('input[name="splices"]');
+          if (splicesField) splicesField.value = '0';
+
+          if (deviceField) {
+            deviceField.focus();
+          }
+        } catch (err) {
+          console.error(err);
+          if (statusEl) statusEl.textContent = 'Erro ao salvar/enviar fotos. Tente novamente.';
+          // fallback: permite submit normal
+        } finally {
+          if (submitBtn) submitBtn.disabled = false;
+        }
+      });
     }
   });
 </script>
