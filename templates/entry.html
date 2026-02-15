@@ -366,15 +366,63 @@
       deviceInput.select();
     }
 
-    // Upload de fotos em segundo plano (deixa o lançamento rápido)
+    
+    // Upload de fotos em segundo plano (NÃO trava o próximo lançamento)
     const form = document.getElementById('entry-form');
     const photosInput = document.getElementById('photos-input');
     const statusEl = document.getElementById('photo-upload-status');
 
+    // Fila global de uploads (evita travar quando tem 3-5 fotos)
+    const uploadQueue = [];
+    let uploading = false;
+
+    async function uploadOneRecordPhotos(job) {
+      const { rid, files } = job;
+      if (!files || files.length === 0) return;
+
+      // envia 1 foto por vez para ter progresso e não pesar no Postgres
+      for (let i = 0; i < files.length; i++) {
+        const fdPhotos = new FormData();
+        fdPhotos.append('photos', files[i]);
+
+        if (statusEl) {
+          statusEl.textContent = `Enviando fotos do lançamento #${rid} (${i+1}/${files.length})...`;
+        }
+
+        const upResp = await fetch(`/record/${rid}/photos`, { method: 'POST', body: fdPhotos });
+        let upJson = null;
+        try { upJson = await upResp.json(); } catch (e) {}
+
+        if (!upResp.ok || !upJson || !upJson.ok) {
+          throw new Error('Falha ao enviar fotos');
+        }
+      }
+    }
+
+    async function processUploadQueue() {
+      if (uploading) return;
+      uploading = true;
+      try {
+        while (uploadQueue.length > 0) {
+          const job = uploadQueue.shift();
+          try {
+            await uploadOneRecordPhotos(job);
+          } catch (err) {
+            console.error(err);
+            if (statusEl) statusEl.textContent = `Erro ao enviar fotos do lançamento #${job.rid}. Você pode tentar novamente no editar.`;
+          }
+        }
+        if (statusEl) statusEl.textContent = '✅ Pronto. Nenhuma foto pendente.';
+      } finally {
+        uploading = false;
+      }
+    }
+
     if (form) {
       form.addEventListener('submit', async (ev) => {
+        // se não tem fotos: deixa o formulário normal (sem ajax)
         if (!photosInput || !photosInput.files || photosInput.files.length === 0) {
-          return; // sem fotos: comportamento normal
+          return;
         }
 
         ev.preventDefault();
@@ -399,37 +447,34 @@
 
           const rid = saveJson.record_id;
 
-          // 2) envia as fotos em segundo plano
-          if (statusEl) statusEl.textContent = 'Enviando fotos...';
-
-          const fdPhotos = new FormData();
-          for (const file of photosInput.files) {
-            fdPhotos.append('photos', file);
-          }
-
-          const upResp = await fetch(`/record/${rid}/photos`, { method: 'POST', body: fdPhotos });
-          const upJson = await upResp.json();
-
-          if (!upResp.ok || !upJson.ok) {
-            throw new Error('Falha ao enviar fotos');
-          }
-
-          if (statusEl) statusEl.textContent = 'Lançamento salvo e fotos enviadas ✅';
+          // 2) captura os arquivos AGORA, limpa input e libera para o próximo lançamento
+          const files = Array.from(photosInput.files);
+          photosInput.value = '';
 
           // limpa campos rápidos para próximo lançamento
-          photosInput.value = '';
           const deviceField = document.getElementById('device-name-input');
           if (deviceField) deviceField.value = '';
           const splicesField = document.querySelector('input[name="splices"]');
           if (splicesField) splicesField.value = '0';
+          if (deviceField) deviceField.focus();
 
-          if (deviceField) {
-            deviceField.focus();
+          // 3) enfileira upload e processa em background (não espera terminar)
+          uploadQueue.push({ rid, files });
+
+          if (statusEl) {
+            statusEl.textContent = `Lançamento #${rid} salvo ✅. Fotos na fila: ${uploadQueue.length}.`;
           }
+
+          // libera o botão imediatamente
+          if (submitBtn) submitBtn.disabled = false;
+
+          // inicia o processamento da fila (se ainda não estiver rodando)
+          processUploadQueue();
+
+          return;
         } catch (err) {
           console.error(err);
-          if (statusEl) statusEl.textContent = 'Erro ao salvar/enviar fotos. Tente novamente.';
-          // fallback: permite submit normal
+          if (statusEl) statusEl.textContent = 'Erro ao salvar lançamento. Tente novamente.';
         } finally {
           if (submitBtn) submitBtn.disabled = false;
         }
