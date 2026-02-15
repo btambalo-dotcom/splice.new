@@ -199,10 +199,12 @@ mb-3">Registros</h5>
             <div class="carousel-inner">
               {% for photo in r.photos|sort(attribute='created_at') %}
               <div class="carousel-item {% if loop.first %}active{% endif %}">
-                <img src="{{ url_for('photo_file', photo_id=photo.id) }}"
+                <a href="{{ url_for('photo_file', photo_id=photo.id) }}" target="_blank" rel="noopener">
+                <img src="{{ url_for('photo_file', photo_id=photo.id, size='thumb') }}" loading="lazy" data-full="{{ url_for('photo_file', photo_id=photo.id) }}"
                      class="d-block mx-auto img-fluid"
                      style="max-width: 100%; max-height: calc(100vh - 220px); object-fit: contain;"
                      alt="Foto {{ loop.index }} do dispositivo {{ r.device }}">
+                </a>
               </div>
               {% endfor %}
             </div>

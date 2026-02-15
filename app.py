@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, send_file, abort, session
+from flask import Flask, render_template, request, redirect, url_for, flash, send_file, abort, session, make_response
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from datetime import datetime, date
@@ -8,6 +8,7 @@ from fpdf import FPDF
 from werkzeug.utils import secure_filename
 from io import BytesIO
 import zipfile
+import hashlib
 from PIL import Image, ImageOps
 from functools import wraps
 import csv
@@ -16,18 +17,19 @@ from openpyxl.styles import Font, Alignment, Border, Side
 
 
 # --------- Util: compress/resize uploaded photos ---------
-def process_uploaded_photo(file_storage, max_size=(1600, 1600), quality=80):
-    """Resize/compress an uploaded image to keep DB small.
+def process_uploaded_photo(file_storage, max_size=(1600, 1600), quality=80, thumb_max_size=(480, 480), thumb_quality=65):
+    """Resize/compress an uploaded image to keep DB small and fast.
 
-    Returns (filename, content_type, data_bytes) or (None, None, None) on failure.
+    Returns (filename, content_type, data_bytes, thumb_bytes, thumb_content_type)
+    or (None, None, None, None, None) on failure.
     """
-    if not file_storage or not file_storage.filename:
-        return None, None, None
+    if not file_storage or not getattr(file_storage, "filename", None):
+        return None, None, None, None, None
 
     try:
         raw = file_storage.read()
         if not raw:
-            return None, None, None
+            return None, None, None, None, None
 
         img = Image.open(BytesIO(raw))
         # Corrige orientação baseada no EXIF (fotos de celular)
@@ -35,31 +37,44 @@ def process_uploaded_photo(file_storage, max_size=(1600, 1600), quality=80):
             img = ImageOps.exif_transpose(img)
         except Exception:
             pass
-        # garante que sempre teremos um formato compatível
-        img = img.convert("RGB")
-        img.thumbnail(max_size)
 
+        # garante formato compatível
+        img = img.convert("RGB")
+
+        # FULL (já comprimida)
+        full = img.copy()
+        full.thumbnail(max_size)
         buf = BytesIO()
-        img.save(buf, format="JPEG", quality=quality, optimize=True)
-        buf.seek(0)
-        data = buf.read()
+        full.save(buf, format="JPEG", quality=quality, optimize=True)
+        full_bytes = buf.getvalue()
+
+        # THUMB
+        thumb = img.copy()
+        thumb.thumbnail(thumb_max_size)
+        buf2 = BytesIO()
+        thumb.save(buf2, format="JPEG", quality=thumb_quality, optimize=True)
+        thumb_bytes = buf2.getvalue()
 
         base_name, _ = os.path.splitext(file_storage.filename or "foto.jpg")
         safe_name = secure_filename(base_name) or "foto"
         filename = f"{safe_name}.jpg"
 
-        return filename[:255], "image/jpeg", data
+        return filename[:255], "image/jpeg", full_bytes, thumb_bytes, "image/jpeg"
+
     except Exception:
-        # Se der qualquer erro ao processar a imagem, salva o arquivo original
+        # Se der qualquer erro ao processar a imagem, tenta salvar o arquivo original (sem thumb)
         try:
-            file_storage.seek(0)
+            try:
+                file_storage.seek(0)
+            except Exception:
+                pass
             data = file_storage.read()
             if not data:
-                return None, None, None
+                return None, None, None, None, None
             filename = secure_filename(file_storage.filename) or "arquivo.bin"
-            return filename[:255], (file_storage.mimetype or "application/octet-stream"), data
+            return filename[:255], (file_storage.mimetype or "application/octet-stream"), data, None, None
         except Exception:
-            return None, None, None
+            return None, None, None, None, None
 
 
 
@@ -197,6 +212,8 @@ class RecordPhoto(db.Model):
     filename = db.Column(db.String(255), nullable=False)
     content_type = db.Column(db.String(100))
     data = db.Column(db.LargeBinary, nullable=False)
+    thumb_data = db.Column(db.LargeBinary)
+    thumb_content_type = db.Column(db.String(100))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     record = db.relationship('Record', backref=db.backref('photos', lazy=True))
@@ -259,6 +276,8 @@ with app.app_context():
     ensure("company_map", "mid_end_enabled", "BOOLEAN")
     ensure("company_map", "included_splices_meio", "INTEGER")
     ensure("company_map", "included_splices_ponta", "INTEGER")
+    ensure("record_photo", "thumb_data", "BYTEA")
+    ensure("record_photo", "thumb_content_type", "VARCHAR(100)")
     ensure("project", "company", "VARCHAR(120)")
     ensure("project", "name", "VARCHAR(200)")
     ensure("project", "included_splices", "INTEGER")
@@ -570,23 +589,48 @@ def build_filtered_record_query_from_request():
             end_date = datetime.strptime(end_raw, "%Y-%m-%d").date()
             query = query.filter(record_day <= end_date)
         except ValueError:
-            pass
-
-    return query
-
-
-
-
-@app.route("/photo/<int:photo_id>")
+         @app.route("/photo/<int:photo_id>")
 @login_required
 def photo_file(photo_id: int):
-    """Retorna o binário de uma foto única salva em RecordPhoto."""
+    """Retorna o binário de uma foto salva em RecordPhoto.
+
+    Performance:
+    - suporte a thumbnail via ?size=thumb
+    - cache agressivo (as fotos são imutáveis por ID)
+    """
     photo = RecordPhoto.query.get_or_404(photo_id)
-    return send_file(
-        BytesIO(photo.data),
-        mimetype=photo.content_type or "image/jpeg",
+
+    want_thumb = (request.args.get("size") == "thumb")
+    blob = None
+    mimetype = None
+
+    if want_thumb and getattr(photo, "thumb_data", None):
+        blob = photo.thumb_data
+        mimetype = photo.thumb_content_type or "image/jpeg"
+    else:
+        blob = photo.data
+        mimetype = photo.content_type or "image/jpeg"
+
+    # ETag baseado no conteúdo (evita re-download quando já cacheado)
+    etag = hashlib.md5(blob).hexdigest() if blob else None
+    if etag and request.headers.get("If-None-Match") == etag:
+        resp = make_response("", 304)
+        resp.headers["ETag"] = etag
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return resp
+
+    resp = send_file(
+        BytesIO(blob),
+        mimetype=mimetype,
         as_attachment=False,
         download_name=photo.filename,
+        conditional=True,
+    )
+    if etag:
+        resp.headers["ETag"] = etag
+    resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return resp
+oad_name=photo.filename,
     )
 
 
@@ -881,7 +925,7 @@ def entry():
             for f in files[:5]:
                 if not f or not f.filename:
                     continue
-                filename, content_type, data = process_uploaded_photo(f)
+                filename, content_type, data, thumb_data, thumb_ct = process_uploaded_photo(f)
                 if not data:
                     continue
                 photo = RecordPhoto(
@@ -889,6 +933,8 @@ def entry():
                     filename=filename[:255],
                     content_type=content_type,
                     data=data,
+                    thumb_data=thumb_data,
+                    thumb_content_type=thumb_ct,
                 )
                 db.session.add(photo)
             db.session.commit()
