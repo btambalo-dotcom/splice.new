@@ -12,6 +12,7 @@ import hashlib
 from PIL import Image, ImageOps
 from functools import wraps
 import csv
+import threading
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
 
@@ -103,8 +104,21 @@ login_manager.login_view = "login"
 # --------- R2 (S3-compatible) storage helpers ---------
 _r2_client = None
 
+def r2_bucket_name() -> str:
+    """Bucket name for Cloudflare R2.
+
+    The Render dashboard screenshots show env var name `R2_BUCKET_NAME`, while older versions used `R2_BUCKET`.
+    We support both.
+    """
+    return (os.environ.get("R2_BUCKET_NAME") or os.environ.get("R2_BUCKET") or "").strip()
+
 def r2_enabled() -> bool:
-    return bool(os.environ.get("R2_ACCESS_KEY_ID") and os.environ.get("R2_SECRET_ACCESS_KEY") and os.environ.get("R2_ENDPOINT") and os.environ.get("R2_BUCKET"))
+    return bool(
+        os.environ.get("R2_ACCESS_KEY_ID")
+        and os.environ.get("R2_SECRET_ACCESS_KEY")
+        and os.environ.get("R2_ENDPOINT")
+        and r2_bucket_name()
+    )
 
 def r2_client():
     global _r2_client
@@ -118,12 +132,13 @@ def r2_client():
         aws_access_key_id=os.environ.get("R2_ACCESS_KEY_ID"),
         aws_secret_access_key=os.environ.get("R2_SECRET_ACCESS_KEY"),
         region_name=os.environ.get("R2_REGION", "auto"),
-        config=BotoConfig(signature_version="s3v4"),
+        config=BotoConfig(signature_version="s3v4", s3={"addressing_style": "path"}),
     )
     return _r2_client
 
 def r2_bucket() -> str:
-    return os.environ.get("R2_BUCKET", "").strip()
+    # Backwards compatible wrapper
+    return r2_bucket_name()
 
 def r2_put_bytes(key: str, data: bytes, content_type: str | None = None) -> dict:
     c = r2_client()
@@ -145,6 +160,59 @@ def r2_get_bytes(key: str) -> bytes:
 def r2_key_for_record_photo(record_id: int, filename: str) -> str:
     safe = re.sub(r"[^a-zA-Z0-9._-]+", "_", (filename or "photo"))
     return f"records/{record_id}/{uuid.uuid4().hex}_{safe}"
+
+
+def optimize_upload_bytes(file_bytes: bytes, original_content_type: str) -> tuple[bytes, str]:
+    """Reduce payload size for uploads.
+
+    - If image: auto-rotate (EXIF), downscale, and re-encode to JPEG.
+    - Otherwise: return as-is.
+    """
+    try:
+        img = Image.open(io.BytesIO(file_bytes))
+        img = ImageOps.exif_transpose(img)
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+
+        max_size = int(os.environ.get("UPLOAD_IMAGE_MAX_SIDE", "1600"))
+        img.thumbnail((max_size, max_size))
+
+        out = io.BytesIO()
+        quality = int(os.environ.get("UPLOAD_IMAGE_JPEG_QUALITY", "75"))
+        img.save(out, format="JPEG", quality=quality, optimize=True, progressive=True)
+        return out.getvalue(), "image/jpeg"
+    except Exception:
+        return file_bytes, (original_content_type or "application/octet-stream")
+
+
+def enqueue_r2_upload(photo_id: int, key: str, data: bytes, content_type: str):
+    """Upload to R2 in a background thread (NOLOSS).
+
+    We keep the compressed bytes in Postgres as a fallback. When upload succeeds we set r2_key.
+    Optionally clear DB bytes with CLEAR_DB_AFTER_R2=1.
+    """
+    if not r2_enabled():
+        return
+
+    def _worker():
+        try:
+            with app.app_context():
+                p = RecordPhoto.query.get(photo_id)
+                if not p or p.r2_key:
+                    return
+                r2_put_bytes(key, data, content_type=content_type)
+                p.r2_key = key
+                if os.environ.get("CLEAR_DB_AFTER_R2", "0") == "1":
+                    p.data = b""
+                db.session.commit()
+        except Exception:
+            try:
+                with app.app_context():
+                    db.session.rollback()
+            except Exception:
+                pass
+
+    threading.Thread(target=_worker, daemon=True).start()
 
 # --------- Models ---------
 class User(UserMixin, db.Model):
@@ -805,43 +873,38 @@ def record_add_photos(rid: int):
             if not f or not f.filename:
                 continue
 
-            # Fast path: if R2 is configured, upload original bytes to R2 and do NOT generate thumbnail now.
-            if r2_enabled():
-                raw = f.read()
-                if not raw:
-                    continue
-                filename = (f.filename or "photo").strip()
-                content_type = (getattr(f, "mimetype", None) or "application/octet-stream")
-                key = r2_key_for_record_photo(rec.id, filename)
-                r2_put_bytes(key, raw, content_type=content_type)
+            # Performance + NOLOSS:
+            # 1) Always store *optimized* bytes in Postgres (fast + guarantees we never lose the photo).
+            # 2) If R2 is configured, upload to R2 in a background thread and then set r2_key.
+            raw = f.read()
+            if not raw:
+                continue
+            filename = (f.filename or "photo").strip()
+            optimized, content_type = optimize_upload_bytes(raw, getattr(f, "mimetype", None))
 
-                photo = RecordPhoto(
-                    record_id=rec.id,
-                    filename=filename,
-                    content_type=content_type,
-                    data=b"",  # keep NOT NULL constraint fast
-                    thumb_data=None,
-                    thumb_content_type=None,
-                    r2_key=key,
-                    r2_thumb_key=None,
-                    size_bytes=int(len(raw)),
-                )
-            else:
-                filename, content_type, data, thumb_data, thumb_ct = process_uploaded_photo(f)
-                if not data:
-                    continue
-                photo = RecordPhoto(
-                    record_id=rec.id,
-                    filename=filename,
-                    content_type=content_type,
-                    data=data,
-                    thumb_data=thumb_data,
-                    thumb_content_type=thumb_ct,
-                    size_bytes=int(len(data)),
-                )
+            # Do NOT generate thumbnail at upload time (keeps it fast). Thumbs are generated lazily on demand.
+            photo = RecordPhoto(
+                record_id=rec.id,
+                filename=filename,
+                content_type=content_type,
+                data=optimized if optimized else b"",  # NOT NULL constraint
+                thumb_data=None,
+                thumb_content_type=None,
+                r2_key=None,
+                r2_thumb_key=None,
+                size_bytes=int(len(optimized) if optimized else 0),
+            )
 
             db.session.add(photo)
             db.session.flush()
+
+            if r2_enabled() and optimized:
+                try:
+                    key = r2_key_for_record_photo(rec.id, filename)
+                    enqueue_r2_upload(int(photo.id), key, optimized, content_type)
+                except Exception:
+                    pass
+
             created.append(int(photo.id))
         db.session.commit()
 
