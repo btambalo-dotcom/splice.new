@@ -330,11 +330,11 @@ class RecordPhoto(db.Model):
     record_id = db.Column(db.Integer, db.ForeignKey('record.id'), nullable=False)
     filename = db.Column(db.String(255), nullable=False)
     content_type = db.Column(db.String(100))
-    data = db.Column(db.LargeBinary, nullable=False)  # may be empty bytes when stored in R2
+    data = deferred(db.Column(db.LargeBinary, nullable=False))  # may be empty bytes when stored in R2
     r2_key = db.Column(db.String(512))
     r2_thumb_key = db.Column(db.String(512))
     size_bytes = db.Column(db.Integer)
-    thumb_data = db.Column(db.LargeBinary)
+    thumb_data = deferred(db.Column(db.LargeBinary))
     thumb_content_type = db.Column(db.String(100))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
