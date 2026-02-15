@@ -29,11 +29,34 @@
             {% endfor %}
           </select>
         </div>
+        {% if not is_splicer %}
+        <div class="mb-3">
+          <label class="form-label">Projeto</label>
+          <select name="project_id" id="project-select" class="form-control">
+            <option value="">Sem projeto (valores da empresa)</option>
+          </select>
+          <div class="form-text">Selecione o projeto para aplicar a tabela de valores correta.</div>
+        </div>
+        {% else %}
+          <input type="hidden" name="project_id" id="project-id-hidden" value="">
+        {% endif %}
+
         <div class="mb-3">
           <label class="form-label">Map</label>
-          <select name="map" id="map-select" class="form-control" required>
+          <input type="hidden" name="map" id="map-name-hidden" value="">
+          <select name="map_id" id="map-select" class="form-control" required>
             <option value="">Selecione a empresa primeiro</option>
           </select>
+        </div>
+
+        <div class="mb-3" id="map-role-wrap" style="display:none;">
+          <label class="form-label">Tipo do mapa (obrigatório)</label>
+          <select name="map_role" id="map-role-select" class="form-control">
+            <option value="">Selecione MEIO ou PONTA</option>
+            <option value="MEIO">MEIO</option>
+            <option value="PONTA">PONTA</option>
+          </select>
+          <div class="form-text" id="map-role-hint"></div>
         </div>
 
         <div class="mb-3">
@@ -121,21 +144,63 @@
 
 <script>
 
+  const projectsByCompany = {{ projects_by_company|tojson }};
+  const mapsByProject = {{ maps_by_project|tojson }};
+  const devicesByProject = {{ devices_by_project|tojson }};
   const mapsByCompany = {{ maps_by_company|tojson }};
+  const mapsByCompanyAll = {{ maps_by_company_all|tojson }};
+  const IS_SPLICER = {{ (is_splicer|default(false))|tojson }};
   const devicesByCompany = {{ devices_by_company|tojson }};
+
   const companySelect = document.getElementById('company-select');
+  const projectSelect = document.getElementById('project-select');
   const mapSelect = document.getElementById('map-select');
+  const mapRoleWrap = document.getElementById('map-role-wrap');
+  const mapRoleSelect = document.getElementById('map-role-select');
+  const mapRoleHint = document.getElementById('map-role-hint');
   const typeSelect = document.getElementById('type-select');
 
+  function updateProjects() {
+    if (!projectSelect) return;
+    const company = companySelect.value;
+    projectSelect.innerHTML = '';
 
-
-
-  function updateTypes() {
-    const company = companySelect.value || "__global__";
-    const types = devicesByCompany[company] || devicesByCompany["__global__"] || [];
-    typeSelect.innerHTML = '';
+    const opt0 = document.createElement('option');
+    opt0.value = '';
+    opt0.textContent = 'Sem projeto (valores da empresa)';
+    projectSelect.appendChild(opt0);
 
     if (!company) {
+      projectSelect.disabled = true;
+      return;
+    }
+    projectSelect.disabled = false;
+
+    const projects = projectsByCompany[company] || [];
+    if (projects.length === 0) return;
+
+    projects.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = String(p.id);
+      opt.textContent = p.name;
+      projectSelect.appendChild(opt);
+    });
+  }
+
+  function updateTypes() {
+    const company = companySelect.value || '__global__';
+    const pid = (projectSelect && projectSelect.value) ? String(projectSelect.value) : '';
+
+    let types = [];
+    if (pid && devicesByProject[pid]) {
+      types = devicesByProject[pid];
+    } else {
+      types = devicesByCompany[company] || devicesByCompany['__global__'] || [];
+    }
+
+    typeSelect.innerHTML = '';
+
+    if (!companySelect.value) {
       const opt = document.createElement('option');
       opt.value = '';
       opt.textContent = 'Selecione a empresa primeiro';
@@ -146,7 +211,7 @@
     if (types.length === 0) {
       const opt = document.createElement('option');
       opt.value = '';
-      opt.textContent = 'Nenhum dispositivo cadastrado para esta empresa';
+      opt.textContent = 'Nenhum dispositivo cadastrado para esta seleção';
       typeSelect.appendChild(opt);
       return;
     }
@@ -166,7 +231,19 @@
 
   function updateMaps() {
     const company = companySelect.value;
-    const maps = mapsByCompany[company] || [];
+    const pid = (projectSelect && projectSelect.value) ? String(projectSelect.value) : '';
+
+    let maps = [];
+    if (IS_SPLICER) {
+      maps = mapsByCompanyAll[company] || [];
+    } else {
+      if (pid && mapsByProject[pid]) {
+        maps = mapsByProject[pid];
+      } else {
+        maps = mapsByCompany[company] || [];
+      }
+    }
+
     mapSelect.innerHTML = '';
 
     if (!company) {
@@ -180,7 +257,7 @@
     if (maps.length === 0) {
       const opt = document.createElement('option');
       opt.value = '';
-      opt.textContent = 'Nenhum mapa cadastrado para esta empresa';
+      opt.textContent = 'Nenhum mapa cadastrado para esta seleção';
       mapSelect.appendChild(opt);
       return;
     }
@@ -192,32 +269,93 @@
 
     maps.forEach(m => {
       const opt = document.createElement('option');
-      opt.value = m;
-      opt.textContent = m;
+      opt.value = String(m.id);
+      opt.textContent = m.name;
+      opt.dataset.projectId = (m.project_id === null || m.project_id === undefined) ? '' : String(m.project_id);
+      opt.dataset.midEndEnabled = m.mid_end_enabled ? '1' : '0';
+      opt.dataset.inclMeio = String(m.included_splices_meio ?? 0);
+      opt.dataset.inclPonta = String(m.included_splices_ponta ?? 0);
       mapSelect.appendChild(opt);
     });
+
+    // após atualizar lista, recalcula visibilidade do MEIO/PONTA
+    updateMapRoleVisibility();
   }
 
-  companySelect.addEventListener('change', () => { updateMaps(); updateTypes(); });
-
-  document.addEventListener('DOMContentLoaded', () => {
-    if (companySelect && companySelect.value) {
-      updateMaps();
-      updateTypes();
-
-      const preselectedMap = "{{ form_map|default('') }}";
-      if (preselectedMap) {
-        mapSelect.value = preselectedMap;
-      }
+  function updateMapRoleVisibility() {
+    const opt = mapSelect.options[mapSelect.selectedIndex];
+    // snapshot do nome do mapa (usado no backend/duplicidade)
+    const mapNameHidden = document.getElementById('map-name-hidden');
+    if (mapNameHidden) mapNameHidden.value = (opt && opt.textContent) ? opt.textContent : '';
+    // para splicer: deriva projeto pelo mapa
+    if (IS_SPLICER) {
+      const projectHidden = document.getElementById('project-id-hidden');
+      if (projectHidden) projectHidden.value = (opt && opt.dataset && opt.dataset.projectId) ? opt.dataset.projectId : '';
+    }
+    const enabled = opt && opt.dataset && opt.dataset.midEndEnabled === '1';
+    if (!enabled) {
+      mapRoleWrap.style.display = 'none';
+      mapRoleSelect.required = false;
+      mapRoleSelect.value = '';
+      mapRoleHint.textContent = '';
+      return;
     }
 
-    // manter o último TIPO de dispositivo selecionado
+    mapRoleWrap.style.display = '';
+    mapRoleSelect.required = true;
+
+    const inclMeio = opt.dataset.inclMeio || '0';
+    const inclPonta = opt.dataset.inclPonta || '0';
+    mapRoleHint.textContent = `Inclusas: MEIO = ${inclMeio} | PONTA = ${inclPonta} (travado pela configuração do mapa)`;
+  }
+
+  companySelect.addEventListener('change', () => {
+    updateProjects();
+    updateMaps();
+    updateTypes();
+  });
+
+  if (projectSelect) projectSelect.addEventListener('change', () => {
+    updateMaps();
+    updateTypes();
+  });
+
+  mapSelect.addEventListener('change', () => {
+    updateMapRoleVisibility();
+    const deviceInput = document.getElementById('device-name-input');
+    if (deviceInput) { deviceInput.focus(); deviceInput.select(); }
+  });
+
+  document.addEventListener('DOMContentLoaded', () => {
+    updateProjects();
+    updateMaps();
+    updateTypes();
+
+    const preselectedProject = "{{ form_project_id|default('') }}";
+    if (preselectedProject && projectSelect) {
+      projectSelect.value = preselectedProject;
+    }
+
+    const preselectedMap = "{{ form_map_id|default('') }}";
+    if (preselectedMap) {
+      mapSelect.value = preselectedMap;
+    }
+
+    const preselectedRole = "{{ form_map_role|default('') }}";
+    if (preselectedRole && mapRoleSelect) {
+      mapRoleSelect.value = preselectedRole;
+    }
+
+    updateMapRoleVisibility();
+
+    // garante visibilidade correta ao carregar
+    updateMapRoleVisibility();
+
     const preselectedType = "{{ form_type|default('') }}";
     if (preselectedType && typeSelect) {
       typeSelect.value = preselectedType;
     }
 
-    // focar diretamente no campo Nome do dispositivo
     const deviceInput = document.getElementById('device-name-input');
     if (deviceInput) {
       deviceInput.focus();

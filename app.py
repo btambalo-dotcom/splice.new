@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, send_file, abort
+from flask import Flask, render_template, request, redirect, url_for, flash, send_file, abort, session
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from datetime import datetime, date
@@ -65,6 +65,7 @@ def process_uploaded_photo(file_storage, max_size=(1600, 1600), quality=80):
 
 # --------- App & DB setup ---------
 app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key-change-me")
 app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY", "dev-key")
 
 # Database configuration: prefer DATABASE_URL/RENDER_DATABASE_URL (e.g. Render PostgreSQL),
@@ -95,6 +96,19 @@ class CompanyConfig(db.Model):
     name = db.Column(db.String(120), unique=True, nullable=False)
     included_splices = db.Column(db.Integer, default=1, nullable=False)  # fusões inclusas por lançamento
     invoice_address = db.Column(db.Text, nullable=True)  # nome + endereço p/ usar na invoice
+
+
+class Project(db.Model):
+    """Projeto dentro de uma empresa, com regras e valores próprios."""
+    id = db.Column(db.Integer, primary_key=True)
+    company = db.Column(db.String(120), nullable=False, index=True)
+    name = db.Column(db.String(200), nullable=False)
+    # Se None, usa o valor da empresa (CompanyConfig.included_splices)
+    included_splices = db.Column(db.Integer, nullable=True)
+
+    __table_args__ = (
+        db.UniqueConstraint('company', 'name', name='uq_project_company_name'),
+    )
 
 
 class SystemConfig(db.Model):
@@ -130,6 +144,8 @@ class DeviceType(db.Model):
     name = db.Column(db.String(120), nullable=False)
     value_usd = db.Column(db.Float, default=0.0, nullable=False)
     company = db.Column(db.String(120), nullable=True)  # se None = valor padrão
+    project_id = db.Column(db.Integer, db.ForeignKey('project.id'), nullable=True, index=True)
+    project = db.relationship('Project', backref=db.backref('device_types', lazy=True))
 
 class SpliceTier(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -137,13 +153,21 @@ class SpliceTier(db.Model):
     max_splices = db.Column(db.Integer, nullable=True)
     price_per_splice_usd = db.Column(db.Float, default=0.0, nullable=False)
     company = db.Column(db.String(120), nullable=True)
-
+    project_id = db.Column(db.Integer, db.ForeignKey('project.id'), nullable=True, index=True)
+    project = db.relationship('Project', backref=db.backref('splice_tiers', lazy=True))
 
 class CompanyMap(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     company = db.Column(db.String(120), nullable=False, index=True)
     name = db.Column(db.String(200), nullable=False)
+    project_id = db.Column(db.Integer, db.ForeignKey('project.id'), nullable=True, index=True)
+    project = db.relationship('Project', backref=db.backref('maps', lazy=True))
 
+    # Opcional (por mapa): habilita seleção MEIO/PONTA no lançamento.
+    # Só aparece no Entry se mid_end_enabled=1.
+    mid_end_enabled = db.Column(db.Boolean, nullable=False, default=False)
+    included_splices_meio = db.Column(db.Integer, nullable=True)   # inclusas quando MEIO
+    included_splices_ponta = db.Column(db.Integer, nullable=True)  # inclusas quando PONTA
 
 class Record(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -154,11 +178,18 @@ class Record(db.Model):
     splicer = db.Column(db.String(120))
     created_date = db.Column(db.DateTime, nullable=True)
     company = db.Column(db.String(120), nullable=True)
+    project_id = db.Column(db.Integer, db.ForeignKey('project.id'), nullable=True, index=True)
+    project = db.relationship('Project', backref=db.backref('records', lazy=True))
+
+    # Snapshot (opcional): se o mapa estiver configurado com MEIO/PONTA,
+    # salvamos o tipo escolhido e quantas fusões inclusas foram aplicadas.
+    map_role = db.Column(db.String(10), nullable=True)  # 'MEIO' / 'PONTA'
+    included_splices_applied = db.Column(db.Integer, nullable=True)
+
     price_splices_usd = db.Column(db.Float, default=0.0)
     price_device_usd = db.Column(db.Float, default=0.0)
     total_usd = db.Column(db.Float, default=0.0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
 
 class RecordPhoto(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -219,6 +250,18 @@ with app.app_context():
     ensure("record", "company", "VARCHAR(120)")
     ensure("device_type", "company", "VARCHAR(120)")
     ensure("splice_tier", "company", "VARCHAR(120)")
+    ensure("record", "project_id", "INTEGER")
+    ensure("record", "map_role", "VARCHAR(10)")
+    ensure("record", "included_splices_applied", "INTEGER")
+    ensure("device_type", "project_id", "INTEGER")
+    ensure("splice_tier", "project_id", "INTEGER")
+    ensure("company_map", "project_id", "INTEGER")
+    ensure("company_map", "mid_end_enabled", "BOOLEAN")
+    ensure("company_map", "included_splices_meio", "INTEGER")
+    ensure("company_map", "included_splices_ponta", "INTEGER")
+    ensure("project", "company", "VARCHAR(120)")
+    ensure("project", "name", "VARCHAR(200)")
+    ensure("project", "included_splices", "INTEGER")
     ensure("company_config", "invoice_address", "TEXT")
     ensure("user", "is_admin", "BOOLEAN")
     ensure("user", "splicer_name", "VARCHAR(120)")
@@ -259,48 +302,90 @@ def login():
     return render_template("login.html")
 
 # --------- Helpers de preço ---------
-def included_splices_for(company: str | None) -> int:
-    """Quantas fusões são inclusas para essa empresa."""
-    if not company:
-        return 1  # padrão antigo: 1 fusão inclusa
-    cfg = CompanyConfig.query.filter_by(name=company).first()
-    if cfg:
-        return int(cfg.included_splices or 0)
+def included_splices_for(company: str | None, project_id: int | None = None) -> int:
+    """Quantas fusões são inclusas para essa empresa/projeto."""
+    # Prioridade: projeto -> empresa -> padrão antigo
+    if project_id:
+        pr = Project.query.get(int(project_id))
+        if pr and pr.included_splices is not None:
+            return int(pr.included_splices or 0)
+
+    if company:
+        cfg = CompanyConfig.query.filter_by(name=company).first()
+        if cfg:
+            return int(cfg.included_splices or 0)
+
     return 1
 
-def device_value_for(name: str, company: str | None) -> float:
+def device_value_for(name: str, company: str | None, project_id: int | None = None) -> float:
     if not name:
         return 0.0
+
+    # Prioridade de busca:
+    # 1) dispositivo do projeto
+    # 2) dispositivo da empresa
+    # 3) dispositivo global (company NULL / project NULL)
     q = DeviceType.query.filter(DeviceType.name.ilike(name))
+
+    if project_id:
+        q = q.filter(or_(DeviceType.project_id == project_id, DeviceType.project_id.is_(None)))
+    else:
+        q = q.filter(DeviceType.project_id.is_(None))
+
     if company:
         q = q.filter(or_(DeviceType.company == company, DeviceType.company.is_(None)))
-        dt = q.order_by(case((DeviceType.company == company, 0), else_=1)).first()
+        order_clauses = []
+        if project_id:
+            order_clauses.append(case((DeviceType.project_id == project_id, 0), else_=1))
+        # prioriza company específico quando existir
+        order_clauses.append(case((DeviceType.company == company, 0), else_=1))
+        dt = q.order_by(*order_clauses).first()
     else:
         dt = q.first()
+
     return float(dt.value_usd) if dt else 0.0
 
-def tier_price_for(count: int, company: str | None) -> float:
+def tier_price_for(count: int, company: str | None, project_id: int | None = None) -> float:
     from sqlalchemy import or_ as _or, case as _case
+
     q = SpliceTier.query.filter(SpliceTier.min_splices <= count)
+
+    if project_id:
+        q = q.filter(_or(SpliceTier.project_id == project_id, SpliceTier.project_id.is_(None)))
+    else:
+        q = q.filter(SpliceTier.project_id.is_(None))
+
+    q = q.filter(_or(SpliceTier.max_splices == None, SpliceTier.max_splices >= count))
+
     if company:
         q = q.filter(_or(SpliceTier.company == company, SpliceTier.company.is_(None)))
-        q = q.filter(_or(SpliceTier.max_splices == None, SpliceTier.max_splices >= count))
-        tier = q.order_by(
-            _case((SpliceTier.company == company, 0), else_=1),
-            SpliceTier.min_splices.desc()
-        ).first()
+        order_clauses = []
+        if project_id:
+            order_clauses.append(_case((SpliceTier.project_id == project_id, 0), else_=1))
+        order_clauses.append(_case((SpliceTier.company == company, 0), else_=1))
+        order_clauses.append(SpliceTier.min_splices.desc())
+        tier = q.order_by(*order_clauses).first()
     else:
-        q = q.filter(_or(SpliceTier.max_splices == None, SpliceTier.max_splices >= count))
         tier = q.order_by(SpliceTier.min_splices.desc()).first()
+
     return float(tier.price_per_splice_usd) if tier else 0.0
 
 
-def compute_prices(splices: int, device_name: str, company: str | None):
-    """Calcula preço de fusões e dispositivo para um lançamento manual."""
-    included = included_splices_for(company)
+def compute_prices(
+    splices: int,
+    device_name: str,
+    company: str | None,
+    project_id: int | None = None,
+    included_override: int | None = None,
+):
+    """Calcula preço de fusões e dispositivo para um lançamento manual.
+
+    Se included_override vier preenchido, ele tem prioridade (ex.: mapas com regra MEIO/PONTA).
+    """
+    included = int(included_override) if included_override is not None else included_splices_for(company, project_id)
     charge = max(int(splices or 0) - included, 0)
-    price_splices = charge * tier_price_for(charge, company)
-    price_device = device_value_for(device_name or "", company)
+    price_splices = charge * tier_price_for(charge, company, project_id)
+    price_device = device_value_for(device_name or "", company, project_id)
     return price_splices, price_device, price_splices + price_device
 
 
@@ -587,21 +672,56 @@ def record_photos_zip(rid):
 @app.route("/entry", methods=["GET", "POST"])
 @login_required
 def entry():
-    """Lançamento manual de produção (uma linha por vez)."""
-    # empresas configuradas
+    """Lançamento manual de produção (uma linha por vez).
+
+    Para splicer: modo rápido (não escolhe projeto). O sistema deriva o projeto pelo mapa.
+    """
     companies = [c.name for c in CompanyConfig.query.order_by(CompanyConfig.name).all()]
 
-    # mapas cadastrados por empresa
-    maps_by_company = {}
-    for m in CompanyMap.query.order_by(CompanyMap.company, CompanyMap.name).all():
-        maps_by_company.setdefault(m.company, []).append(m.name)
+    # Modo rápido (padrão): não escolhe projeto. O sistema deriva o projeto pelo mapa.
+    # Para ADMIN, se quiser o modo completo (com seleção de projeto), use /entry?full=1
+    full_mode = bool(getattr(current_user, "is_admin", False)) and (request.args.get("full") == "1")
+    is_splicer = not full_mode
+    entry_url = url_for('entry', full='1') if full_mode else url_for('entry')
 
-    # dispositivos cadastrados por empresa
+    # Permite reset do "modo rápido" (opcional)
+    if request.method == "GET" and request.args.get("reset") == "1":
+        for k in ("entry_company", "entry_map_id", "entry_map_role", "entry_type"):
+            session.pop(k, None)
+
+    projects_by_company = {}
+    for pr in Project.query.order_by(Project.company, Project.name).all():
+        projects_by_company.setdefault(pr.company, []).append({"id": pr.id, "name": pr.name})
+
+    maps_by_project = {}
+    maps_by_company = {}          # mapas SEM projeto (legado) por empresa
+    maps_by_company_all = {}      # todos mapas por empresa (inclui mapas vinculados a projeto) – usado no splicer
+
+    for m in CompanyMap.query.order_by(CompanyMap.company, CompanyMap.name).all():
+        mobj = {
+            "id": int(m.id),
+            "name": m.name,
+            "project_id": int(m.project_id) if m.project_id else None,
+            "mid_end_enabled": bool(getattr(m, "mid_end_enabled", False)),
+            "included_splices_meio": int(getattr(m, "included_splices_meio", 0) or 0),
+            "included_splices_ponta": int(getattr(m, "included_splices_ponta", 0) or 0),
+        }
+        maps_by_company_all.setdefault(m.company, []).append(mobj)
+
+        if m.project_id:
+            maps_by_project.setdefault(str(m.project_id), []).append(mobj)
+        else:
+            maps_by_company.setdefault(m.company, []).append(mobj)
+
+    devices_by_project = {}
     devices_by_company = {}
     for dt in DeviceType.query.order_by(DeviceType.company, DeviceType.name).all():
-        key = dt.company or "__global__"
-        devices_by_company.setdefault(key, []).append(dt.name)
-    # opções de splicer (para o admin poder escolher quem lançou)
+        if dt.project_id:
+            devices_by_project.setdefault(str(dt.project_id), []).append(dt.name)
+        else:
+            key = dt.company or "__global__"
+            devices_by_company.setdefault(key, []).append(dt.name)
+
     splicer_options = []
     if getattr(current_user, "is_admin", False):
         splicer_options = [
@@ -610,17 +730,41 @@ def entry():
             if (u.splicer_name or u.username)
         ]
 
-
     default_splicer = getattr(current_user, "splicer_name", None) or current_user.username
+
+    # Prefill "modo rápido" (splicer) – mantém enquanto o usuário ficar nessa tela
+    pre_company = session.get("entry_company") if is_splicer else None
+    pre_map_id = session.get("entry_map_id") if is_splicer else None
+    pre_map_role = session.get("entry_map_role") if is_splicer else None
+    pre_type = session.get("entry_type") if is_splicer else None
 
     if request.method == "POST":
         company = (request.form.get("company") or "").strip() or None
+
+        # Para splicer, projeto vem do mapa; para admin pode vir do form.
+        project_id_raw = (request.form.get("project_id") or "").strip()
+        project_id = int(project_id_raw) if project_id_raw.isdigit() else None
+
+        map_id_raw = (request.form.get("map_id") or "").strip()
         map_val = (request.form.get("map") or "").strip()
+
+        map_obj = None
+        if map_id_raw.isdigit():
+            map_obj = CompanyMap.query.get(int(map_id_raw))
+        else:
+            # compatibilidade: se ainda vier pelo nome
+            if company and map_val:
+                q = CompanyMap.query.filter_by(company=company, name=map_val)
+                map_obj = q.first()
+
+        # Se for splicer, sempre deriva project_id pelo mapa escolhido
+        if is_splicer and map_obj:
+            project_id = int(map_obj.project_id) if map_obj.project_id else None
+            map_val = map_obj.name
+
         type_val = (request.form.get("type") or "").strip()
         device_name = (request.form.get("device_name") or "").strip()
 
-        # para cálculo de preço usamos o tipo (dispositivo configurado),
-        # e guardamos o nome digitado separado
         device_for_price = type_val or device_name
 
         splices_raw = request.form.get("splices") or "0"
@@ -628,17 +772,16 @@ def entry():
         splicer = (request.form.get("splicer") or "").strip() or default_splicer
         confirm_duplicate = (request.form.get("confirm_duplicate") == "yes")
 
-        # checagem de duplicidade: mesmo map + mesmo nome de dispositivo (+ mesma empresa, se informada)
         existing = None
         if map_val and device_name:
             dup_query = Record.query.filter(Record.map == map_val, Record.device == device_name)
             if company:
                 dup_query = dup_query.filter(Record.company == company)
+            if project_id is not None:
+                dup_query = dup_query.filter(Record.project_id == project_id)
             existing = dup_query.order_by(Record.created_date.desc().nullslast(), Record.id.desc()).first()
 
         if existing and not confirm_duplicate:
-            # Primeiro aviso: já existe lançamento para este dispositivo neste mapa.
-            # Mostra data e splicer e pede confirmação para lançar novamente.
             flash(
                 "Este dispositivo já foi lançado neste map. Data: "
                 + (existing.created_date.date().isoformat() if existing.created_date else "-")
@@ -649,21 +792,28 @@ def entry():
                 "entry.html",
                 splicer_options=splicer_options,
                 companies=companies,
+                projects_by_company=projects_by_company,
+                maps_by_project=maps_by_project,
                 maps_by_company=maps_by_company,
+                maps_by_company_all=maps_by_company_all,
+                devices_by_project=devices_by_project,
                 devices_by_company=devices_by_company,
                 default_splicer=default_splicer,
                 today=date.today().isoformat(),
                 duplicate_record=existing,
                 form_company=company,
+                form_project_id=str(project_id or ""),
+                form_map_id=str(map_obj.id) if map_obj else "",
                 form_map=map_val,
                 form_type=type_val,
                 form_device_name=device_name,
                 form_splices=splices_raw,
                 form_created=created_raw or date.today().isoformat(),
+                form_map_role=(request.form.get("map_role") or ""),
                 confirm_duplicate=True,
+                is_splicer=is_splicer,
             )
 
-        # conversões finais para salvar o registro
         try:
             splices = int(splices_raw or 0)
         except ValueError:
@@ -671,16 +821,42 @@ def entry():
 
         if created_raw:
             try:
-                # campo vem como YYYY-MM-DD
                 created_date = datetime.strptime(created_raw, "%Y-%m-%d")
             except ValueError:
                 created_date = datetime.utcnow()
         else:
-            # padrão: hoje sem horário
             today = date.today()
             created_date = datetime(today.year, today.month, today.day)
 
-        price_splices, price_device, total = compute_prices(splices, device_for_price, company)
+        # Regra opcional por MAPA: se o mapa estiver com MEIO/PONTA habilitado,
+        # o usuário precisa escolher e o sistema aplica as fusões inclusas do mapa.
+        map_role = (request.form.get("map_role") or "").strip().upper() or None
+
+        map_cfg = map_obj
+        if not map_cfg and map_val and company:
+            map_cfg = CompanyMap.query.filter_by(company=company, name=map_val, project_id=project_id).first()
+            if not map_cfg:
+                map_cfg = CompanyMap.query.filter_by(company=company, name=map_val, project_id=None).first()
+
+        included_override = None
+        included_applied = None
+        if map_cfg and bool(getattr(map_cfg, "mid_end_enabled", False)):
+            if map_role not in ("MEIO", "PONTA"):
+                flash("Este mapa exige selecionar MEIO ou PONTA.", "danger")
+                return redirect(entry_url)
+            if map_role == "MEIO":
+                included_override = int(getattr(map_cfg, "included_splices_meio", 0) or 0)
+            else:
+                included_override = int(getattr(map_cfg, "included_splices_ponta", 0) or 0)
+            included_applied = included_override
+
+        price_splices, price_device, total = compute_prices(
+            splices,
+            device_for_price,
+            company,
+            project_id,
+            included_override=included_override,
+        )
 
         rec = Record(
             map=map_val,
@@ -690,6 +866,9 @@ def entry():
             splicer=splicer,
             created_date=created_date,
             company=company,
+            project_id=project_id,
+            map_role=map_role,
+            included_splices_applied=included_applied,
             price_splices_usd=price_splices,
             price_device_usd=price_device,
             total_usd=total,
@@ -697,7 +876,6 @@ def entry():
         db.session.add(rec)
         db.session.commit()
 
-        # Salva até 5 fotos diretamente na tabela RecordPhoto
         files = request.files.getlist("photos")
         if files:
             for f in files[:5]:
@@ -715,20 +893,37 @@ def entry():
                 db.session.add(photo)
             db.session.commit()
 
-        flash("Lançamento salvo.", "success")
-        # após salvar, permanece na tela de lançamento para permitir novo registro
-        return redirect(url_for("entry"))
+        # Modo rápido: memoriza última seleção (somente para splicer)
+        if is_splicer and company and (map_cfg or map_obj):
+            last_map = map_cfg or map_obj
+            session["entry_company"] = company
+            session["entry_map_id"] = int(last_map.id)
+            session["entry_map_role"] = map_role or ""
+            session["entry_type"] = type_val or ""
 
-# GET
+        flash("Lançamento salvo.", "success")
+        return redirect(entry_url)
+
+    # GET
     return render_template(
         "entry.html",
         splicer_options=splicer_options,
         companies=companies,
+        projects_by_company=projects_by_company,
+        maps_by_project=maps_by_project,
         maps_by_company=maps_by_company,
+        maps_by_company_all=maps_by_company_all,
+        devices_by_project=devices_by_project,
         devices_by_company=devices_by_company,
         default_splicer=default_splicer,
         today=date.today().isoformat(),
+        form_company=pre_company or "",
+        form_map_id=str(pre_map_id or ""),
+        form_map_role=pre_map_role or "",
+        form_type=pre_type or "",
+        is_splicer=is_splicer,
     )
+
 
 @app.route("/record/<int:rid>/edit", methods=["GET", "POST"])
 @login_required
@@ -736,18 +931,29 @@ def record_edit(rid):
     """Editar um lançamento existente."""
     rec = Record.query.get_or_404(rid)
 
-    # mesmas estruturas de apoio usadas na tela de lançamento
     companies = [c.name for c in CompanyConfig.query.order_by(CompanyConfig.name).all()]
 
+    projects_by_company = {}
+    for pr in Project.query.order_by(Project.company, Project.name).all():
+        projects_by_company.setdefault(pr.company, []).append({"id": pr.id, "name": pr.name})
+
+    maps_by_project = {}
     maps_by_company = {}
     for m in CompanyMap.query.order_by(CompanyMap.company, CompanyMap.name).all():
-        maps_by_company.setdefault(m.company, []).append(m.name)
+        if m.project_id:
+            maps_by_project.setdefault(str(m.project_id), []).append(m.name)
+        else:
+            maps_by_company.setdefault(m.company, []).append(m.name)
 
+    devices_by_project = {}
     devices_by_company = {}
     for dt in DeviceType.query.order_by(DeviceType.company, DeviceType.name).all():
-        key = dt.company or "__global__"
-        devices_by_company.setdefault(key, []).append(dt.name)
-    # opções de splicer (para o admin poder escolher quem lançou)
+        if dt.project_id:
+            devices_by_project.setdefault(str(dt.project_id), []).append(dt.name)
+        else:
+            key = dt.company or "__global__"
+            devices_by_company.setdefault(key, []).append(dt.name)
+
     splicer_options = []
     if getattr(current_user, "is_admin", False):
         splicer_options = [
@@ -756,11 +962,12 @@ def record_edit(rid):
             if (u.splicer_name or u.username)
         ]
 
-
     default_splicer = getattr(current_user, "splicer_name", None) or current_user.username
 
     if request.method == "POST":
         company = (request.form.get("company") or "").strip() or None
+        project_id_raw = (request.form.get("project_id") or "").strip()
+        project_id = int(project_id_raw) if project_id_raw.isdigit() else None
         map_val = (request.form.get("map") or "").strip()
         type_val = (request.form.get("type") or "").strip()
         device_name = (request.form.get("device_name") or "").strip()
@@ -785,10 +992,10 @@ def record_edit(rid):
             today = date.today()
             created_date = datetime(today.year, today.month, today.day)
 
-        price_splices, price_device, total = compute_prices(splices, device_for_price, company)
+        price_splices, price_device, total = compute_prices(splices, device_for_price, company, project_id)
 
-        # atualiza o registro existente
         rec.company = company
+        rec.project_id = project_id
         rec.map = map_val
         rec.type = type_val
         rec.device = device_name
@@ -803,13 +1010,15 @@ def record_edit(rid):
         flash("Lançamento atualizado.", "success")
         return redirect(url_for("index"))
 
-    # GET: preenche o formulário com os dados atuais
     form_created = rec.created_date.date().isoformat() if rec.created_date else date.today().isoformat()
 
     return render_template(
         "entry.html",
         splicer_options=splicer_options,
         companies=companies,
+        projects_by_company=projects_by_company,
+        maps_by_project=maps_by_project,
+        devices_by_project=devices_by_project,
         maps_by_company=maps_by_company,
         devices_by_company=devices_by_company,
         default_splicer=default_splicer,
@@ -817,12 +1026,14 @@ def record_edit(rid):
         is_edit=True,
         record=rec,
         form_company=rec.company,
+        form_project_id=str(rec.project_id or ""),
         form_map=rec.map,
         form_type=rec.type,
         form_device_name=rec.device,
         form_splices=str(rec.splices or 0),
         form_created=form_created,
     )
+
 @app.route("/logout")
 @login_required
 def logout():
@@ -892,12 +1103,14 @@ def settings_company_detail(cid: int):
                 flash("Mapa adicionado.", "success")
         return redirect(url_for("settings_company_detail", cid=company.id))
 
-    types = DeviceType.query.filter_by(company=company.name).order_by(DeviceType.name).all()
-    tiers = SpliceTier.query.filter_by(company=company.name).order_by(SpliceTier.min_splices).all()
-    maps = CompanyMap.query.filter_by(company=company.name).order_by(CompanyMap.name).all()
+    types = DeviceType.query.filter_by(company=company.name, project_id=None).order_by(DeviceType.name).all()
+    tiers = SpliceTier.query.filter_by(company=company.name, project_id=None).order_by(SpliceTier.min_splices).all()
+    maps = CompanyMap.query.filter_by(company=company.name, project_id=None).order_by(CompanyMap.name).all()
+    projects = Project.query.filter_by(company=company.name).order_by(Project.name).all()
     return render_template(
         "settings_company.html",
         company=company,
+        projects=projects,
         types=types,
         tiers=tiers,
         maps=maps,
@@ -930,40 +1143,144 @@ def settings_system_update():
     flash("Dados da sua empresa atualizados.", "success")
     return redirect(url_for("settings"))
 
+
+@app.route("/settings/project/add", methods=["POST"])
+@admin_required
+def settings_project_add():
+    company = (request.form.get("company") or "").strip()
+    project_name = (request.form.get("project_name") or "").strip()
+
+    if not company or not project_name:
+        flash("Empresa e nome do projeto são obrigatórios.", "danger")
+        return redirect(url_for("settings"))
+
+    existing = Project.query.filter_by(company=company, name=project_name).first()
+    if existing:
+        flash("Projeto já existe.", "warning")
+        comp = CompanyConfig.query.filter_by(name=company).first()
+        return redirect(url_for("settings_company_detail", cid=comp.id if comp else 0))
+
+    pr = Project(company=company, name=project_name, included_splices=None)
+    db.session.add(pr)
+    db.session.commit()
+
+    # Copia dispositivos e faixas da empresa (defaults) para servir como base do projeto
+    base_types = DeviceType.query.filter_by(company=company, project_id=None).all()
+    for dt in base_types:
+        db.session.add(DeviceType(name=dt.name, value_usd=dt.value_usd, company=company, project_id=pr.id))
+
+    base_tiers = SpliceTier.query.filter_by(company=company, project_id=None).all()
+    for t in base_tiers:
+        db.session.add(
+            SpliceTier(
+                company=company,
+                project_id=pr.id,
+                min_splices=t.min_splices,
+                max_splices=t.max_splices,
+                price_per_splice_usd=t.price_per_splice_usd,
+            )
+        )
+
+    db.session.commit()
+    flash("Projeto criado (valores copiados da empresa).", "success")
+    return redirect(url_for("settings_project_detail", pid=pr.id))
+
+
+@app.route("/settings/project/<int:pid>", methods=["GET", "POST"])
+@admin_required
+def settings_project_detail(pid: int):
+    project = Project.query.get_or_404(pid)
+
+    # usado no link "Voltar para empresa" na página do projeto
+    comp_cfg = CompanyConfig.query.filter_by(name=project.company).first()
+    company_id = comp_cfg.id if comp_cfg else 0
+
+    del_map_id = request.args.get("del_map")
+    if del_map_id:
+        mp = CompanyMap.query.get(int(del_map_id))
+        if mp and mp.project_id == project.id:
+            db.session.delete(mp)
+            db.session.commit()
+            flash("Mapa removido.", "success")
+        return redirect(url_for("settings_project_detail", pid=project.id))
+
+    if request.method == "POST":
+        if request.form.get("action") == "update_project":
+            inc_raw = (request.form.get("included_splices") or "").strip()
+            project.included_splices = int(inc_raw) if inc_raw != "" else None
+            db.session.commit()
+            flash("Projeto atualizado.", "success")
+            return redirect(url_for("settings_project_detail", pid=project.id))
+
+        if request.form.get("action") == "update_map_rules":
+            mid_raw = (request.form.get("included_meio") or "").strip()
+            ponta_raw = (request.form.get("included_ponta") or "").strip()
+            enabled = bool(request.form.get("mid_end_enabled"))
+            mid = int(mid_raw) if mid_raw != "" else 0
+            ponta = int(ponta_raw) if ponta_raw != "" else 0
+            mid = max(mid, 0)
+            ponta = max(ponta, 0)
+            map_id_raw = (request.form.get("map_id") or "").strip()
+            if map_id_raw.isdigit():
+                mp = CompanyMap.query.get(int(map_id_raw))
+                if mp and mp.project_id == project.id:
+                    mp.mid_end_enabled = enabled
+                    mp.included_splices_meio = mid
+                    mp.included_splices_ponta = ponta
+                    db.session.commit()
+                    flash("Mapa atualizado.", "success")
+            return redirect(url_for("settings_project_detail", pid=project.id))
+
+        new_map = (request.form.get("new_map") or "").strip()
+        if new_map:
+            exists = CompanyMap.query.filter_by(company=project.company, name=new_map, project_id=project.id).first()
+            if not exists:
+                db.session.add(CompanyMap(company=project.company, name=new_map, project_id=project.id))
+                db.session.commit()
+                flash("Mapa adicionado.", "success")
+        return redirect(url_for("settings_project_detail", pid=project.id))
+
+    types = DeviceType.query.filter_by(company=project.company, project_id=project.id).order_by(DeviceType.name).all()
+    tiers = SpliceTier.query.filter_by(company=project.company, project_id=project.id).order_by(SpliceTier.min_splices).all()
+    maps = CompanyMap.query.filter_by(company=project.company, project_id=project.id).order_by(CompanyMap.name).all()
+
+    return render_template(
+        "settings_project.html",
+        project=project,
+        types=types,
+        tiers=tiers,
+        maps=maps,
+        company_id=company_id,
+    )
+
+
 @app.route("/settings/device/add", methods=["POST"])
 @login_required
 def settings_device_add():
     name = (request.form.get("name") or "").strip()
     company = (request.form.get("company") or "").strip() or None
+    project_id_raw = (request.form.get("project_id") or "").strip()
+    project_id = int(project_id_raw) if project_id_raw.isdigit() else None
     next_url = (request.form.get("next") or "").strip() or None
     value_raw = request.form.get("value_usd") or "0"
     try:
         value = float(value_raw or 0)
     except ValueError:
         value = 0.0
+
     if not name:
         flash("Nome do dispositivo é obrigatório.", "danger")
         return redirect(next_url or url_for("settings"))
 
-    dt = DeviceType.query.filter_by(name=name, company=company).first()
+    dt = DeviceType.query.filter_by(name=name, company=company, project_id=project_id).first()
     if dt:
         dt.value_usd = value
     else:
-        dt = DeviceType(name=name, company=company, value_usd=value)
+        dt = DeviceType(name=name, company=company, project_id=project_id, value_usd=value)
         db.session.add(dt)
     db.session.commit()
     flash("Dispositivo salvo.", "success")
     return redirect(next_url or url_for("settings"))
-
-    dt = DeviceType.query.filter_by(name=name, company=company).first()
-    if dt:
-        dt.value_usd = value
-    else:
-        dt = DeviceType(name=name, company=company, value_usd=value)
-        db.session.add(dt)
-    db.session.commit()
-    flash("Dispositivo salvo.", "success")
-    return redirect(url_for("settings"))
 
 
 @app.route("/settings/device/<int:did>/delete")
@@ -981,6 +1298,8 @@ def settings_device_delete(did: int):
 @login_required
 def settings_tier_add():
     company = (request.form.get("company") or "").strip() or None
+    project_id_raw = (request.form.get("project_id") or "").strip()
+    project_id = int(project_id_raw) if project_id_raw.isdigit() else None
     next_url = (request.form.get("next") or "").strip() or None
     min_raw = request.form.get("min_splices") or "0"
     max_raw = request.form.get("max_splices") or ""
@@ -1002,6 +1321,7 @@ def settings_tier_add():
 
     tier = SpliceTier(
         company=company,
+        project_id=project_id,
         min_splices=min_s,
         max_splices=max_s,
         price_per_splice_usd=price,
@@ -1303,14 +1623,21 @@ def export_invoice():
 
     records = query.order_by(Record.created_date.asc().nullslast(), Record.id.asc()).all()
 
-    # agrupar por mapa + dispositivo
+    # agrupar por mapa + dispositivo (+ opcional: MEIO/PONTA + inclusas aplicadas)
     grouped = {}
     for r in records:
-        key = ((r.map or "").strip(), (r.device or "").strip())
+        key = (
+            (r.map or "").strip(),
+            (r.device or "").strip(),
+            (r.map_role or "").strip(),
+            int(r.included_splices_applied) if r.included_splices_applied is not None else None,
+        )
         if key not in grouped:
             grouped[key] = {
                 "map": key[0] or "-",
                 "device": key[1] or "-",
+                "map_role": key[2] or "",
+                "included": key[3],
                 "splices": 0,
                 "price_device_usd": float(r.price_device_usd or 0.0),
                 "total_usd": 0.0,
@@ -1395,8 +1722,8 @@ def export_invoice():
     # OBS: FPDF "cell" não faz quebra de linha. Para não "estourar" a tabela e
     # mostrar o nome COMPLETO do device dentro da coluna, vamos desenhar a linha
     # com multi_cell e quebra manual (principalmente em '_' e '-').
-    col_widths = [55, 70, 20, 22, 23]
-    headers = ["Map", "Device", "Splices", "Device price", "Total"]
+    col_widths = [40, 70, 12, 12, 16, 20, 20]
+    headers = ["Map", "Device", "Tipo", "Incl.", "Splices", "Device price", "Total"]
 
     pdf.set_font("Arial", "B", 10)
     for w, h in zip(col_widths, headers):
@@ -1424,6 +1751,8 @@ def export_invoice():
         row = [
             str(l["map"] or "-"),
             _break_for_table(str(l["device"] or "-")),
+            str(l.get("map_role") or ""),
+            str(l.get("included") if l.get("included") is not None else ""),
             str(l["splices"]),
             f"$ {l['price_device_usd']:.2f}",
             f"$ {l['total_usd']:.2f}",
