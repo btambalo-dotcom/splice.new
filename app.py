@@ -632,8 +632,6 @@ def photo_file(photo_id: int):
         resp.headers["ETag"] = etag
     resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     return resp
-oad_name=photo.filename,
-    )
 
 
 @app.route("/record/<int:rid>/photos", methods=["POST"])
