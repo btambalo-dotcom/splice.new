@@ -939,11 +939,24 @@ def record_edit(rid):
 
     maps_by_project = {}
     maps_by_company = {}
+    maps_by_company_all = {}
     for m in CompanyMap.query.order_by(CompanyMap.company, CompanyMap.name).all():
+        # Mantém o mesmo formato usado em /entry (lista de objetos),
+        # para o JS funcionar também na tela de edição.
+        mobj = {
+            "id": int(m.id),
+            "name": m.name,
+            "project_id": int(m.project_id) if m.project_id else None,
+            "mid_end_enabled": bool(getattr(m, "mid_end_enabled", False)),
+            "included_splices_meio": int(getattr(m, "included_splices_meio", 0) or 0),
+            "included_splices_ponta": int(getattr(m, "included_splices_ponta", 0) or 0),
+        }
+        maps_by_company_all.setdefault(m.company, []).append(mobj)
+
         if m.project_id:
-            maps_by_project.setdefault(str(m.project_id), []).append(m.name)
+            maps_by_project.setdefault(str(m.project_id), []).append(mobj)
         else:
-            maps_by_company.setdefault(m.company, []).append(m.name)
+            maps_by_company.setdefault(m.company, []).append(mobj)
 
     devices_by_project = {}
     devices_by_company = {}
@@ -1020,6 +1033,7 @@ def record_edit(rid):
         maps_by_project=maps_by_project,
         devices_by_project=devices_by_project,
         maps_by_company=maps_by_company,
+        maps_by_company_all=maps_by_company_all,
         devices_by_company=devices_by_company,
         default_splicer=default_splicer,
         today=date.today().isoformat(),

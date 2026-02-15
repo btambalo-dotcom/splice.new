@@ -144,13 +144,15 @@
 
 <script>
 
-  const projectsByCompany = {{ projects_by_company|tojson }};
-  const mapsByProject = {{ maps_by_project|tojson }};
-  const devicesByProject = {{ devices_by_project|tojson }};
-  const mapsByCompany = {{ maps_by_company|tojson }};
-  const mapsByCompanyAll = {{ maps_by_company_all|tojson }};
+  // NOTE: Em algumas telas (ex: /record/<id>/edit) nem todos os dicts são enviados.
+  // Usamos default({}) para evitar "Undefined is not JSON serializable" (500) em produção.
+  const projectsByCompany = {{ (projects_by_company|default({}))|tojson }};
+  const mapsByProject = {{ (maps_by_project|default({}))|tojson }};
+  const devicesByProject = {{ (devices_by_project|default({}))|tojson }};
+  const mapsByCompany = {{ (maps_by_company|default({}))|tojson }};
+  const mapsByCompanyAll = {{ (maps_by_company_all|default({}))|tojson }};
   const IS_SPLICER = {{ (is_splicer|default(false))|tojson }};
-  const devicesByCompany = {{ devices_by_company|tojson }};
+  const devicesByCompany = {{ (devices_by_company|default({}))|tojson }};
 
   const companySelect = document.getElementById('company-select');
   const projectSelect = document.getElementById('project-select');
