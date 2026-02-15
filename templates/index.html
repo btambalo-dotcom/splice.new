@@ -225,8 +225,7 @@ mb-3">Registros</h5>
             Download todas as fotos (.zip)
           </a>
           {% for photo in r.photos|sort(attribute='created_at') %}
-          <a href="{{ url_for('static', filename='uploads/' ~ photo.filename) }}"
-             download
+          <a href="{{ url_for('photo_file', photo_id=photo.id, download=1) }}"
              class="btn btn-sm btn-outline-light me-2 mb-2">
             Download foto {{ loop.index }}
           </a>

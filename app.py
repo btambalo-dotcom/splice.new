@@ -823,27 +823,15 @@ def photo_file(photo_id: int):
     else:
         blob, mimetype = get_original_bytes()
 
+    download = request.args.get("download") in ("1", "true", "yes")
     resp = send_file(
         BytesIO(blob),
         mimetype=mimetype,
-        as_attachment=False,
+        as_attachment=download,
         download_name=photo.filename,
         conditional=True,
     )
     resp.headers["ETag"] = etag
-    resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
-    return resp
-
-
-    resp = send_file(
-        BytesIO(blob),
-        mimetype=mimetype,
-        as_attachment=False,
-        download_name=photo.filename,
-        conditional=True,
-    )
-    if etag:
-        resp.headers["ETag"] = etag
     resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     return resp
 
@@ -874,8 +862,8 @@ def record_add_photos(rid: int):
                 continue
 
             # Performance + NOLOSS:
-            # 1) Always store *optimized* bytes in Postgres (fast + guarantees we never lose the photo).
-            # 2) If R2 is configured, upload to R2 in a background thread and then set r2_key.
+            # - If R2 is configured: upload to R2 first and keep ONLY the key in Postgres (DB stays light and fast).
+            # - If R2 is not configured (or upload fails): store bytes in Postgres as fallback.
             raw = f.read()
             if not raw:
                 continue
@@ -883,27 +871,29 @@ def record_add_photos(rid: int):
             optimized, content_type = optimize_upload_bytes(raw, getattr(f, "mimetype", None))
 
             # Do NOT generate thumbnail at upload time (keeps it fast). Thumbs are generated lazily on demand.
+            r2_key = None
+            stored_in_r2 = False
+            if r2_enabled() and optimized:
+                key = r2_key_for_record_photo(rec.id, filename)
+                ok, _err = r2_put_bytes(key, optimized, content_type)
+                if ok:
+                    r2_key = key
+                    stored_in_r2 = True
+
             photo = RecordPhoto(
                 record_id=rec.id,
                 filename=filename,
                 content_type=content_type,
-                data=optimized if optimized else b"",  # NOT NULL constraint
+                data=(b"" if stored_in_r2 else (optimized if optimized else b"")),  # NOT NULL constraint
                 thumb_data=None,
                 thumb_content_type=None,
-                r2_key=None,
+                r2_key=r2_key,
                 r2_thumb_key=None,
                 size_bytes=int(len(optimized) if optimized else 0),
             )
 
             db.session.add(photo)
             db.session.flush()
-
-            if r2_enabled() and optimized:
-                try:
-                    key = r2_key_for_record_photo(rec.id, filename)
-                    enqueue_r2_upload(int(photo.id), key, optimized, content_type)
-                except Exception:
-                    pass
 
             created.append(int(photo.id))
         db.session.commit()
@@ -975,7 +965,18 @@ def record_photos_zip(rid):
             safe_filename = photo.filename or f"foto_{photo.id}.jpg"
             device_part = (record.device or f"ID-{record.id}").replace("/", "-")
             zip_path = f"{device_part}/ID-{record.id}_PH-{photo.id}_{safe_filename}"
-            zf.writestr(zip_path, photo.data)
+
+            # Prefer R2 when available (fast + DB stays small). Fallback to DB bytes.
+            data = None
+            if photo.r2_key and r2_enabled():
+                ok, blob, _ = r2_get_bytes(photo.r2_key)
+                if ok and blob:
+                    data = blob
+            if not data:
+                data = photo.data
+
+            if data:
+                zf.writestr(zip_path, data)
 
     mem.seek(0)
     ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
