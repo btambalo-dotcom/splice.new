@@ -1,2 +1,2 @@
-FULL-FIX-503 - 2026-02-12
-Contains Record.created_date filter fix and improved .bat venv installer.
+FULL-FIX8 - R2 + THUMB + COMPRESS - 2026-02-15
+Uploads optimized photos + thumbnails to Cloudflare R2, clears DB blobs after upload when enabled.
