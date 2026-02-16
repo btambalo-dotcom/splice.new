@@ -983,7 +983,8 @@ def photos_filtered_zip():
             company_part = (rec.company or "SEM_EMPRESA").replace("/", "-") if rec else "SEM_EMPRESA"
             map_part = (rec.map or "SEM_MAP").replace("/", "-") if rec else "SEM_MAP"
             device_part = (rec.device or f"ID-{photo.record_id}").replace("/", "-") if rec else f"ID-{photo.record_id}"
-            safe_filename = photo.filename or f"foto_{photo.id}.jpg"            zip_path = f"{company_part}/{map_part}/{device_part}/ID-{photo.record_id}_PH-{photo.id}_{safe_filename}"
+            safe_filename = photo.filename or f"foto_{photo.id}.jpg"
+            zip_path = f"{company_part}/{map_part}/{device_part}/ID-{photo.record_id}_PH-{photo.id}_{safe_filename}"
             try:
                 payload = None
                 # Prefer DB data when present; if cleared after R2 upload, fetch from R2.
