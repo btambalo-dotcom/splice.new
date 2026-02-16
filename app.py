@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, send_file, abort, session, make_response, jsonify
+from flask import Flask, render_template, request, redirect, url_for, flash, send_file, abort, session, make_response, jsonify, current_app
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from datetime import datetime, date
@@ -983,9 +983,21 @@ def photos_filtered_zip():
             company_part = (rec.company or "SEM_EMPRESA").replace("/", "-") if rec else "SEM_EMPRESA"
             map_part = (rec.map or "SEM_MAP").replace("/", "-") if rec else "SEM_MAP"
             device_part = (rec.device or f"ID-{photo.record_id}").replace("/", "-") if rec else f"ID-{photo.record_id}"
-            safe_filename = photo.filename or f"foto_{photo.id}.jpg"
-            zip_path = f"{company_part}/{map_part}/{device_part}/ID-{photo.record_id}_PH-{photo.id}_{safe_filename}"
-            zf.writestr(zip_path, photo.data)
+            safe_filename = photo.filename or f"foto_{photo.id}.jpg"            zip_path = f"{company_part}/{map_part}/{device_part}/ID-{photo.record_id}_PH-{photo.id}_{safe_filename}"
+            try:
+                payload = None
+                # Prefer DB data when present; if cleared after R2 upload, fetch from R2.
+                if photo.data and len(photo.data) > 0:
+                    payload = photo.data
+                elif getattr(photo, 'r2_key', None):
+                    payload = r2_get_bytes(photo.r2_key)
+                if not payload:
+                    current_app.logger.warning(f"[ZIP] Missing payload for photo id={photo.id} record_id={photo.record_id} r2_key={photo.r2_key}")
+                    continue
+                zf.writestr(zip_path, payload)
+            except Exception as e:
+                current_app.logger.exception(f"[ZIP] Failed to add photo id={photo.id} to zip: {e}")
+                continue
 
     mem.seek(0)
     return send_file(
