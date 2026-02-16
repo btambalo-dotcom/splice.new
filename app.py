@@ -8,7 +8,6 @@ import os
 from fpdf import FPDF
 from werkzeug.utils import secure_filename
 from io import BytesIO
-import io
 import zipfile
 import hashlib
 from PIL import Image, ImageOps
@@ -51,23 +50,18 @@ def process_uploaded_photo(file_storage, max_size=(1600, 1600), quality=80, thum
         # garante formato compatível
         img = img.convert("RGB")
 
-        max_side = int(os.environ.get("UPLOAD_IMAGE_MAX_SIDE", "1600"))
-        jpg_quality = int(os.environ.get("UPLOAD_IMAGE_JPEG_QUALITY", "80"))
-        thumb_side = int(os.environ.get("UPLOAD_THUMB_MAX_SIDE", "420"))
-        thumb_quality = int(os.environ.get("UPLOAD_THUMB_JPEG_QUALITY", "70"))
-
         # FULL (já comprimida)
         full = img.copy()
-        full.thumbnail((max_side, max_side))
+        full.thumbnail(max_size)
         buf = BytesIO()
-        full.save(buf, format="JPEG", quality=jpg_quality, optimize=True, progressive=True)
+        full.save(buf, format="JPEG", quality=quality, optimize=True)
         full_bytes = buf.getvalue()
 
         # THUMB
         thumb = img.copy()
-        thumb.thumbnail((thumb_side, thumb_side))
+        thumb.thumbnail(thumb_max_size)
         buf2 = BytesIO()
-        thumb.save(buf2, format="JPEG", quality=thumb_quality, optimize=True, progressive=True)
+        thumb.save(buf2, format="JPEG", quality=thumb_quality, optimize=True)
         thumb_bytes = buf2.getvalue()
 
         base_name, _ = os.path.splitext(file_storage.filename or "foto.jpg")
@@ -195,7 +189,7 @@ def optimize_upload_bytes(file_bytes: bytes, original_content_type: str) -> tupl
         return file_bytes, (original_content_type or "application/octet-stream")
 
 
-def enqueue_r2_upload(photo_id: int, key: str, data: bytes, content_type: str, thumb_key: str | None = None, thumb_bytes: bytes | None = None, thumb_content_type: str | None = None):
+def enqueue_r2_upload(photo_id: int, key: str, data: bytes, content_type: str):
     """Upload to R2 in a background thread (NOLOSS).
 
     IMPORTANT:
@@ -225,27 +219,15 @@ def enqueue_r2_upload(photo_id: int, key: str, data: bytes, content_type: str, t
                 if p.r2_key:
                     return
 
-                # Upload bytes to R2 (original + thumbnail)
+                # Upload bytes to R2
                 r2_put_bytes(key, data, content_type=content_type)
-
-                if thumb_key and thumb_bytes:
-                    # thumbnail always jpeg by default
-                    r2_put_bytes(thumb_key, thumb_bytes, content_type=(thumb_content_type or "image/jpeg"))
-                    p.r2_thumb_key = thumb_key
 
                 # Mark uploaded
                 p.r2_key = key
                 if os.environ.get("CLEAR_DB_AFTER_R2", "0") == "1":
                     p.data = b""
-                    try:
-                        p.thumb_data = None
-                    except Exception:
-                        pass
                 db.session.commit()
-                if thumb_key and thumb_bytes:
-                    print(f"[R2] Uploaded photo id={photo_id} -> key={key} (thumb={thumb_key})")
-                else:
-                    print(f"[R2] Uploaded photo id={photo_id} -> key={key}")
+                print(f"[R2] Uploaded photo id={photo_id} -> key={key}")
         except Exception as e:
             print(f"[R2] Upload failed for photo id={photo_id} key={key}: {e}")
             traceback.print_exc()
@@ -920,30 +902,32 @@ def record_add_photos(rid: int):
             # Performance + NOLOSS:
             # 1) Always store *optimized* bytes in Postgres (fast + guarantees we never lose the photo).
             # 2) If R2 is configured, upload to R2 in a background thread and then set r2_key.
-            filename, content_type, data, thumb_data, thumb_ct = process_uploaded_photo(f)
-            if not data:
+            raw = f.read()
+            if not raw:
                 continue
+            filename = (f.filename or "photo").strip()
+            optimized, content_type = optimize_upload_bytes(raw, getattr(f, "mimetype", None))
 
+            # Do NOT generate thumbnail at upload time (keeps it fast). Thumbs are generated lazily on demand.
             photo = RecordPhoto(
                 record_id=rec.id,
                 filename=filename,
                 content_type=content_type,
-                data=data if data else b"",  # NOT NULL constraint
-                thumb_data=thumb_data,
-                thumb_content_type=thumb_ct,
+                data=optimized if optimized else b"",  # NOT NULL constraint
+                thumb_data=None,
+                thumb_content_type=None,
                 r2_key=None,
                 r2_thumb_key=None,
-                size_bytes=int(len(data) if data else 0),
+                size_bytes=int(len(optimized) if optimized else 0),
             )
 
             db.session.add(photo)
             db.session.flush()
 
-            if r2_enabled() and data:
+            if r2_enabled() and optimized:
                 try:
                     key = r2_key_for_record_photo(rec.id, filename)
-                    thumb_key = key + ".thumb.jpg" if thumb_data else None
-                    enqueue_r2_upload(int(photo.id), key, data, content_type, thumb_key=thumb_key, thumb_bytes=thumb_data, thumb_content_type=thumb_ct)
+                    enqueue_r2_upload(int(photo.id), key, optimized, content_type)
                 except Exception as e:
                     print(f"[R2] Failed to enqueue upload for photo id={getattr(photo,'id',None)}: {e}")
                     traceback.print_exc()
@@ -1259,30 +1243,15 @@ def entry():
                 filename, content_type, data, thumb_data, thumb_ct = process_uploaded_photo(f)
                 if not data:
                     continue
-
                 photo = RecordPhoto(
                     record_id=rec.id,
                     filename=filename[:255],
                     content_type=content_type,
-                    data=data if data else b"",
+                    data=data,
                     thumb_data=thumb_data,
                     thumb_content_type=thumb_ct,
-                    r2_key=None,
-                    r2_thumb_key=None,
-                    size_bytes=int(len(data) if data else 0),
                 )
                 db.session.add(photo)
-                db.session.flush()
-
-                if r2_enabled() and data:
-                    try:
-                        key = r2_key_for_record_photo(rec.id, filename)
-                        thumb_key = key + ".thumb.jpg" if thumb_data else None
-                        enqueue_r2_upload(int(photo.id), key, data, content_type, thumb_key=thumb_key, thumb_bytes=thumb_data, thumb_content_type=thumb_ct)
-                    except Exception as e:
-                        print(f"[R2] Failed to enqueue upload for photo id={getattr(photo,'id',None)}: {e}")
-                        traceback.print_exc()
-
             db.session.commit()
 
         # Modo rápido: memoriza última seleção (somente para splicer)
