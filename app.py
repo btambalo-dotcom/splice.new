@@ -14,6 +14,8 @@ from PIL import Image, ImageOps
 from functools import wraps
 import csv
 import threading
+import time
+import traceback
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
 import re
@@ -190,24 +192,45 @@ def optimize_upload_bytes(file_bytes: bytes, original_content_type: str) -> tupl
 def enqueue_r2_upload(photo_id: int, key: str, data: bytes, content_type: str):
     """Upload to R2 in a background thread (NOLOSS).
 
-    We keep the compressed bytes in Postgres as a fallback. When upload succeeds we set r2_key.
-    Optionally clear DB bytes with CLEAR_DB_AFTER_R2=1.
+    IMPORTANT:
+    - On the create-photo request we may enqueue before the DB transaction commits.
+      On Render/Gunicorn, the background thread uses a new DB connection, so it may not
+      see the photo row immediately.
+    - We retry a few times to wait for commit, then upload and update r2_key.
+    - We ALWAYS log errors to Render logs (stdout) to avoid silent failures.
     """
     if not r2_enabled():
+        print("[R2] Disabled (missing env vars). Skipping upload.")
         return
 
     def _worker():
         try:
             with app.app_context():
-                p = RecordPhoto.query.get(photo_id)
-                if not p or p.r2_key:
+                # Wait a bit for the photo row to become visible (transaction commit)
+                p = None
+                for _ in range(int(os.environ.get("R2_DB_RETRY_ATTEMPTS", "40"))):
+                    p = RecordPhoto.query.get(photo_id)
+                    if p is not None:
+                        break
+                    time.sleep(float(os.environ.get("R2_DB_RETRY_SLEEP", "0.25")))
+                if not p:
+                    print(f"[R2] Photo id={photo_id} not found after retries. Skipping.")
                     return
+                if p.r2_key:
+                    return
+
+                # Upload bytes to R2
                 r2_put_bytes(key, data, content_type=content_type)
+
+                # Mark uploaded
                 p.r2_key = key
                 if os.environ.get("CLEAR_DB_AFTER_R2", "0") == "1":
                     p.data = b""
                 db.session.commit()
-        except Exception:
+                print(f"[R2] Uploaded photo id={photo_id} -> key={key}")
+        except Exception as e:
+            print(f"[R2] Upload failed for photo id={photo_id} key={key}: {e}")
+            traceback.print_exc()
             try:
                 with app.app_context():
                     db.session.rollback()
@@ -215,6 +238,7 @@ def enqueue_r2_upload(photo_id: int, key: str, data: bytes, content_type: str):
                 pass
 
     threading.Thread(target=_worker, daemon=True).start()
+
 
 # --------- Models ---------
 class User(UserMixin, db.Model):
@@ -904,8 +928,9 @@ def record_add_photos(rid: int):
                 try:
                     key = r2_key_for_record_photo(rec.id, filename)
                     enqueue_r2_upload(int(photo.id), key, optimized, content_type)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[R2] Failed to enqueue upload for photo id={getattr(photo,'id',None)}: {e}")
+                    traceback.print_exc()
 
             created.append(int(photo.id))
         db.session.commit()
