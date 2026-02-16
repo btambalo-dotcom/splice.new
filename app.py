@@ -785,6 +785,9 @@ def build_filtered_record_query_from_request():
         except ValueError:
             pass
 
+    return query
+
+
 @app.route("/photo/<int:photo_id>")
 @login_required
 def photo_file(photo_id: int):
