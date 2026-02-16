@@ -1044,7 +1044,11 @@ def photos_filtered_zip():
 @app.route("/record/<int:rid>/photos_zip")
 @login_required
 def record_photos_zip(rid):
-    """Gera um .zip com TODAS as fotos de um único lançamento (record)."""
+    """Gera um .zip com TODAS as fotos de um único lançamento (record).
+
+    IMPORTANT: when CLEAR_DB_AFTER_R2=1 the binary data may have been cleared from Postgres.
+    In that case, we fetch the original bytes from Cloudflare R2 using photo.r2_key.
+    """
     record = Record.query.get_or_404(rid)
 
     photos = (
@@ -1059,16 +1063,37 @@ def record_photos_zip(rid):
         return redirect(request.referrer or url_for("index"))
 
     mem = BytesIO()
+    skipped = 0
     with zipfile.ZipFile(mem, "w", zipfile.ZIP_DEFLATED) as zf:
         for photo in photos:
             safe_filename = photo.filename or f"foto_{photo.id}.jpg"
             device_part = (record.device or f"ID-{record.id}").replace("/", "-")
             zip_path = f"{device_part}/ID-{record.id}_PH-{photo.id}_{safe_filename}"
-            zf.writestr(zip_path, photo.data)
+
+            payload = b""
+            try:
+                if photo.data and isinstance(photo.data, (bytes, bytearray)) and len(photo.data) > 10:
+                    payload = bytes(photo.data)
+                elif getattr(photo, "r2_key", None):
+                    payload = r2_get_bytes(photo.r2_key)
+            except Exception as e:
+                print(f"[ZIP] Failed to fetch photo id={photo.id} r2_key={getattr(photo,'r2_key',None)}: {e}")
+                traceback.print_exc()
+                payload = b""
+
+            # Avoid writing empty/invalid files into the zip
+            if not payload or len(payload) < 10:
+                skipped += 1
+                continue
+
+            zf.writestr(zip_path, payload)
 
     mem.seek(0)
     ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
     zip_name = f"fotos_dispositivo_{(record.device or record.id)}_{ts}.zip"
+
+    if skipped and len(photos) == skipped:
+        flash("Não foi possível montar o ZIP (fotos vazias). Verifique R2 e r2_key.", "danger")
 
     return send_file(
         mem,
