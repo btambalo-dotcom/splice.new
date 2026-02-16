@@ -165,7 +165,14 @@ def r2_get_bytes(key: str) -> bytes:
     if c is None:
         raise RuntimeError("R2 is not enabled")
     obj = c.get_object(Bucket=r2_bucket(), Key=key)
-    return obj["Body"].read()
+    body = obj.get("Body")
+    if body is None:
+        return b""
+    if hasattr(body, "read"):
+        return body.read()
+    if isinstance(body, (bytes, bytearray)):
+        return bytes(body)
+    return str(body).encode("utf-8", errors="ignore")
 
 def r2_key_for_record_photo(record_id: int, filename: str) -> str:
     safe = re.sub(r"[^a-zA-Z0-9._-]+", "_", (filename or "photo"))
@@ -988,14 +995,37 @@ def photos_filtered_zip():
             try:
                 payload = None
                 # Prefer DB data when present; if cleared after R2 upload, fetch from R2.
-                if photo.data and len(photo.data) > 0:
-                    payload = photo.data
-                elif getattr(photo, 'r2_key', None):
+                if photo.data:
+                    payload = bytes(photo.data)
+                elif getattr(photo, "r2_key", None):
                     payload = r2_get_bytes(photo.r2_key)
-                if not payload:
-                    current_app.logger.warning(f"[ZIP] Missing payload for photo id={photo.id} record_id={photo.record_id} r2_key={photo.r2_key}")
+
+                # Guarantee bytes
+                if hasattr(payload, "read"):
+                    payload = payload.read()
+                if isinstance(payload, str):
+                    payload = payload.encode("utf-8", errors="ignore")
+                if payload is None:
+                    current_app.logger.warning(
+                        f"[ZIP] Missing payload for photo id={photo.id} record_id={photo.record_id} r2_key={getattr(photo,'r2_key',None)}"
+                    )
                     continue
+                if not isinstance(payload, (bytes, bytearray)):
+                    try:
+                        payload = bytes(payload)
+                    except Exception:
+                        payload = str(payload).encode("utf-8", errors="ignore")
+
+                if len(payload) == 0:
+                    current_app.logger.warning(
+                        f"[ZIP] Empty payload for photo id={photo.id} record_id={photo.record_id} r2_key={getattr(photo,'r2_key',None)}"
+                    )
+                    continue
+
                 zf.writestr(zip_path, payload)
+            except Exception as e:
+                current_app.logger.exception(f"[ZIP] Failed to add photo id={photo.id} to zip: {e}")
+                continue
             except Exception as e:
                 current_app.logger.exception(f"[ZIP] Failed to add photo id={photo.id} to zip: {e}")
                 continue
