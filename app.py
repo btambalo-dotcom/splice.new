@@ -2199,7 +2199,15 @@ def export_invoice():
     # OBS: FPDF "cell" não faz quebra de linha. Para não "estourar" a tabela e
     # mostrar o nome COMPLETO do device dentro da coluna, vamos desenhar a linha
     # com multi_cell e quebra manual (principalmente em '_' e '-').
-    col_widths = [40, 70, 12, 12, 16, 20, 20]
+    # Ajuste importante: a coluna "Tipo" (ex: FRONT/MEIO/PONTA) estava estreita
+    # e o FPDF quebrava o texto automaticamente, mas o cálculo de altura da linha
+    # (row_h) não considerava essa quebra. Isso fazia o texto "vazar"/"picotar"
+    # e aparentar que a palavra estava quebrando a coluna.
+    #
+    # Solução simples e segura: aumentar a largura de "Tipo" para caber o texto
+    # sem quebra, reduzindo um pouco a largura do "Device" para manter a tabela
+    # dentro da largura útil da página.
+    col_widths = [40, 64, 18, 12, 16, 20, 20]
     headers = ["Map", "Device", "Tipo", "Incl.", "Splices", "Device price", "Total"]
 
     pdf.set_font("Arial", "B", 10)
