@@ -3,6 +3,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from datetime import datetime, date
 from sqlalchemy import text, case, or_, inspect, func
+from sqlalchemy.orm import deferred
 import os
 from fpdf import FPDF
 from werkzeug.utils import secure_filename
