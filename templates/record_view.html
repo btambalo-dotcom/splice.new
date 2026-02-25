@@ -69,6 +69,12 @@
         <a href="{{ url_for('index') }}" class="btn btn-outline-light btn-sm">
           Voltar para Produção
         </a>
+        {% if map_id_for_button %}
+        <a href="{{ url_for('map_view', map_id=map_id_for_button, focus_record=rec.id) }}"
+           class="btn btn-outline-info btn-sm">
+          Voltar para o mapa
+        </a>
+        {% endif %}
       </div>
     </div>
   </div>
