@@ -253,6 +253,10 @@
     let markersLayer = L.layerGroup();
     let currentFocusRecordId = initialFocusRecordId;
 
+    // Marcador da localização atual do usuário (GPS)
+    let userLocationMarker = null;
+    let userLocationCircle = null;
+
     function initMap() {
       leafletMap = L.map('map').setView([0, 0], 2);
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -262,9 +266,63 @@
 
       markersLayer.addTo(leafletMap);
       loadMarkers();
+
+      // Após carregar o mapa, tenta mostrar a localização atual do usuário (GPS)
+      tryLocateUser(true);
     }
 
 
+
+
+    // Usa a API de geolocalização do navegador para mostrar a posição atual do usuário
+    function tryLocateUser(centerOnFirst) {
+      if (!navigator.geolocation) {
+        console.warn('Geolocalização não suportada pelo navegador.');
+        return;
+      }
+
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          const accuracy = pos.coords.accuracy || 30;
+          const latLng = [lat, lng];
+
+          // Cria ou atualiza o marcador de "minha localização"
+          if (!userLocationMarker) {
+            userLocationMarker = L.marker(latLng, {
+              title: 'Minha localização',
+            }).bindPopup('Minha localização atual');
+            userLocationMarker.addTo(leafletMap);
+          } else {
+            userLocationMarker.setLatLng(latLng);
+          }
+
+          // Cria ou atualiza o círculo de precisão
+          if (!userLocationCircle) {
+            userLocationCircle = L.circle(latLng, {
+              radius: accuracy,
+            });
+            userLocationCircle.addTo(leafletMap);
+          } else {
+            userLocationCircle.setLatLng(latLng);
+            userLocationCircle.setRadius(accuracy);
+          }
+
+          // Na primeira vez, centraliza o mapa na posição do usuário
+          if (centerOnFirst && leafletMap) {
+            leafletMap.setView(latLng, 18);
+          }
+        },
+        (err) => {
+          console.warn('Erro ao obter geolocalização:', err);
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 15000,
+        }
+      );
+    }
 
     // Gera uma cor estável por nome de seção (HSL baseado em hash) para fallback
     function autoColorForSection(name) {
