@@ -1,0 +1,203 @@
+{% extends 'base.html' %}
+{% block title %}Dispositivo {{ rec.device or ('#' ~ rec.id) }} · SPLICER{% endblock %}
+
+{% block content %}
+<h3 class="mb-3">Dispositivo · {{ rec.device or ('ID ' ~ rec.id) }}</h3>
+
+<div class="row g-4">
+  <div class="col-lg-6">
+    <div class="card p-3">
+      <h5 class="mb-3">Informações gerais</h5>
+      <dl class="row mb-0 small">
+        <dt class="col-4">ID</dt>
+        <dd class="col-8">{{ rec.id }}</dd>
+
+        <dt class="col-4">Empresa</dt>
+        <dd class="col-8">{{ rec.company or '-' }}</dd>
+
+        <dt class="col-4">Projeto</dt>
+        <dd class="col-8">
+          {% if rec.project %}
+            {{ rec.project.name }} ({{ rec.project.company }})
+          {% else %}
+            —
+          {% endif %}
+        </dd>
+
+        <dt class="col-4">Map</dt>
+        <dd class="col-8">{{ rec.map or '-' }}</dd>
+
+        <dt class="col-4">Splicer</dt>
+        <dd class="col-8">{{ rec.splicer or '-' }}</dd>
+
+        <dt class="col-4">Data</dt>
+        <dd class="col-8">
+          {% if rec.created_date %}
+            {{ rec.created_date.date().isoformat() }}
+          {% else %}
+            —
+          {% endif %}
+        </dd>
+
+        <dt class="col-4">Device type</dt>
+        <dd class="col-8">{{ rec.type or '-' }}</dd>
+
+        <dt class="col-4">Splices</dt>
+        <dd class="col-8">{{ rec.splices or 0 }}</dd>
+
+        <dt class="col-4">Observações</dt>
+        <dd class="col-8">{{ rec.device_info or '-' }}</dd>
+
+        <dt class="col-4">Coordenadas</dt>
+        <dd class="col-8">
+          {% if rec.latitude and rec.longitude %}
+            {{ '%.6f'|format(rec.latitude) }}, {{ '%.6f'|format(rec.longitude) }}
+            <br>
+            <a href="https://www.google.com/maps?q={{ rec.latitude }},{{ rec.longitude }}" target="_blank" class="btn btn-sm btn-outline-info mt-1">
+              Abrir no Google Maps
+            </a>
+          {% else %}
+            —
+          {% endif %}
+        </dd>
+      </dl>
+
+      <div class="mt-3">
+        <a href="{{ url_for('record_edit', rid=rec.id) }}" class="btn btn-primary btn-sm me-2">
+          Editar lançamento
+        </a>
+        <a href="{{ url_for('index') }}" class="btn btn-outline-light btn-sm">
+          Voltar para Produção
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card p-3">
+      <h5 class="mb-3">Teste de nível (light levels)</h5>
+
+      <form id="test-form" enctype="multipart/form-data">
+        <div class="mb-2 small text-muted">
+          Preencha um nível por fusão. O sistema salva em CSV no campo <code>test_levels</code>.
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Níveis de teste (um por fusão)</label>
+          <div id="test-levels-container"></div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Fotos do teste (opcional, até 5)</label>
+          <input type="file" class="form-control form-control-sm" id="test-photos" name="photos" multiple accept="image/*">
+        </div>
+
+        <button type="submit" class="btn btn-primary">
+          Salvar teste
+        </button>
+        {% if rec.test_done %}
+          <span class="badge bg-success ms-2">Teste já concluído</span>
+        {% endif %}
+      </form>
+    </div>
+  </div>
+</div>
+
+{% if rec.photos|length > 0 %}
+<div class="card mt-4 p-3">
+  <h5 class="mb-3">Fotos do dispositivo</h5>
+  <div class="row g-3">
+    {% for p in rec.photos %}
+      <div class="col-md-3 col-6">
+        <a href="{{ url_for('photo_file', photo_id=p.id) }}" target="_blank">
+          <img src="{{ url_for('photo_file', photo_id=p.id, size='thumb') }}"
+               class="img-fluid rounded border"
+               alt="Foto {{ loop.index }}">
+        </a>
+        {% if p.is_test %}
+          <div class="small text-success mt-1">Foto de teste</div>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  const totalSplices = {{ rec.splices or 0 }};
+  const existingLevelsCsv = {{ (rec.test_levels or '')|tojson }};
+  const container = document.getElementById('test-levels-container');
+
+  function buildInputs() {
+    container.innerHTML = '';
+    const levels = (existingLevelsCsv || '').split(',').map(s => s.trim()).filter(s => s.length > 0);
+    const n = Math.max(totalSplices || 0, levels.length || 0);
+
+    for (let i = 0; i < n; i++) {
+      const row = document.createElement('div');
+      row.className = 'mb-1';
+
+      const label = document.createElement('label');
+      label.className = 'form-label small mb-0';
+      label.textContent = 'Fusão #' + (i + 1);
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'form-control form-control-sm bg-dark text-light border-secondary test-level-input';
+      input.value = levels[i] || '';
+
+      row.appendChild(label);
+      row.appendChild(input);
+      container.appendChild(row);
+    }
+
+    if (n === 0) {
+      // Pelo menos um campo vazio para o usuário preencher
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'form-control form-control-sm bg-dark text-light border-secondary test-level-input';
+      container.appendChild(input);
+    }
+  }
+
+  buildInputs();
+
+  const form = document.getElementById('test-form');
+  form.addEventListener('submit', async function (ev) {
+    ev.preventDefault();
+
+    const inputs = Array.from(document.querySelectorAll('.test-level-input'));
+    const levels = inputs.map(i => i.value.trim()).join(',');
+
+    const formData = new FormData();
+    formData.append('levels', levels);
+
+    const photosInput = document.getElementById('test-photos');
+    if (photosInput && photosInput.files) {
+      Array.from(photosInput.files).slice(0, 5).forEach(f => {
+        formData.append('photos', f);
+      });
+    }
+
+    try {
+      const resp = await fetch("{{ url_for('api_save_record_test', record_id=rec.id) }}", {
+        method: 'POST',
+        body: formData
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        alert('Teste salvo com sucesso.');
+        // Opcional: marcar visualmente como concluído sem recarregar
+      } else {
+        alert(data.error || 'Erro ao salvar teste.');
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Erro de comunicação ao salvar teste.');
+    }
+  });
+});
+</script>
+
+{% endblock %}
