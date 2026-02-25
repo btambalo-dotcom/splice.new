@@ -682,6 +682,7 @@ with app.app_context():
     ensure("company_map", "mid_end_enabled", "BOOLEAN")
     ensure("company_map", "included_splices_meio", "INTEGER")
     ensure("company_map", "included_splices_ponta", "INTEGER")
+    ensure("company_map", "section_colors_json", "TEXT")
     ensure("record_photo", "thumb_data", "BYTEA")
     ensure("record_photo", "thumb_content_type", "VARCHAR(100)")
     ensure("record_photo", "is_test", "BOOLEAN")
