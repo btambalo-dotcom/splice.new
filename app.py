@@ -1895,7 +1895,7 @@ def record_edit(rid):
 
 @app.route("/photo/<int:photo_id>/delete", methods=["POST"])
 @login_required
-def photo_delete(photo_id: int):
+def delete_photo(photo_id: int):
     """
     Exclui uma foto específica de um lançamento.
 
