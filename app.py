@@ -1892,6 +1892,48 @@ def record_edit(rid):
 
 @app.route("/record/<int:rid>/view")
 @login_required
+
+@app.route("/photo/<int:photo_id>/delete", methods=["POST"])
+@login_required
+def photo_delete(photo_id: int):
+    """
+    Exclui uma foto específica de um lançamento.
+
+    Regras:
+    - Admin pode sempre excluir;
+    - Dono de empresa (company_owner) nunca pode excluir;
+    - Splicer comum pode excluir se tiver acesso ao mapa do registro
+      e for o splicer responsável pelo lançamento (quando preenchido).
+    """
+    photo = RecordPhoto.query.get_or_404(photo_id)
+    rec = photo.record
+
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_owner = bool(getattr(current_user, "is_company_owner", False))
+
+    # Dono de empresa nunca pode editar/excluir
+    if is_owner and not is_admin:
+        abort(403)
+
+    if not is_admin:
+        # Garante acesso ao mapa (mesma lógica usada em outras rotas)
+        mp = None
+        if rec.map:
+            mp = CompanyMap.query.filter_by(name=rec.map, company=rec.company).first()
+        if mp is not None:
+            ensure_map_access(mp)
+
+        # Se o lançamento tem splicer definido, precisa ser o mesmo usuário
+        current_splicer = (getattr(current_user, "splicer_name", None) or current_user.username or "").strip()
+        if rec.splicer and rec.splicer.strip() and rec.splicer.strip() != current_splicer:
+            abort(403)
+
+    db.session.delete(photo)
+    db.session.commit()
+    flash("Foto removida.", "success")
+    return redirect(request.referrer or url_for("record_view", rid=rec.id))
+
+
 def record_view(rid):
     """Página de detalhes de um dispositivo (registro) para ver e lançar testes.
 

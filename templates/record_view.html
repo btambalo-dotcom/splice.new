@@ -123,6 +123,17 @@
         {% if p.is_test %}
           <div class="small text-success mt-1">Foto de teste</div>
         {% endif %}
+        {% if can_edit_photos %}
+          <form method="post"
+                action="{{ url_for('photo_delete', photo_id=p.id) }}"
+                class="mt-1">
+            <button type="submit"
+                    class="btn btn-sm btn-outline-danger w-100"
+                    onclick="return confirm('Excluir esta foto?');">
+              Excluir foto
+            </button>
+          </form>
+        {% endif %}
       </div>
     {% endfor %}
   </div>
