@@ -22,7 +22,7 @@
         {% endif %}
         <div class="mb-3">
           <label class="form-label">Empresa</label>
-          <select id="company-select" class="form-control" {% if not is_edit %}name="company" required{% endif %} {% if is_edit %}disabled{% endif %}>
+          <select name="company" id="company-select" class="form-control" required>
             <option value="">Selecione a empresa</option>
             {% for c in companies %}
               <option value="{{ c }}" {% if form_company is defined and form_company == c %}selected{% endif %}>{{ c }}</option>
@@ -32,7 +32,7 @@
         {% if not is_splicer %}
         <div class="mb-3">
           <label class="form-label">Projeto</label>
-          <select id="project-select" class="form-control" {% if not is_edit %}name="project_id"{% endif %}>
+          <select name="project_id" id="project-select" class="form-control">
             <option value="">Sem projeto (valores da empresa)</option>
           </select>
           <div class="form-text">Selecione o projeto para aplicar a tabela de valores correta.</div>
@@ -44,7 +44,7 @@
         <div class="mb-3">
           <label class="form-label">Map</label>
           <input type="hidden" name="map" id="map-name-hidden" value="">
-          <select id="map-select" class="form-control" {% if not is_edit %}name="map_id" required{% endif %} {% if is_edit %}disabled{% endif %}>
+          <select name="map_id" id="map-select" class="form-control" required>
             <option value="">Selecione a empresa primeiro</option>
           </select>
         </div>
