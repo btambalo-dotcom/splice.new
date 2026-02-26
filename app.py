@@ -1757,7 +1757,37 @@ def record_edit(rid):
             today = date.today()
             created_date = datetime(today.year, today.month, today.day)
 
-        price_splices, price_device, total = compute_prices(splices, device_for_price, company, project_id)
+        # --- Regras MEIO/PONTA também na edição ---
+        map_role = (request.form.get("map_role") or rec.map_role or "").strip().upper() or None
+
+        map_cfg = None
+        if map_val and company:
+            q = CompanyMap.query.filter_by(company=company, name=map_val)
+            if project_id is not None:
+                q = q.filter_by(project_id=project_id)
+            map_cfg = q.first()
+            if not map_cfg:
+                map_cfg = CompanyMap.query.filter_by(company=company, name=map_val, project_id=None).first()
+
+        if map_cfg and bool(getattr(map_cfg, "mid_end_enabled", False)) and map_role not in ("MEIO", "PONTA"):
+            flash("Este mapa exige selecionar MEIO ou PONTA.", "danger")
+            return redirect(url_for("record_edit", rid=rec.id))
+
+        included_override, included_applied, map_cfg = resolve_included_override(
+            company,
+            project_id,
+            map_cfg,
+            map_val,
+            map_role,
+        )
+
+        price_splices, price_device, total = compute_prices(
+            splices,
+            device_for_price,
+            company,
+            project_id,
+            included_override=included_override,
+        )
 
         rec.company = company
         rec.project_id = project_id
@@ -1767,6 +1797,8 @@ def record_edit(rid):
         rec.splices = splices
         rec.splicer = splicer
         rec.created_date = created_date
+        rec.map_role = map_role
+        rec.included_splices_applied = included_applied
         rec.price_splices_usd = price_splices
         rec.price_device_usd = price_device
         rec.total_usd = total
