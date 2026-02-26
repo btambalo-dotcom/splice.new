@@ -798,6 +798,36 @@ def tier_price_for(count: int, company: str | None, project_id: int | None = Non
     return float(tier.price_per_splice_usd) if tier else 0.0
 
 
+
+def resolve_included_override(company: str | None, project_id: int | None, map_obj, map_val: str | None, map_role: str | None):
+    """
+    Resolve quantas fusões inclusas devem ser aplicadas para este lançamento,
+    levando em conta configuração MEIO/PONTA do mapa.
+
+    Retorna (included_override, included_applied, map_cfg_obj).
+    """
+    map_cfg = map_obj
+    # tenta buscar pelo nome, garantindo que sempre encontramos o CompanyMap correto
+    if not map_cfg and map_val and company:
+        q = CompanyMap.query.filter_by(company=company, name=map_val)
+        if project_id is not None:
+            q = q.filter_by(project_id=project_id)
+        map_cfg = q.first()
+        if not map_cfg:
+            map_cfg = CompanyMap.query.filter_by(company=company, name=map_val, project_id=None).first()
+
+    included_override = None
+    included_applied = None
+
+    if map_cfg and bool(getattr(map_cfg, "mid_end_enabled", False)) and map_role in ("MEIO", "PONTA"):
+        if map_role == "MEIO":
+            included_override = int(getattr(map_cfg, "included_splices_meio", 0) or 0)
+        else:
+            included_override = int(getattr(map_cfg, "included_splices_ponta", 0) or 0)
+        included_applied = included_override
+
+    return included_override, included_applied, map_cfg
+
 def compute_prices(
     splices: int,
     device_name: str,
@@ -1505,23 +1535,29 @@ def entry():
         # o usuário precisa escolher e o sistema aplica as fusões inclusas do mapa.
         map_role = (request.form.get("map_role") or "").strip().upper() or None
 
+        # Regras de MEIO/PONTA por mapa:
+        # 1) descobre o CompanyMap correto
         map_cfg = map_obj
         if not map_cfg and map_val and company:
-            map_cfg = CompanyMap.query.filter_by(company=company, name=map_val, project_id=project_id).first()
+            q = CompanyMap.query.filter_by(company=company, name=map_val)
+            if project_id is not None:
+                q = q.filter_by(project_id=project_id)
+            map_cfg = q.first()
             if not map_cfg:
                 map_cfg = CompanyMap.query.filter_by(company=company, name=map_val, project_id=None).first()
 
-        included_override = None
-        included_applied = None
-        if map_cfg and bool(getattr(map_cfg, "mid_end_enabled", False)):
-            if map_role not in ("MEIO", "PONTA"):
-                flash("Este mapa exige selecionar MEIO ou PONTA.", "danger")
-                return redirect(entry_url)
-            if map_role == "MEIO":
-                included_override = int(getattr(map_cfg, "included_splices_meio", 0) or 0)
-            else:
-                included_override = int(getattr(map_cfg, "included_splices_ponta", 0) or 0)
-            included_applied = included_override
+        # Se o mapa estiver configurado para MEIO/PONTA, o campo passa a ser obrigatório
+        if map_cfg and bool(getattr(map_cfg, "mid_end_enabled", False)) and map_role not in ("MEIO", "PONTA"):
+            flash("Este mapa exige selecionar MEIO ou PONTA.", "danger")
+            return redirect(entry_url)
+
+        included_override, included_applied, map_cfg = resolve_included_override(
+            company,
+            project_id,
+            map_cfg,
+            map_val,
+            map_role,
+        )
 
         price_splices, price_device, total = compute_prices(
             splices,
@@ -3328,21 +3364,17 @@ def api_update_record_from_map(record_id):
     project_id = rec.project_id
     device_for_price = rec.type or rec.device
 
+    
     included_override = None
     included_applied = None
 
-    map_cfg = None
-    if rec.map and company:
-        map_cfg = CompanyMap.query.filter_by(company=company, name=rec.map, project_id=project_id).first()
-        if not map_cfg:
-            map_cfg = CompanyMap.query.filter_by(company=company, name=rec.map, project_id=None).first()
-
-    if map_cfg and bool(getattr(map_cfg, "mid_end_enabled", False)) and rec.map_role in ("MEIO", "PONTA"):
-        if rec.map_role == "MEIO":
-            included_override = int(getattr(map_cfg, "included_splices_meio", 0) or 0)
-        else:
-            included_override = int(getattr(map_cfg, "included_splices_ponta", 0) or 0)
-        included_applied = included_override
+    included_override, included_applied, map_cfg = resolve_included_override(
+        company,
+        project_id,
+        None,
+        rec.map,
+        rec.map_role,
+    )
 
     price_splices, price_device, total = compute_prices(
         int(rec.splices or 0),
