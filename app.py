@@ -1891,46 +1891,46 @@ def record_edit(rid):
 
 
 
-        @app.route("/record/photo/<int:photo_id>/remove", methods=["POST"])
-        @login_required
-        def photo_remove_v2(photo_id: int):
-"""
-Exclui uma foto específica de um lançamento.
+@app.route("/record/photo/<int:photo_id>/remove", methods=["POST"])
+@login_required
+def photo_remove_v2(photo_id: int):
+    """Exclui uma foto específica de um lançamento.
 
-Regras:
-- Admin pode sempre excluir;
-- Dono de empresa (company_owner) nunca pode excluir;
-- Splicer comum pode excluir se tiver acesso ao mapa do registro
-  e for o splicer responsável pelo lançamento (quando preenchido).
-"""
-photo = RecordPhoto.query.get_or_404(photo_id)
-rec = photo.record
+    Regras:
+    - Admin pode sempre excluir;
+    - Dono de empresa (company_owner) nunca pode excluir;
+    - Splicer comum pode excluir se tiver acesso ao mapa do registro
+      e for o splicer responsável pelo lançamento (quando preenchido).
+    """
 
-is_admin = bool(getattr(current_user, "is_admin", False))
-is_owner = bool(getattr(current_user, "is_company_owner", False))
+    photo = RecordPhoto.query.get_or_404(photo_id)
+    rec = photo.record
 
-# Dono de empresa nunca pode editar/excluir
-if is_owner and not is_admin:
-    abort(403)
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_owner = bool(getattr(current_user, "is_company_owner", False))
 
-if not is_admin:
-    # Garante acesso ao mapa (mesma lógica usada em outras rotas)
-    mp = None
-    if rec.map:
-        mp = CompanyMap.query.filter_by(name=rec.map, company=rec.company).first()
-    if mp is not None:
-        ensure_map_access(mp)
-
-    # Se o lançamento tem splicer definido, precisa ser o mesmo usuário
-    current_splicer = (getattr(current_user, "splicer_name", None) or current_user.username or "").strip()
-    if rec.splicer and rec.splicer.strip() and rec.splicer.strip() != current_splicer:
+    # Dono de empresa nunca pode excluir
+    if is_owner and not is_admin:
         abort(403)
 
-db.session.delete(photo)
+    if not is_admin:
+        # Garante acesso ao mapa (mesma lógica usada em outras rotas)
+        mp = None
+        if rec.map:
+            mp = CompanyMap.query.filter_by(name=rec.map, company=rec.company).first()
+        if mp is not None:
+            ensure_map_access(mp)
+
+        # Se o lançamento tem splicer definido, precisa ser o mesmo usuário
+        current_splicer = (getattr(current_user, "splicer_name", None) or current_user.username or "").strip()
+        if rec.splicer and rec.splicer.strip() and rec.splicer.strip() != current_splicer:
+            abort(403)
+
     db.session.delete(photo)
-            db.session.commit()
-            flash("Foto removida.", "success")
-            return redirect(request.referrer or url_for("record_view", rid=rec.id))
+    db.session.commit()
+    flash("Foto removida.", "success")
+    return redirect(request.referrer or url_for("record_view", rid=rec.id))
+
 
 
 @app.route("/record/<int:rid>/view")
@@ -3632,4 +3632,4 @@ if __name__ == "__main__":
 
 @app.route('/__version')
 def __version__():
-    return 'FULL-FIX-503 2026-02-12'
+    return 'PHOTO-REMOVE-V49 2026-02-12'
