@@ -1786,7 +1786,7 @@ def record_edit(rid):
                 return redirect(url_for("map_view", map_id=mp_target.id, focus_record=rec.id))
 
         # Comportamento padrão: volta para a página de visualização do dispositivo
-        return redirect(url_for("record_view", record_id=rec.id))
+        return redirect(url_for("record_view", rid=rec.id))
 
     form_created = rec.created_date.date().isoformat() if rec.created_date else date.today().isoformat()
 
