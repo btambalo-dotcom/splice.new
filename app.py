@@ -956,6 +956,17 @@ def index():
             all_splicers = [enforced_splicer]
             splicer_filter = enforced_splicer
 
+
+    # Mapas que o usuário tem permissão para EDITAR (apenas para splicer comum).
+    editable_maps = []
+    if is_admin:
+        # admin edita tudo; o template ignora esta lista nesse caso
+        editable_maps = []
+    elif not is_owner:
+        try:
+            editable_maps = [m.name for m in getattr(current_user, "maps_with_access", [])]
+        except Exception:
+            editable_maps = []
     return render_template(
         "index.html",
         records=records,
@@ -969,6 +980,7 @@ def index():
         device_filter=device_filter or "",
         start=start_raw or "",
         end=end_raw or "",
+        editable_maps=editable_maps,
     )
 
 def build_filtered_record_query_from_request():
@@ -1677,11 +1689,27 @@ def record_edit(rid):
     """Editar um lançamento existente."""
     rec = Record.query.get_or_404(rid)
 
-    # Apenas admin pode editar um lançamento já criado.
+    # Permissões de edição:
+    # - Admin pode editar qualquer lançamento.
+    # - Dono de empresa (company_owner) apenas visualiza; não pode editar.
+    # - Splicer comum só pode editar se tiver acesso ao mapa deste lançamento.
     is_admin = bool(getattr(current_user, "is_admin", False))
-    if not is_admin:
-        abort(403)
+    is_owner = bool(getattr(current_user, "is_company_owner", False))
 
+    allowed = False
+    if is_admin:
+        allowed = True
+    elif not is_owner:
+        # usuário splicer normal: precisa ter o mapa nas permissões explícitas
+        try:
+            allowed_map_names = {m.name for m in getattr(current_user, "maps_with_access", [])}
+        except Exception:
+            allowed_map_names = set()
+        if rec.map and rec.map in allowed_map_names:
+            allowed = True
+
+    if not allowed:
+        abort(403)
 
     companies = [c.name for c in CompanyConfig.query.order_by(CompanyConfig.name).all()]
 
