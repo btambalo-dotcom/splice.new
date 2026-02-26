@@ -125,7 +125,7 @@
         {% endif %}
         {% if can_edit_photos %}
           <form method="post"
-                action="{{ url_for('remove_photo', photo_id=p.id) }}"
+                action="{{ url_for('photo_remove_v2', photo_id=p.id) }}"
                 class="mt-1">
             <button type="submit"
                     class="btn btn-sm btn-outline-danger w-100"
