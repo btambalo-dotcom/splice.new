@@ -857,28 +857,33 @@ def compute_prices(
     Se included_override vier preenchido, ele tem prioridade (ex.: mapas com regra MEIO/PONTA).
 
     Regras:
-    - Para dispositivos/tipos "CAN" não há cobrança de fusões: apenas valor do dispositivo.
+    - TODAS as tecnologias/tipos (inclusive CAN) seguem a mesma regra de fusões.
     - As faixas de preço ($/fusão) são determinadas pelo TOTAL de fusões do lançamento.
       A quantidade cobrada é (splices - fusões inclusas).
     """
-    name_norm = (device_name or "").strip().upper()
-    # Para CAN: zera cobrança de fusões
-    if name_norm == "CAN" or name_norm.startswith("CAN "):
-        price_splices = 0.0
-        price_device = device_value_for(device_name or "", company, project_id)
-        return price_splices, price_device, price_device
-
     total_splices = int(splices or 0)
-    included = int(included_override) if included_override is not None else included_splices_for(company, project_id)
-    included = max(int(included or 0), 0)
 
+    # Fusões inclusas: override do mapa (MEIO/PONTA) > projeto > empresa > padrão
+    if included_override is not None:
+        included = int(included_override or 0)
+    else:
+        included = int(included_splices_for(company, project_id) or 0)
+
+    included = max(included, 0)
+
+    # Só cobra o que ultrapassar as inclusas
     charge = max(total_splices - included, 0)
 
     # A faixa de preço é escolhida pelo TOTAL de fusões, não apenas as cobradas
     price_per_splice = tier_price_for(total_splices, company, project_id) if charge > 0 else 0.0
     price_splices = charge * price_per_splice
+
+    # Valor do dispositivo (CAN também pode ter valor fixo de device, se configurado)
     price_device = device_value_for(device_name or "", company, project_id)
+
     return price_splices, price_device, price_splices + price_device
+
+
 
 
 
