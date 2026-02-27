@@ -44,7 +44,7 @@
         <div class="mb-3">
           <label class="form-label">Map</label>
           <input type="hidden" name="map" id="map-name-hidden" value="">
-          <select id="map-select" class="form-control" {% if not is_edit %}name="map_id" required{% endif %} {% if is_edit %}disabled{% endif %}>
+          <select id="map-select" class="form-control" {% if not is_edit %}name="map_id" required{% endif %}>
             <option value="">Selecione a empresa primeiro</option>
           </select>
         </div>
@@ -331,14 +331,14 @@
   });
 
   document.addEventListener('DOMContentLoaded', () => {
+  document.addEventListener('DOMContentLoaded', () => {
     updateProjects();
-    updateMaps();
-    updateTypes();
-
     const preselectedProject = "{{ form_project_id|default('') }}";
     if (preselectedProject && projectSelect) {
       projectSelect.value = preselectedProject;
     }
+    updateMaps();
+    updateTypes();
 
     const preselectedMap = "{{ form_map_id|default('') }}";
     if (preselectedMap) {
