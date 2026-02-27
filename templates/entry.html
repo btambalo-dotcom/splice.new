@@ -331,7 +331,11 @@
   });
 
   document.addEventListener('DOMContentLoaded', () => {
-  document.addEventListener('DOMContentLoaded', () => {
+    // Garante que a empresa do registro fique aplicada antes de carregar projetos/mapas
+    const preselectedCompany = "{{ form_company|default('') }}";
+    if (preselectedCompany && companySelect) {
+      companySelect.value = preselectedCompany;
+    }
     updateProjects();
     const preselectedProject = "{{ form_project_id|default('') }}";
     if (preselectedProject && projectSelect) {
@@ -349,6 +353,7 @@
     if (preselectedRole && mapRoleSelect) {
       mapRoleSelect.value = preselectedRole;
     }
+
 
     updateMapRoleVisibility();
 
