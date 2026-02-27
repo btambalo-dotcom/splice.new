@@ -773,8 +773,18 @@ def device_value_for(name: str, company: str | None, project_id: int | None = No
     return float(dt.value_usd) if dt else 0.0
 
 def tier_price_for(count: int, company: str | None, project_id: int | None = None) -> float:
+    """Retorna o $/fusão da faixa, com prioridade para projeto/empresa.
+
+    Estratégia:
+    1. Tenta achar faixa compatível respeitando projeto e empresa (como antes).
+    2. Se não achar nada, faz um fallback global: qualquer faixa que cubra o número
+       de fusões, ignorando filtro de empresa/projeto. Isso evita ficar em $0.00
+       quando houver faixas cadastradas, mas por algum detalhe de configuração
+       (empresa, projeto) não baterem exatamente.
+    """
     from sqlalchemy import or_ as _or, case as _case
 
+    # 1) Consulta principal: respeita projeto e empresa
     q = SpliceTier.query.filter(SpliceTier.min_splices <= count)
 
     if project_id:
@@ -784,19 +794,26 @@ def tier_price_for(count: int, company: str | None, project_id: int | None = Non
 
     q = q.filter(_or(SpliceTier.max_splices == None, SpliceTier.max_splices >= count))
 
+    tier = None
     if company:
-        q = q.filter(_or(SpliceTier.company == company, SpliceTier.company.is_(None)))
+        q_company = q.filter(_or(SpliceTier.company == company, SpliceTier.company.is_(None)))
         order_clauses = []
         if project_id:
             order_clauses.append(_case((SpliceTier.project_id == project_id, 0), else_=1))
         order_clauses.append(_case((SpliceTier.company == company, 0), else_=1))
         order_clauses.append(SpliceTier.min_splices.desc())
-        tier = q.order_by(*order_clauses).first()
+        tier = q_company.order_by(*order_clauses).first()
     else:
         tier = q.order_by(SpliceTier.min_splices.desc()).first()
 
-    return float(tier.price_per_splice_usd) if tier else 0.0
+    if tier:
+        return float(tier.price_per_splice_usd or 0.0)
 
+    # 2) Fallback global: ignora empresa/projeto, só respeita intervalo de splices
+    q2 = SpliceTier.query.filter(SpliceTier.min_splices <= count)
+    q2 = q2.filter(_or(SpliceTier.max_splices == None, SpliceTier.max_splices >= count))
+    tier2 = q2.order_by(SpliceTier.min_splices.desc()).first()
+    return float(tier2.price_per_splice_usd or 0.0) if tier2 else 0.0
 
 
 def resolve_included_override(company: str | None, project_id: int | None, map_obj, map_val: str | None, map_role: str | None):
