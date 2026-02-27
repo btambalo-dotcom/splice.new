@@ -79,6 +79,7 @@
     </div>
   </div>
 
+  {% if not rec.type or rec.type|upper != "CAN" %}
   <div class="col-lg-6">
     <div class="card p-3">
       <h5 class="mb-3">Teste de nível (light levels)</h5>
@@ -108,6 +109,7 @@
     </div>
   </div>
 </div>
+{% endif %}
 
 {% if rec.photos|length > 0 %}
 <div class="card mt-4 p-3">

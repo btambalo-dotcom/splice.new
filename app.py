@@ -838,13 +838,22 @@ def compute_prices(
     """Calcula preço de fusões e dispositivo para um lançamento manual.
 
     Se included_override vier preenchido, ele tem prioridade (ex.: mapas com regra MEIO/PONTA).
+
+    Regra especial:
+    - Para dispositivos/tipos "CAN" não há cobrança de fusões: apenas valor do dispositivo.
     """
+    name_norm = (device_name or "").strip().upper()
+    # Para CAN: zera cobrança de fusões
+    if name_norm == "CAN" or name_norm.startswith("CAN "):
+        price_splices = 0.0
+        price_device = device_value_for(device_name or "", company, project_id)
+        return price_splices, price_device, price_device
+
     included = int(included_override) if included_override is not None else included_splices_for(company, project_id)
     charge = max(int(splices or 0) - included, 0)
     price_splices = charge * tier_price_for(charge, company, project_id)
     price_device = device_value_for(device_name or "", company, project_id)
     return price_splices, price_device, price_splices + price_device
-
 
 
 # --------- Decorators ---------
@@ -3519,6 +3528,9 @@ def api_update_record_from_map(record_id):
 @login_required
 def api_save_record_test(record_id):
     rec = Record.query.get_or_404(record_id)
+    # Dispositivos CAN não exigem teste: bloqueia salvamento de teste
+    if (rec.type or "").strip().upper().startswith("CAN"):
+        return jsonify({"ok": False, "error": "Dispositivo CAN não exige teste."}), 400
 
     # Regra de permissão igual à tela de visualização do lançamento:
     # 1) Admin ou dono da empresa: acesso total
