@@ -2870,60 +2870,44 @@ def export_invoice():
     # OBS: FPDF "cell" não faz quebra de linha. Para não "estourar" a tabela e
     # mostrar o nome COMPLETO do device dentro da coluna, vamos desenhar a linha
     # com multi_cell e quebra manual (principalmente em '_' e '-').
+    
+    # === Tabela das linhas (uma linha por registro) ===
     col_widths = [40, 64, 18, 12, 16, 20, 20]
     headers = ["Map", "Device", "Tipo", "Incl.", "Splices", "Device price", "Total"]
 
     pdf.set_font("Arial", "B", 10)
-    for w, h in zip(col_widths, headers):
-        pdf.cell(w, 7, h, border=1)
-    pdf.ln()
 
-    def _break_for_table(txt: str) -> str:
-        """Ajuda o FPDF a quebrar nomes longos SEM picotar.
+    def _draw_table_header():
+        for w, h in zip(col_widths, headers):
+            pdf.cell(w, 7, h, border=1, align="C")
+        pdf.ln(7)
 
-        O FPDF quebra linha em espaços. Como o device costuma vir com '_' e '-',
-        inserimos um espaço APÓS esses separadores (ex: 'A_B' vira 'A_ B') para
-        permitir quebra somente quando precisar, mantendo o nome completo dentro
-        da coluna.
-        """
-        s = (txt or "").strip()
-        if not s:
-            return "-"
-        s = s.replace("_", "_ ")
-        s = s.replace("-", "- ")
-        return s
+    _draw_table_header()
 
     line_h = 6
     pdf.set_font("Arial", "", 9)
-    for l in lines:
+
+    for line in lines:
         row = [
-            str(l["map"] or "-"),
-            _break_for_table(str(l["device"] or "-")),
-            str(l.get("map_role") or ""),
-            str(l.get("included") if l.get("included") is not None else ""),
-            str(l["splices"]),
-            f"$ {l['price_device_usd']:.2f}",
-            f"$ {l['total_usd']:.2f}",
+            line["map"] or "-",
+            line["device"] or "-",
+            line["role"],
+            str(line["included"]),
+            str(line["splices"]),
+            f"$ {line['device_usd']:.2f}",
+            f"$ {line['total_usd']:.2f}",
         ]
 
-        # calcula altura da linha pela célula que tiver mais quebras
-        n_lines = max((str(v).count("\n") + 1) for v in row)
-        row_h = line_h * n_lines
+        # quebra de página manual antes de desenhar a linha
+        if pdf.get_y() + line_h > pdf.page_break_trigger:
+            pdf.add_page()
+            _draw_table_header()
+            pdf.set_font("Arial", "", 9)
 
-        x0 = pdf.get_x()
-        y0 = pdf.get_y()
-
-        # desenha cada célula como multi_cell mantendo a mesma altura de linha
-        x = x0
         for w, val in zip(col_widths, row):
-            pdf.set_xy(x, y0)
-            pdf.multi_cell(w, line_h, str(val), border=1)
-            x += w
-
-        # vai para a próxima linha
-        pdf.set_xy(x0, y0 + row_h)
-
-    pdf.ln(4)
+            pdf.cell(w, line_h, str(val), border=1)
+        pdf.ln(line_h)
+pdf.ln(4)
     pdf.set_font("Arial", "B", 11)
     pdf.cell(0, 8, f"Invoice total: $ {total_invoice:.2f}", ln=1)
 
