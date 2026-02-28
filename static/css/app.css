@@ -19,7 +19,3 @@ body{background:var(--bg); color:var(--text); font-family:system-ui,-apple-syste
 .drop{border:2px dashed #334155; border-radius:16px; padding:1.2rem; text-align:center; background:#0b1324}
 .drop input{display:none}
 .drop label{display:block; cursor:pointer; color:#cbd5e1}
-
-
-/* Evitar quebra da coluna Type (tipo) na tabela principal */
-.table td.nowrap-cell, .table th.nowrap-cell { white-space: nowrap; }
