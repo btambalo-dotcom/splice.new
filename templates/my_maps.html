@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+{% block title %}Meus Mapas{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h3 class="mb-0">Meus mapas</h3>
+    <small class="text-muted">
+      Selecione o mapa do projeto em que você vai trabalhar.
+      Clique em <b>Abrir mapa</b> para lançar diretamente pelo mapa interativo.
+    </small>
+  </div>
+</div>
+
+{% if not maps %}
+  <div class="alert alert-warning">
+    Nenhum mapa encontrado para a sua empresa
+    {% if user_company %} ({{ user_company }}){% endif %}.
+    Peça para o administrador cadastrar os mapas nas configurações do projeto.
+  </div>
+{% else %}
+  <div class="card bg-black border-secondary">
+    <div class="card-body">
+      <table class="table table-dark table-striped table-hover align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Mapa</th>
+            <th>Projeto</th>
+            <th>Empresa</th>
+            <th style="width: 160px;">Ações</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for m in maps %}
+          <tr>
+            <td>{{ m.name }}</td>
+            <td>
+              {% if m.project %}
+                {{ m.project.name }}
+              {% else %}
+                <span class="text-muted">Sem projeto vinculado</span>
+              {% endif %}
+            </td>
+            <td>{{ m.company }}</td>
+            <td>
+              <a href="{{ url_for('map_view', map_id=m.id) }}" class="btn btn-sm btn-primary">
+                Abrir mapa
+              </a>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}
