@@ -1,2 +1,1 @@
-FULL-FIX8 - R2 + THUMB + COMPRESS - 2026-02-15
-Uploads optimized photos + thumbnails to Cloudflare R2, clears DB blobs after upload when enabled.
+PHOTO-EDIT-V60

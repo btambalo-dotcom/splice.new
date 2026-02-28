@@ -22,7 +22,7 @@
         {% endif %}
         <div class="mb-3">
           <label class="form-label">Empresa</label>
-          <select name="company" id="company-select" class="form-control" required>
+          <select id="company-select" class="form-control" name="company" required>
             <option value="">Selecione a empresa</option>
             {% for c in companies %}
               <option value="{{ c }}" {% if form_company is defined and form_company == c %}selected{% endif %}>{{ c }}</option>
@@ -32,7 +32,7 @@
         {% if not is_splicer %}
         <div class="mb-3">
           <label class="form-label">Projeto</label>
-          <select name="project_id" id="project-select" class="form-control">
+          <select id="project-select" class="form-control" {% if not is_edit %}name="project_id"{% endif %}>
             <option value="">Sem projeto (valores da empresa)</option>
           </select>
           <div class="form-text">Selecione o projeto para aplicar a tabela de valores correta.</div>
@@ -44,7 +44,7 @@
         <div class="mb-3">
           <label class="form-label">Map</label>
           <input type="hidden" name="map" id="map-name-hidden" value="">
-          <select name="map_id" id="map-select" class="form-control" required>
+          <select id="map-select" class="form-control" name="map_id" required>
             <option value="">Selecione a empresa primeiro</option>
           </select>
         </div>
@@ -331,14 +331,18 @@
   });
 
   document.addEventListener('DOMContentLoaded', () => {
+    // Garante que a empresa do registro fique aplicada antes de carregar projetos/mapas
+    const preselectedCompany = "{{ form_company|default('') }}";
+    if (preselectedCompany && companySelect) {
+      companySelect.value = preselectedCompany;
+    }
     updateProjects();
-    updateMaps();
-    updateTypes();
-
     const preselectedProject = "{{ form_project_id|default('') }}";
     if (preselectedProject && projectSelect) {
       projectSelect.value = preselectedProject;
     }
+    updateMaps();
+    updateTypes();
 
     const preselectedMap = "{{ form_map_id|default('') }}";
     if (preselectedMap) {
@@ -349,6 +353,7 @@
     if (preselectedRole && mapRoleSelect) {
       mapRoleSelect.value = preselectedRole;
     }
+
 
     updateMapRoleVisibility();
 

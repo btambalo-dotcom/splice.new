@@ -130,7 +130,7 @@ mb-3">Registros</h5>
           <th>Data</th>
           <th>Empresa</th>
           <th>Map</th>
-          <th>Type</th>
+          <th class="nowrap-cell">Type</th>
           <th>Device</th>
           <th>Splicer</th>
           <th>Splices</th>
@@ -148,7 +148,7 @@ mb-3">Registros</h5>
             <td>{{ r.created_date.date() if r.created_date else '' }}</td>
             <td>{{ r.company or '-' }}</td>
             <td>{{ r.map }}</td>
-            <td>{{ r.type }}</td>
+            <td class="nowrap-cell">{{ r.type }}</td>
             <td>{{ r.device }}</td>
             <td>{{ r.splicer }}</td>
             <td>{{ r.splices }}</td>
@@ -169,7 +169,13 @@ mb-3">Registros</h5>
               {% endif %}
             </td>
             <td class="text-end">
-              {% if current_user.is_admin or r.splicer == current_user.username %}
+              {% set can_edit = false %}
+              {% if current_user.is_admin %}
+                {% set can_edit = true %}
+              {% elif (not current_user.is_company_owner) and (editable_maps and (r.map in editable_maps)) %}
+                {% set can_edit = true %}
+              {% endif %}
+              {% if can_edit %}
               <a href="{{ url_for('record_edit', rid=r.id) }}" class="btn btn-sm btn-outline-primary me-1">Editar</a>
               {% endif %}
               {% if (not current_user.is_company_owner) or current_user.is_admin %}

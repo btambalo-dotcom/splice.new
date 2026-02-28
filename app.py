@@ -5,6 +5,8 @@ from datetime import datetime, date
 from sqlalchemy import text, case, or_, inspect, func
 from sqlalchemy.orm import deferred
 import os
+import json
+import os
 from fpdf import FPDF
 from werkzeug.utils import secure_filename
 from io import BytesIO
@@ -20,6 +22,7 @@ import traceback
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
 import re
+import xml.etree.ElementTree as ET
 
 
 import uuid
@@ -91,6 +94,158 @@ def process_uploaded_photo(file_storage, max_size=(1600, 1600), quality=80, thum
         except Exception:
             return None, None, None, None, None
 
+
+
+
+
+def import_kmz_for_map(company_map, file_storage):
+    """Importa um arquivo KMZ e cria/atualiza Records com coordenadas
+    para o mapa/projeto informado.
+
+    Cada Placemark -> Point vira um dispositivo (Record) com latitude/longitude.
+    O nome do Placemark é usado como nome do device.
+    """
+    if not file_storage or not getattr(file_storage, "filename", None):
+        return 0
+
+    try:
+        raw = file_storage.read()
+        if not raw:
+            return 0
+
+        # KMZ é um ZIP com um ou mais arquivos .kml dentro
+        with zipfile.ZipFile(BytesIO(raw)) as z:
+            kml_name = None
+            for name in z.namelist():
+                if name.lower().endswith(".kml"):
+                    kml_name = name
+                    break
+            if not kml_name:
+                return 0
+            kml_bytes = z.read(kml_name)
+
+        root = ET.fromstring(kml_bytes)
+    except Exception:
+        # KMZ inválido
+        return 0
+
+    ns = {"k": "http://www.opengis.net/kml/2.2"}
+    created_or_updated = 0
+
+    from sqlalchemy import and_
+
+    # Mapeia cada Placemark para uma seção (nome da pasta ou ExtendedData)
+    placemark_sections = {}
+
+    # 1) Folders -> seções
+    for folder in root.findall(".//k:Folder", ns):
+        fname_el = folder.find("k:name", ns)
+        sec_name = (fname_el.text or "").strip() if fname_el is not None else None
+        if not sec_name:
+            continue
+        for pm in folder.findall(".//k:Placemark", ns):
+            placemark_sections[id(pm)] = sec_name
+
+    # 2) percorre todos os Placemarks com Point/coordinates
+    for pm in root.findall(".//k:Placemark", ns):
+        # seção padrão herdada da pasta (se houver)
+        section_name = placemark_sections.get(id(pm))
+
+        # tenta sobrescrever pela ExtendedData (campo section/secao/seção/setor/sector)
+        # tenta sobrescrever pela ExtendedData (seção, nome do device, observações)
+        ext = pm.find("k:ExtendedData", ns)
+        extra_name = None
+        extra_info = None
+        if ext is not None:
+            for data_el in ext.findall("k:Data", ns):
+                key = (data_el.get("name") or "").lower()
+                val_el = data_el.find("k:value", ns)
+                val_text = (val_el.text or "").strip() if val_el is not None and val_el.text else ""
+                if not val_text:
+                    continue
+                # seção
+                if key in ("section", "secao", "seção", "setor", "sector"):
+                    section_name = val_text
+                    continue
+                # possíveis nomes de campo para o device
+                if key in ("device", "nome", "name", "cto", "caixa", "equip", "equipamento"):
+                    extra_name = extra_name or val_text
+                    continue
+                # possíveis nomes de campo para observações
+                if key in ("info", "obs", "observacao", "observação", "notes", "descricao", "descrição", "description"):
+                    extra_info = extra_info or val_text
+                    continue
+
+        name_el = pm.find("k:name", ns)
+        name = (name_el.text or "").strip() if name_el is not None else ""
+        if extra_name:
+            name = extra_name
+
+        # descrição padrão do Placemark vira observação se nada vier no ExtendedData
+        desc_el = pm.find("k:description", ns)
+        description_text = (desc_el.text or "").strip() if desc_el is not None and desc_el.text else ""
+        device_info_val = extra_info or description_text or None
+        coord_el = pm.find(".//k:Point/k:coordinates", ns)
+        if coord_el is None or not coord_el.text:
+            continue
+
+        coord_text = coord_el.text.strip().split()[0]
+        parts = coord_text.split(",")
+        if len(parts) < 2:
+            continue
+
+        try:
+            lon = float(parts[0])
+            lat = float(parts[1])
+        except ValueError:
+            continue
+
+        # procura Record existente para mesma empresa+device+projeto,
+        # independente do mapa antigo. Assim, ao importar o KMZ em um
+        # novo mapa, reaproveitamos os lançamentos já feitos (splices, testes, fotos),
+        # apenas movendo o dispositivo para o mapa atual.
+        filters = [
+            Record.company == company_map.company,
+            Record.device == name,
+        ]
+        if company_map.project_id is not None:
+            filters.append(Record.project_id == company_map.project_id)
+
+        rec = Record.query.filter(and_(*filters)).order_by(Record.id.desc()).first()
+
+        # se achou em outro mapa, atualiza o campo map para o mapa atual
+        if rec is not None and rec.map != company_map.name:
+            rec.map = company_map.name
+
+        if not rec:
+            rec = Record(
+                map=company_map.name,
+                company=company_map.company,
+                project_id=company_map.project_id,
+                device=name or f"DEVICE-{created_or_updated+1}",
+                type=None,
+                splices=0,
+                splicer="",
+                created_date=None,
+                section=section_name,
+                device_info=device_info_val,
+            )
+            db.session.add(rec)
+
+        # Atualiza seção (se veio do KMZ); não sobrescreve se já houver uma definida manualmente
+        if section_name and not getattr(rec, "section", None):
+            rec.section = section_name
+
+        # Atualiza coordenadas sempre que importar
+        rec.latitude = lat
+        rec.longitude = lon
+        created_or_updated += 1
+
+
+    if created_or_updated:
+        db.session.commit()
+
+    return created_or_updated
 
 
 # --------- App & DB setup ---------
@@ -275,6 +430,15 @@ class User(UserMixin, db.Model):
     is_company_owner = db.Column(db.Boolean, default=False, nullable=False)  # dono de empresa: vê registros da própria empresa
     company_name = db.Column(db.String(120), nullable=True)  # nome da empresa a que o usuário pertence
 
+    # Mapas interativos aos quais o usuário (splicer) tem acesso explícito.
+    maps_with_access = db.relationship(
+        "CompanyMap",
+        secondary="map_splicer_access",
+        back_populates="allowed_splicers",
+        lazy="select",
+    )
+
+
 class CompanyConfig(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), unique=True, nullable=False)
@@ -340,6 +504,13 @@ class SpliceTier(db.Model):
     project_id = db.Column(db.Integer, db.ForeignKey('project.id'), nullable=True, index=True)
     project = db.relationship('Project', backref=db.backref('splice_tiers', lazy=True))
 
+
+# Associação entre mapas interativos e splicers que podem acessá-los.
+map_splicer_access = db.Table(
+    "map_splicer_access",
+    db.Column("map_id", db.Integer, db.ForeignKey("company_map.id"), primary_key=True),
+    db.Column("user_id", db.Integer, db.ForeignKey("user.id"), primary_key=True),
+)
 class CompanyMap(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     company = db.Column(db.String(120), nullable=False, index=True)
@@ -353,6 +524,18 @@ class CompanyMap(db.Model):
     included_splices_meio = db.Column(db.Integer, nullable=True)   # inclusas quando MEIO
     included_splices_ponta = db.Column(db.Integer, nullable=True)  # inclusas quando PONTA
 
+    # Cores personalizadas por seção (JSON: { "SEC A": "#ff0000", ... })
+    section_colors_json = db.Column(db.Text, nullable=True)
+
+    # Splicers com permissão explícita para acessar esse mapa no módulo interativo.
+    allowed_splicers = db.relationship(
+        "User",
+        secondary=map_splicer_access,
+        back_populates="maps_with_access",
+        lazy="select",
+    )
+
+
 class Record(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     map = db.Column(db.String(200))
@@ -365,15 +548,30 @@ class Record(db.Model):
     project_id = db.Column(db.Integer, db.ForeignKey('project.id'), nullable=True, index=True)
     project = db.relationship('Project', backref=db.backref('records', lazy=True))
 
+    # Coordenadas (opcional): para mapa interativo
+    latitude = db.Column(db.Float, nullable=True)
+    longitude = db.Column(db.Float, nullable=True)
+
+    # Informações adicionais do dispositivo (fibra usada, porta, etc.)
+    device_info = db.Column(db.String(255), nullable=True)
+
     # Snapshot (opcional): se o mapa estiver configurado com MEIO/PONTA,
     # salvamos o tipo escolhido e quantas fusões inclusas foram aplicadas.
     map_role = db.Column(db.String(10), nullable=True)  # 'MEIO' / 'PONTA'
     included_splices_applied = db.Column(db.Integer, nullable=True)
 
+    # Seção lógica do mapa (grupo alimentado por um splitter/ramal específico)
+    section = db.Column(db.String(120), nullable=True)
+
     price_splices_usd = db.Column(db.Float, default=0.0)
     price_device_usd = db.Column(db.Float, default=0.0)
     total_usd = db.Column(db.Float, default=0.0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # Testes (níveis por fusão, armazenados como CSV) e flag de concluído
+    test_levels = db.Column(db.Text, nullable=True)
+    test_done = db.Column(db.Boolean, default=False)
+
 
 class RecordPhoto(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -387,6 +585,7 @@ class RecordPhoto(db.Model):
     thumb_data = deferred(db.Column(db.LargeBinary))
     thumb_content_type = db.Column(db.String(100))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    is_test = db.Column(db.Boolean, default=False)
 
     record = db.relationship('Record', backref=db.backref('photos', lazy=True))
 
@@ -471,14 +670,22 @@ with app.app_context():
     ensure("record", "project_id", "INTEGER")
     ensure("record", "map_role", "VARCHAR(10)")
     ensure("record", "included_splices_applied", "INTEGER")
+    ensure("record", "test_levels", "TEXT")
+    ensure("record", "test_done", "BOOLEAN")
+    ensure("record", "latitude", "DOUBLE PRECISION")
+    ensure("record", "longitude", "DOUBLE PRECISION")
+    ensure("record", "device_info", "VARCHAR(255)")
+    ensure("record", "section", "VARCHAR(120)")
     ensure("device_type", "project_id", "INTEGER")
     ensure("splice_tier", "project_id", "INTEGER")
     ensure("company_map", "project_id", "INTEGER")
     ensure("company_map", "mid_end_enabled", "BOOLEAN")
     ensure("company_map", "included_splices_meio", "INTEGER")
     ensure("company_map", "included_splices_ponta", "INTEGER")
+    ensure("company_map", "section_colors_json", "TEXT")
     ensure("record_photo", "thumb_data", "BYTEA")
     ensure("record_photo", "thumb_content_type", "VARCHAR(100)")
+    ensure("record_photo", "is_test", "BOOLEAN")
     ensure("project", "company", "VARCHAR(120)")
     ensure("project", "name", "VARCHAR(200)")
     ensure("project", "included_splices", "INTEGER")
@@ -566,30 +773,85 @@ def device_value_for(name: str, company: str | None, project_id: int | None = No
     return float(dt.value_usd) if dt else 0.0
 
 def tier_price_for(count: int, company: str | None, project_id: int | None = None) -> float:
-    from sqlalchemy import or_ as _or, case as _case
+    """Retorna o $/fusão da faixa respeitando prioridade:
 
-    q = SpliceTier.query.filter(SpliceTier.min_splices <= count)
+    1. Faixa específica do PROJETO (independente da empresa).
+    2. Se não houver faixa de projeto, usa faixa da EMPRESA (sem projeto).
+    3. Se ainda assim não tiver, usa faixa GLOBAL (sem empresa e sem projeto).
 
+    Em todos os casos, escolhe a faixa cujo intervalo contenha `count`:
+        min_splices <= count <= max_splices (ou max_splices is NULL)
+    e, dentre elas, pega a de maior `min_splices` (faixa mais específica).
+    """
+    from sqlalchemy import or_ as _or
+
+    def _best_for(base_query):
+        q = (
+            base_query.filter(SpliceTier.min_splices <= count)
+            .filter(_or(SpliceTier.max_splices == None, SpliceTier.max_splices >= count))
+            .order_by(SpliceTier.min_splices.desc())
+        )
+        return q.first()
+
+    # 1) Faixas específicas do PROJETO (se houver project_id)
     if project_id:
-        q = q.filter(_or(SpliceTier.project_id == project_id, SpliceTier.project_id.is_(None)))
-    else:
-        q = q.filter(SpliceTier.project_id.is_(None))
+        tier_proj = _best_for(SpliceTier.query.filter(SpliceTier.project_id == project_id))
+        if tier_proj:
+            return float(tier_proj.price_per_splice_usd or 0.0)
 
-    q = q.filter(_or(SpliceTier.max_splices == None, SpliceTier.max_splices >= count))
-
+    # 2) Faixas por EMPRESA (sem projeto)
     if company:
-        q = q.filter(_or(SpliceTier.company == company, SpliceTier.company.is_(None)))
-        order_clauses = []
-        if project_id:
-            order_clauses.append(_case((SpliceTier.project_id == project_id, 0), else_=1))
-        order_clauses.append(_case((SpliceTier.company == company, 0), else_=1))
-        order_clauses.append(SpliceTier.min_splices.desc())
-        tier = q.order_by(*order_clauses).first()
-    else:
-        tier = q.order_by(SpliceTier.min_splices.desc()).first()
+        tier_company = _best_for(
+            SpliceTier.query.filter(
+                SpliceTier.company == company,
+                SpliceTier.project_id.is_(None),
+            )
+        )
+        if tier_company:
+            return float(tier_company.price_per_splice_usd or 0.0)
 
-    return float(tier.price_per_splice_usd) if tier else 0.0
+    # 3) Faixas GLOBAIS (sem empresa e sem projeto)
+    tier_global = _best_for(
+        SpliceTier.query.filter(
+            SpliceTier.company.is_(None),
+            SpliceTier.project_id.is_(None),
+        )
+    )
+    if tier_global:
+        return float(tier_global.price_per_splice_usd or 0.0)
 
+    # Se não houver nenhuma faixa cadastrada
+    return 0.0
+
+
+def resolve_included_override(company: str | None, project_id: int | None, map_obj, map_val: str | None, map_role: str | None):
+    """
+    Resolve quantas fusões inclusas devem ser aplicadas para este lançamento,
+    levando em conta configuração MEIO/PONTA do mapa.
+
+    Retorna (included_override, included_applied, map_cfg_obj).
+    """
+    map_cfg = map_obj
+    # tenta buscar pelo nome, garantindo que sempre encontramos o CompanyMap correto
+    if not map_cfg and map_val and company:
+        q = CompanyMap.query.filter_by(company=company, name=map_val)
+        if project_id is not None:
+            q = q.filter_by(project_id=project_id)
+        map_cfg = q.first()
+        if not map_cfg:
+            map_cfg = CompanyMap.query.filter_by(company=company, name=map_val, project_id=None).first()
+
+    included_override = None
+    included_applied = None
+
+    if map_cfg and bool(getattr(map_cfg, "mid_end_enabled", False)) and map_role in ("MEIO", "PONTA"):
+        if map_role == "MEIO":
+            included_override = int(getattr(map_cfg, "included_splices_meio", 0) or 0)
+        else:
+            included_override = int(getattr(map_cfg, "included_splices_ponta", 0) or 0)
+        included_applied = included_override
+
+    return included_override, included_applied, map_cfg
 
 def compute_prices(
     splices: int,
@@ -601,12 +863,35 @@ def compute_prices(
     """Calcula preço de fusões e dispositivo para um lançamento manual.
 
     Se included_override vier preenchido, ele tem prioridade (ex.: mapas com regra MEIO/PONTA).
+
+    Regras:
+    - TODAS as tecnologias/tipos (inclusive CAN) seguem a mesma regra de fusões.
+    - As faixas de preço ($/fusão) são determinadas pelo TOTAL de fusões do lançamento.
+      A quantidade cobrada é (splices - fusões inclusas).
     """
-    included = int(included_override) if included_override is not None else included_splices_for(company, project_id)
-    charge = max(int(splices or 0) - included, 0)
-    price_splices = charge * tier_price_for(charge, company, project_id)
+    total_splices = int(splices or 0)
+
+    # Fusões inclusas: override do mapa (MEIO/PONTA) > projeto > empresa > padrão
+    if included_override is not None:
+        included = int(included_override or 0)
+    else:
+        included = int(included_splices_for(company, project_id) or 0)
+
+    included = max(included, 0)
+
+    # Só cobra o que ultrapassar as inclusas
+    charge = max(total_splices - included, 0)
+
+    # A faixa de preço é escolhida pelo TOTAL de fusões, não apenas as cobradas
+    price_per_splice = tier_price_for(total_splices, company, project_id) if charge > 0 else 0.0
+    price_splices = charge * price_per_splice
+
+    # Valor do dispositivo (CAN também pode ter valor fixo de device, se configurado)
     price_device = device_value_for(device_name or "", company, project_id)
+
     return price_splices, price_device, price_splices + price_device
+
+
 
 
 
@@ -688,6 +973,9 @@ def index():
         except ValueError:
             pass
 
+    # Oculta dispositivos importados do KMZ que ainda não tiveram lançamento (splicer/splices)
+    query = query.filter((Record.splicer != "") | (Record.splices > 0))
+
     records = query.order_by(Record.created_date.desc().nullslast(), Record.id.desc()).all()
     total_rows = len(records)
     total_amount = sum(r.total_usd or 0 for r in records)
@@ -716,6 +1004,17 @@ def index():
             all_splicers = [enforced_splicer]
             splicer_filter = enforced_splicer
 
+
+    # Mapas que o usuário tem permissão para EDITAR (apenas para splicer comum).
+    editable_maps = []
+    if is_admin:
+        # admin edita tudo; o template ignora esta lista nesse caso
+        editable_maps = []
+    elif not is_owner:
+        try:
+            editable_maps = [m.name for m in getattr(current_user, "maps_with_access", [])]
+        except Exception:
+            editable_maps = []
     return render_template(
         "index.html",
         records=records,
@@ -729,6 +1028,7 @@ def index():
         device_filter=device_filter or "",
         start=start_raw or "",
         end=end_raw or "",
+        editable_maps=editable_maps,
     )
 
 def build_filtered_record_query_from_request():
@@ -752,7 +1052,7 @@ def build_filtered_record_query_from_request():
     elif is_owner:
         # Dono de empresa enxerga todos os registros da própria empresa.
         # Ignoramos o filtro de empresa vindo da URL, se houver.
-        owner_company = getattr(current_user, "company", None) or getattr(current_user, "company_name", None)
+        owner_company = _current_user_company_name()
         if owner_company:
             company_filter = owner_company
     else:
@@ -791,6 +1091,9 @@ def build_filtered_record_query_from_request():
             query = query.filter(record_day <= end_date)
         except ValueError:
             pass
+
+    # Oculta dispositivos importados do KMZ que ainda não viraram produção
+    query = query.filter((Record.splicer != "") | (Record.splices > 0))
 
     return query
 
@@ -901,6 +1204,22 @@ def photo_file(photo_id: int):
     resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     return resp
 
+
+
+@app.route("/photo_thumb/<int:pid>")
+@login_required
+def photo_thumb(pid: int):
+    """
+    Rota legada para thumbnails de foto.
+
+    Alguns templates antigos ainda chamam url_for('photo_thumb', pid=...).
+    Para manter compatibilidade e evitar BuildError, essa rota apenas
+    reutiliza a lógica de `photo_file` com size=thumb.
+    """
+    # Repassa para a rota principal de foto, forçando ?size=thumb
+    # (não faz redirect para simplificar)
+    with current_app.test_request_context(query_string={"size": "thumb"}):
+        return photo_file(pid)
 
 @app.route("/record/<int:rid>/photos", methods=["POST"])
 @login_required
@@ -1215,39 +1534,49 @@ def entry():
                 dup_query = dup_query.filter(Record.project_id == project_id)
             existing = dup_query.order_by(Record.created_date.desc().nullslast(), Record.id.desc()).first()
 
-        if existing and not confirm_duplicate:
-            flash(
-                "Este dispositivo já foi lançado neste map. Data: "
-                + (existing.created_date.date().isoformat() if existing.created_date else "-")
-                + f", Splicer: {existing.splicer}. Se desejar lançar novamente, confirme o lançamento.",
-                "warning",
-            )
-            return render_template(
-                "entry.html",
-                splicer_options=splicer_options,
-                companies=companies,
-                projects_by_company=projects_by_company,
-                maps_by_project=maps_by_project,
-                maps_by_company=maps_by_company,
-                maps_by_company_all=maps_by_company_all,
-                devices_by_project=devices_by_project,
-                devices_by_company=devices_by_company,
-                default_splicer=default_splicer,
-                today=date.today().isoformat(),
-                duplicate_record=existing,
-                form_company=company,
-                form_project_id=str(project_id or ""),
-                form_map_id=str(map_obj.id) if map_obj else "",
-                form_map=map_val,
-                form_type=type_val,
-                form_device_name=device_name,
-                form_splices=splices_raw,
-                form_created=created_raw or date.today().isoformat(),
-                form_map_role=(request.form.get("map_role") or ""),
-                confirm_duplicate=True,
-                is_splicer=is_splicer,
-            )
+        is_admin = bool(getattr(current_user, "is_admin", False))
+        if existing:
+            # Regra de negócio: um dispositivo só pode ser lançado uma vez neste mapa/projeto.
+            # Para lançar novamente é preciso o admin decidir; usuários comuns são bloqueados.
+            if not is_admin:
+                flash(
+                    "Este dispositivo já foi lançado neste mapa e não pode ser lançado novamente. "
+                    "Se houver erro, peça para o admin excluir ou ajustar o lançamento anterior.",
+                    "danger",
+                )
+                return redirect(entry_url)
 
+            # Admin: ainda permite duplicar, mas exige confirmação explícita.
+            if not confirm_duplicate:
+                flash(
+                    "Este dispositivo já foi lançado neste mapa. Data: "
+                    + (existing.created_date.date().isoformat() if existing.created_date else "-")
+                    + f", Splicer: {existing.splicer}. Se desejar lançar novamente, confirme o lançamento.",
+                    "warning",
+                )
+                return render_template(
+                    "entry.html",
+                    splicer_options=splicer_options,
+                    companies=companies,
+                    projects_by_company=projects_by_company,
+                    maps_by_project=maps_by_project,
+                    maps_by_company=maps_by_company,
+                    maps_by_company_all=maps_by_company_all,
+                    devices_by_project=devices_by_project,
+                    devices_by_company=devices_by_company,
+                    default_splicer=default_splicer,
+                    today=date.today().isoformat(),
+                    duplicate_record=existing,
+                    form_company=company,
+                    form_project_id=project_id_raw,
+                    form_map=map_val,
+                    form_type=type_val,
+                    form_device_name=device_name,
+                    form_splices=splices_raw,
+                    form_created=created_raw or date.today().isoformat(),
+                    confirm_duplicate=True,
+                    is_splicer=is_splicer,
+                )
         try:
             splices = int(splices_raw or 0)
         except ValueError:
@@ -1266,23 +1595,29 @@ def entry():
         # o usuário precisa escolher e o sistema aplica as fusões inclusas do mapa.
         map_role = (request.form.get("map_role") or "").strip().upper() or None
 
+        # Regras de MEIO/PONTA por mapa:
+        # 1) descobre o CompanyMap correto
         map_cfg = map_obj
         if not map_cfg and map_val and company:
-            map_cfg = CompanyMap.query.filter_by(company=company, name=map_val, project_id=project_id).first()
+            q = CompanyMap.query.filter_by(company=company, name=map_val)
+            if project_id is not None:
+                q = q.filter_by(project_id=project_id)
+            map_cfg = q.first()
             if not map_cfg:
                 map_cfg = CompanyMap.query.filter_by(company=company, name=map_val, project_id=None).first()
 
-        included_override = None
-        included_applied = None
-        if map_cfg and bool(getattr(map_cfg, "mid_end_enabled", False)):
-            if map_role not in ("MEIO", "PONTA"):
-                flash("Este mapa exige selecionar MEIO ou PONTA.", "danger")
-                return redirect(entry_url)
-            if map_role == "MEIO":
-                included_override = int(getattr(map_cfg, "included_splices_meio", 0) or 0)
-            else:
-                included_override = int(getattr(map_cfg, "included_splices_ponta", 0) or 0)
-            included_applied = included_override
+        # Se o mapa estiver configurado para MEIO/PONTA, o campo passa a ser obrigatório
+        if map_cfg and bool(getattr(map_cfg, "mid_end_enabled", False)) and map_role not in ("MEIO", "PONTA"):
+            flash("Este mapa exige selecionar MEIO ou PONTA.", "danger")
+            return redirect(entry_url)
+
+        included_override, included_applied, map_cfg = resolve_included_override(
+            company,
+            project_id,
+            map_cfg,
+            map_val,
+            map_role,
+        )
 
         price_splices, price_device, total = compute_prices(
             splices,
@@ -1357,14 +1692,22 @@ def entry():
             db.session.commit()
 
         # Modo rápido: memoriza última seleção (somente para splicer)
+        focus_map_id = None
         if is_splicer and company and (map_cfg or map_obj):
             last_map = map_cfg or map_obj
             session["entry_company"] = company
             session["entry_map_id"] = int(last_map.id)
             session["entry_map_role"] = map_role or ""
             session["entry_type"] = type_val or ""
+            focus_map_id = int(last_map.id)
 
         flash("Lançamento salvo.", "success")
+
+        # Se o usuário é splicer e temos um mapa associado, volta para o mapa
+        # já focando no dispositivo recém-lançado.
+        if focus_map_id is not None:
+            return redirect(url_for("map_view", map_id=focus_map_id, focus_record=rec.id))
+
         return redirect(entry_url)
 
     # GET
@@ -1393,6 +1736,28 @@ def entry():
 def record_edit(rid):
     """Editar um lançamento existente."""
     rec = Record.query.get_or_404(rid)
+
+    # Permissões de edição:
+    # - Admin pode editar qualquer lançamento.
+    # - Dono de empresa (company_owner) apenas visualiza; não pode editar.
+    # - Splicer comum só pode editar se tiver acesso ao mapa deste lançamento.
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_owner = bool(getattr(current_user, "is_company_owner", False))
+
+    allowed = False
+    if is_admin:
+        allowed = True
+    elif not is_owner:
+        # usuário splicer normal: precisa ter o mapa nas permissões explícitas
+        try:
+            allowed_map_names = {m.name for m in getattr(current_user, "maps_with_access", [])}
+        except Exception:
+            allowed_map_names = set()
+        if rec.map and rec.map in allowed_map_names:
+            allowed = True
+
+    if not allowed:
+        abort(403)
 
     companies = [c.name for c in CompanyConfig.query.order_by(CompanyConfig.name).all()]
 
@@ -1468,7 +1833,37 @@ def record_edit(rid):
             today = date.today()
             created_date = datetime(today.year, today.month, today.day)
 
-        price_splices, price_device, total = compute_prices(splices, device_for_price, company, project_id)
+        # --- Regras MEIO/PONTA também na edição ---
+        map_role = (request.form.get("map_role") or rec.map_role or "").strip().upper() or None
+
+        map_cfg = None
+        if map_val and company:
+            q = CompanyMap.query.filter_by(company=company, name=map_val)
+            if project_id is not None:
+                q = q.filter_by(project_id=project_id)
+            map_cfg = q.first()
+            if not map_cfg:
+                map_cfg = CompanyMap.query.filter_by(company=company, name=map_val, project_id=None).first()
+
+        if map_cfg and bool(getattr(map_cfg, "mid_end_enabled", False)) and map_role not in ("MEIO", "PONTA"):
+            flash("Este mapa exige selecionar MEIO ou PONTA.", "danger")
+            return redirect(url_for("record_edit", rid=rec.id))
+
+        included_override, included_applied, map_cfg = resolve_included_override(
+            company,
+            project_id,
+            map_cfg,
+            map_val,
+            map_role,
+        )
+
+        price_splices, price_device, total = compute_prices(
+            splices,
+            device_for_price,
+            company,
+            project_id,
+            included_override=included_override,
+        )
 
         rec.company = company
         rec.project_id = project_id
@@ -1478,15 +1873,43 @@ def record_edit(rid):
         rec.splices = splices
         rec.splicer = splicer
         rec.created_date = created_date
+        rec.map_role = map_role
+        rec.included_splices_applied = included_applied
         rec.price_splices_usd = price_splices
         rec.price_device_usd = price_device
         rec.total_usd = total
 
         db.session.commit()
         flash("Lançamento atualizado.", "success")
-        return redirect(url_for("index"))
+
+        # Resposta especial para AJAX (formulário com fotos)
+        if request.form.get("_ajax") == "1":
+            return jsonify({"ok": True, "record_id": rec.id})
+
+        # Após salvar edição, se for splicer (não-admin), volta para o mapa
+        is_admin = bool(getattr(current_user, "is_admin", False))
+        if not is_admin and rec.map:
+            mp_target = CompanyMap.query.filter_by(name=rec.map, company=rec.company).first()
+            if mp_target is not None:
+                return redirect(url_for("map_view", map_id=mp_target.id, focus_record=rec.id))
+
+        # Comportamento padrão: volta para a página de visualização do dispositivo
+        return redirect(url_for("record_view", rid=rec.id))
 
     form_created = rec.created_date.date().isoformat() if rec.created_date else date.today().isoformat()
+
+    # Modo de edição:
+    # - Admin vê tela completa
+    # - Splicer (não-admin) usa o mesmo modo rápido do /entry (projeto derivado pelo mapa)
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_splicer = not is_admin
+
+    # Tenta resolver o mapa associado a este record para pré-selecionar no combo
+    pre_map_id = None
+    if rec.map:
+        mp_for_rec = CompanyMap.query.filter_by(name=rec.map, company=rec.company).first()
+        if mp_for_rec is not None:
+            pre_map_id = mp_for_rec.id
 
     return render_template(
         "entry.html",
@@ -1502,20 +1925,211 @@ def record_edit(rid):
         today=date.today().isoformat(),
         is_edit=True,
         record=rec,
+        is_splicer=is_splicer,
         form_company=rec.company,
         form_project_id=str(rec.project_id or ""),
-        form_map=rec.map,
+        form_map_id=str(pre_map_id or ""),
+        form_map_role=getattr(rec, "map_role", None) or "",
         form_type=rec.type,
         form_device_name=rec.device,
         form_splices=str(rec.splices or 0),
         form_created=form_created,
     )
 
+
+
+
+@app.route("/record/photo/<int:photo_id>/remove", methods=["POST"])
+@login_required
+def photo_remove_v2(photo_id: int):
+    """Exclui uma foto específica de um lançamento.
+
+    Regras:
+    - Admin pode sempre excluir;
+    - Dono de empresa (company_owner) nunca pode excluir;
+    - Splicer comum pode excluir se tiver acesso ao mapa do registro
+      e for o splicer responsável pelo lançamento (quando preenchido).
+    """
+
+    photo = RecordPhoto.query.get_or_404(photo_id)
+    rec = photo.record
+
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_owner = bool(getattr(current_user, "is_company_owner", False))
+
+    # Dono de empresa nunca pode excluir
+    if is_owner and not is_admin:
+        abort(403)
+
+    if not is_admin:
+        # Garante acesso ao mapa (mesma lógica usada em outras rotas)
+        mp = None
+        if rec.map:
+            mp = CompanyMap.query.filter_by(name=rec.map, company=rec.company).first()
+        if mp is not None:
+            ensure_map_access(mp)
+
+        # Se o lançamento tem splicer definido, precisa ser o mesmo usuário
+        current_splicer = (getattr(current_user, "splicer_name", None) or current_user.username or "").strip()
+        if rec.splicer and rec.splicer.strip() and rec.splicer.strip() != current_splicer:
+            abort(403)
+
+    db.session.delete(photo)
+    db.session.commit()
+    flash("Foto removida.", "success")
+    return redirect(request.referrer or url_for("record_view", rid=rec.id))
+
+
+
+@app.route("/record/<int:rid>/view")
+@login_required
+def record_view(rid):
+    """Página de detalhes de um dispositivo (registro) para ver e lançar testes.
+
+    Regra especial:
+    - Admin: pode abrir normalmente a tela completa do dispositivo;
+    - Dono de empresa (cliente): é redirecionado para o mapa com foco no dispositivo;
+    - Splicer: pode abrir, desde que tenha acesso ao mapa / empresa.
+    """
+    rec = Record.query.get_or_404(rid)
+
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_owner = bool(getattr(current_user, "is_company_owner", False))
+
+    # Admin => tela completa
+    if is_admin:
+        mp = None
+        if rec.map:
+            mp = CompanyMap.query.filter_by(name=rec.map, company=rec.company).first()
+        map_id_for_button = mp.id if mp is not None else None
+        return render_template("record_view.html", rec=rec, map_id_for_button=map_id_for_button)
+
+    # Dono de empresa (cliente) => manda para o mapa com foco no dispositivo
+    if is_owner and rec.map:
+        mp = CompanyMap.query.filter_by(name=rec.map, company=rec.company).first()
+        if mp is not None:
+            return redirect(url_for("map_view", map_id=mp.id, focus_record=rec.id))
+
+    # 2) Tenta resolver o mapa desse record e usar a mesma lógica de acesso de mapas
+    mp = None
+    if rec.map:
+        mp = CompanyMap.query.filter_by(name=rec.map, company=rec.company).first()
+
+    if mp is not None:
+        # Usa a regra centralizada de acesso a mapas (admin/owner/splicers/sem lista => liberado)
+        ensure_map_access(mp)
+    else:
+        # Fallback: se não tiver mapa associado, garante pelo menos que seja da mesma empresa
+        if _current_user_company_name() != rec.company:
+            # Também permitimos o próprio splicer do registro
+            current_splicer = (getattr(current_user, "splicer_name", None) or current_user.username)
+            if (rec.splicer or "") != current_splicer:
+                abort(403)
+
+    map_id_for_button = mp.id if mp is not None else None
+    return render_template("record_view.html", rec=rec, map_id_for_button=map_id_for_button)
 @app.route("/logout")
 @login_required
 def logout():
     logout_user()
     return redirect(url_for("login"))
+
+
+
+@app.route("/record/<int:record_id>/photos", methods=["POST"])
+@login_required
+def record_upload_photos(record_id):
+    """
+    Upload de fotos adicionais para um lançamento já existente.
+
+    Este endpoint é usado pelo formulário de lançamento (entry.html)
+    quando há fotos na fila. Ele valida o acesso ao mapa / empresa,
+    processa todas as imagens recebidas e retorna JSON com o total salvo.
+    """
+    rec = Record.query.get_or_404(record_id)
+
+    # Reaproveita a mesma lógica de permissão do record_view
+    is_admin = getattr(current_user, "is_admin", False)
+    is_owner = getattr(current_user, "is_company_owner", False)
+
+    if not (is_admin or is_owner):
+        # Usuário normal: precisa ter acesso ao mapa ou ser o splicer do registro
+        mp = None
+        if rec.map:
+            mp = CompanyMap.query.filter_by(name=rec.map, company=rec.company).first()
+
+        if mp is not None:
+            ensure_map_access(mp)
+        else:
+            # Se não há mapa, cai na mesma regra do splicer da company
+            if _current_user_company_name() != rec.company:
+                current_splicer = (getattr(current_user, "splicer_name", None) or current_user.username)
+                if (rec.splicer or "") != current_splicer:
+                    abort(403)
+
+    files = request.files.getlist("photos")
+    if not files:
+        return jsonify({"ok": True, "count": 0})
+
+    is_test = bool(rec.is_test_for_device)
+    added = 0
+    for f in files:
+        if not f or not getattr(f, "filename", None):
+            continue
+        if not f.filename.strip():
+            continue
+
+        processed = process_uploaded_photo(f, is_test=is_test)
+        if not processed:
+            continue
+
+        photo = RecordPhoto(record_id=rec.id, **processed)
+        db.session.add(photo)
+        added += 1
+
+    if added:
+        db.session.commit()
+
+    return jsonify({"ok": True, "count": added})
+
+
+@app.route("/my-maps", methods=["GET"])
+@login_required
+
+
+def my_maps():
+    """
+    Tela para o Splicer escolher em qual mapa quer trabalhar.
+
+    Regras de visibilidade:
+    - Admin: vê todos os mapas;
+    - Dono da empresa (is_company_owner): também vê todos os mapas;
+    - Splicer comum:
+        * Se o mapa não tiver nenhum splicer configurado (allowed_splicers vazio),
+          o mapa aparece e pode ser usado;
+        * Se o mapa tiver allowed_splicers configurado, ele só aparece se o
+          usuário estiver nessa lista.
+    """
+    query = CompanyMap.query
+
+    # Usuário não admin: aplica regras de allowed_splicers
+    if not current_user.is_admin:
+        # Dono de empresa vê todos os mapas
+        if not getattr(current_user, "is_company_owner", False):
+            query = query.filter(
+                or_(
+                    ~CompanyMap.allowed_splicers.any(),
+                    CompanyMap.allowed_splicers.any(id=current_user.id),
+                )
+            )
+
+    maps = query.order_by(CompanyMap.company, CompanyMap.name).all()
+
+    return render_template(
+        "my_maps.html",
+        maps=maps,
+        user_company=None,
+    )
 
 
 @app.route("/settings", methods=["GET"])
@@ -1728,6 +2342,50 @@ def settings_project_detail(pid: int):
         tiers=tiers,
         maps=maps,
         company_id=company_id,
+    )
+
+
+
+@app.route("/settings/map-access/<int:map_id>", methods=["GET", "POST"])
+@login_required
+
+def settings_map_access(map_id):
+    mp = CompanyMap.query.get_or_404(map_id)
+    project = mp.project
+
+    # Somente admin ou dono de empresa podem editar o acesso do mapa.
+    if (not getattr(current_user, "is_admin", False)) and (
+        not getattr(current_user, "is_company_owner", False)
+    ):
+        abort(403)
+
+    # Lista de possíveis splicers: todos os usuários não-admin
+    splicers = (
+        User.query.filter_by(is_admin=False)
+        .order_by(User.splicer_name, User.username)
+        .all()
+    )
+
+    if request.method == "POST":
+        ids = request.form.getlist("splicer_ids")
+        new_users = []
+        for uid in ids:
+            uid = (uid or "").strip()
+            if not uid.isdigit():
+                continue
+            u = User.query.get(int(uid))
+            if u and not u.is_admin:
+                new_users.append(u)
+        mp.allowed_splicers = new_users
+        db.session.commit()
+        flash("Splicers com acesso ao mapa atualizados.", "success")
+        return redirect(url_for("settings_map_access", map_id=mp.id))
+
+    return render_template(
+        "settings_map_access.html",
+        project=project,
+        mp=mp,
+        splicers=splicers,
     )
 
 
@@ -2108,27 +2766,41 @@ def export_invoice():
             (r.device or "").strip(),
             (r.map_role or "").strip(),
             int(r.included_splices_applied) if r.included_splices_applied is not None else None,
+
         )
         if key not in grouped:
             grouped[key] = {
                 "map": key[0] or "-",
                 "device": key[1] or "-",
                 "map_role": key[2] or "",
+                "role": key[2] or "",
                 "included": key[3],
                 "splices": 0,
-                "price_device_usd": float(r.price_device_usd or 0.0),
+                "price_device_usd": 0.0,
                 "total_usd": 0.0,
             }
+
+        # Recalcula valores com as regras ATUAIS (projeto > empresa > global),
+        # ignorando o total_usd gravado no lançamento, para garantir que
+        # invoice sempre siga a configuração mais recente.
+        price_splices, price_device, total_calc = compute_prices(
+            int(r.splices or 0),
+            r.device or "",
+            r.company or company_filter,
+            r.project_id,
+            included_override=r.included_splices_applied,
+        )
+
         grouped[key]["splices"] += int(r.splices or 0)
-        grouped[key]["total_usd"] += float(r.total_usd or 0.0)
-        # se o preço do dispositivo vier zero mas houver total,
-        # tenta inferir um valor médio por dispositivo
-        if grouped[key]["price_device_usd"] == 0.0 and (r.total_usd or 0) and (r.splices or 0):
-            grouped[key]["price_device_usd"] = float(r.total_usd or 0.0) / float(r.splices or 1)
+        # O preço do device fica sempre o último recalculado (os devices
+        # iguais dentro do mesmo grupo devem ter o mesmo valor).
+        grouped[key]["price_device_usd"] = float(price_device or 0.0)
+        grouped[key]["total_usd"] += float(total_calc or 0.0)
 
+    # lista final de linhas da invoice (um item por grupo mapa/device/tipo)
     lines = list(grouped.values())
-    lines.sort(key=lambda x: (x["map"], x["device"]))
 
+    # total geral da invoice (soma de todos os grupos)
     total_invoice = sum(l["total_usd"] for l in lines)
 
     # persist invoice for accounting (PDF será salvo no banco para visualizar depois)
@@ -2199,58 +2871,43 @@ def export_invoice():
     # OBS: FPDF "cell" não faz quebra de linha. Para não "estourar" a tabela e
     # mostrar o nome COMPLETO do device dentro da coluna, vamos desenhar a linha
     # com multi_cell e quebra manual (principalmente em '_' e '-').
+    
+    # === Tabela das linhas (uma linha por registro) ===
     col_widths = [40, 64, 18, 12, 16, 20, 20]
     headers = ["Map", "Device", "Tipo", "Incl.", "Splices", "Device price", "Total"]
 
     pdf.set_font("Arial", "B", 10)
-    for w, h in zip(col_widths, headers):
-        pdf.cell(w, 7, h, border=1)
-    pdf.ln()
 
-    def _break_for_table(txt: str) -> str:
-        """Ajuda o FPDF a quebrar nomes longos SEM picotar.
+    def _draw_table_header():
+        for w, h in zip(col_widths, headers):
+            pdf.cell(w, 7, h, border=1, align="C")
+        pdf.ln(7)
 
-        O FPDF quebra linha em espaços. Como o device costuma vir com '_' e '-',
-        inserimos um espaço APÓS esses separadores (ex: 'A_B' vira 'A_ B') para
-        permitir quebra somente quando precisar, mantendo o nome completo dentro
-        da coluna.
-        """
-        s = (txt or "").strip()
-        if not s:
-            return "-"
-        s = s.replace("_", "_ ")
-        s = s.replace("-", "- ")
-        return s
+    _draw_table_header()
 
     line_h = 6
     pdf.set_font("Arial", "", 9)
-    for l in lines:
+
+    for line in lines:
         row = [
-            str(l["map"] or "-"),
-            _break_for_table(str(l["device"] or "-")),
-            str(l.get("map_role") or ""),
-            str(l.get("included") if l.get("included") is not None else ""),
-            str(l["splices"]),
-            f"$ {l['price_device_usd']:.2f}",
-            f"$ {l['total_usd']:.2f}",
+            line["map"] or "-",
+            line["device"] or "-",
+            line["role"],
+            str(line["included"]),
+            str(line["splices"]),
+            f"$ {line['device_usd']:.2f}",
+            f"$ {line['total_usd']:.2f}",
         ]
 
-        # calcula altura da linha pela célula que tiver mais quebras
-        n_lines = max((str(v).count("\n") + 1) for v in row)
-        row_h = line_h * n_lines
+        # quebra de página manual antes de desenhar a linha
+        if pdf.get_y() + line_h > pdf.page_break_trigger:
+            pdf.add_page()
+            _draw_table_header()
+            pdf.set_font("Arial", "", 9)
 
-        x0 = pdf.get_x()
-        y0 = pdf.get_y()
-
-        # desenha cada célula como multi_cell mantendo a mesma altura de linha
-        x = x0
         for w, val in zip(col_widths, row):
-            pdf.set_xy(x, y0)
-            pdf.multi_cell(w, line_h, str(val), border=1)
-            x += w
-
-        # vai para a próxima linha
-        pdf.set_xy(x0, y0 + row_h)
+            pdf.cell(w, line_h, str(val), border=1)
+        pdf.ln(line_h)
 
     pdf.ln(4)
     pdf.set_font("Arial", "B", 11)
@@ -2673,6 +3330,351 @@ def expenses_delete(expense_id):
 
     return redirect(request.referrer or url_for("expenses"))
 
+
+
+
+def _current_user_company_name():
+    """Devolve o nome da empresa do usuário logado (compatível com versões antigas)."""
+    return getattr(current_user, "company_name", None) or getattr(current_user, "company", None)
+
+
+
+def ensure_map_access(mp: CompanyMap):
+    """Garante que o usuário logado pode acessar o mapa informado.
+
+    Regras:
+    - Admin: acesso total;
+    - Dono da empresa (is_company_owner): acesso total;
+    - Caso exista pelo menos um splicer configurado em mp.allowed_splicers,
+      somente usuários presentes nessa lista podem acessar;
+    - Caso não exista nenhum splicer configurado, qualquer usuário autenticado
+      pode acessar o mapa (a proteção fica só por login).
+    """
+    if not current_user.is_authenticated:
+        abort(403)
+
+    # Admin ou dono da empresa: acesso total
+    if getattr(current_user, "is_admin", False) or getattr(current_user, "is_company_owner", False):
+        return
+
+    # Se houver lista de splicers configurada, exige que o usuário esteja nela
+    if mp.allowed_splicers and current_user not in mp.allowed_splicers:
+        abort(403)
+
+
+@app.route("/maps/<int:map_id>/view")
+@login_required
+def map_view(map_id):
+    mp = CompanyMap.query.get_or_404(map_id)
+
+    ensure_map_access(mp)
+
+    # ID opcional de um dispositivo para focar o mapa ao carregar
+    focus_record_id = request.args.get("focus_record", type=int)
+
+    return render_template("map_view.html", map_obj=mp, focus_record_id=focus_record_id)
+
+
+@app.route("/api/maps/<int:map_id>/import-kmz", methods=["POST"])
+@login_required
+def api_import_kmz(map_id):
+    mp = CompanyMap.query.get_or_404(map_id)
+
+    ensure_map_access(mp)
+
+    file = request.files.get("kmz_file")
+    total = import_kmz_for_map(mp, file)
+    return jsonify({"ok": True, "imported": total})
+
+
+
+@app.route("/api/maps/<int:map_id>/section-colors", methods=["GET", "POST"])
+@login_required
+def api_update_map_section_colors(map_id):
+    mp = CompanyMap.query.get_or_404(map_id)
+
+    ensure_map_access(mp)
+
+    # Modo leitura: qualquer usuário com acesso ao mapa pode ler as cores
+    if request.method == "GET":
+        try:
+            colors = json.loads(mp.section_colors_json or "{}")
+            if not isinstance(colors, dict):
+                colors = {}
+        except Exception:
+            colors = {}
+        return jsonify({"ok": True, "colors": colors})
+
+    # Modo escrita: apenas admin ou dono da empresa podem alterar as cores das seções
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_owner = bool(getattr(current_user, "is_company_owner", False)) and _current_user_company_name() == mp.company
+    if not (is_admin or is_owner):
+        abort(403)
+
+    try:
+        payload = request.get_json(force=True, silent=False) or {}
+        colors = payload.get("colors") or {}
+        if not isinstance(colors, dict):
+            raise ValueError("Formato inválido")
+    except Exception:
+        return jsonify({"ok": False, "error": "JSON inválido de cores."}), 400
+
+    # Normaliza: apenas strings simples "#rrggbb"
+    normalized = {}
+    for key, value in colors.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            continue
+        key = key.strip()
+        val = value.strip()
+        if not key:
+            continue
+        normalized[key] = val
+
+    mp.section_colors_json = json.dumps(normalized, ensure_ascii=False)
+    db.session.commit()
+    return jsonify({"ok": True, "colors": normalized})
+
+
+@app.route("/api/maps/<int:map_id>/records", methods=["GET"])
+@login_required
+def api_map_records(map_id):
+    mp = CompanyMap.query.get_or_404(map_id)
+
+    ensure_map_access(mp)
+
+    # Busca registros associados a este mapa, com coordenadas válidas
+    query = Record.query.filter(Record.map == mp.name)
+
+    # Se houver empresa configurada no mapa, filtramos também por empresa para maior segurança
+    if mp.company:
+        query = query.filter(Record.company == mp.company)
+
+    # Apenas registros com latitude/longitude preenchidos
+    query = query.filter(Record.latitude.isnot(None), Record.longitude.isnot(None))
+
+    data = []
+    for r in query.order_by(Record.id.asc()).all():
+        # Separamos até 4 fotos de lançamento (não de teste) para mostrar no popup do mapa
+        device_photos = [p for p in r.photos if not getattr(p, "is_test", False)]
+        device_photos = device_photos[:4]
+
+        data.append({
+            "id": r.id,
+            "lat": r.latitude,
+            "device": r.device or "",
+            "lng": r.longitude,
+            "info": r.device_info or "",
+            "has_photos": len(r.photos),
+            "photo_ids": [p.id for p in device_photos],
+            "splicer": r.splicer or "",
+            "test_done": bool(r.test_done),
+            "section": r.section or "",
+            "created_date": r.created_date.isoformat() if r.created_date else None,
+        })
+    return jsonify({"records": data})
+
+
+@app.route("/api/records/<int:record_id>/update-from-map", methods=["POST"])
+@login_required
+def api_update_record_from_map(record_id):
+    rec = Record.query.get_or_404(record_id)
+
+    # Permissão básica: apenas mesma empresa ou admin
+    if (not current_user.is_admin) and _current_user_company_name() != rec.company:
+        is_owner = getattr(current_user, "is_company_owner", False)
+        if not is_owner or _current_user_company_name() != rec.company:
+            abort(403)
+
+    # Atualiza dados básicos vindos do formulário do mapa
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_owner = bool(getattr(current_user, "is_company_owner", False) and _current_user_company_name() == rec.company)
+
+    splices_raw = (request.form.get("splices") or "").strip()
+    try:
+        if splices_raw != "":
+            rec.splices = int(splices_raw)
+    except ValueError:
+        pass
+
+    info = (request.form.get("device_info") or "").strip()
+    if is_admin or is_owner:
+        rec.device_info = info or None
+
+    # Ao salvar pelo mapa, consideramos um "lançamento" para o splicer.
+    default_splicer = getattr(current_user, "splicer_name", None) or current_user.username
+    if not rec.splicer:
+        rec.splicer = default_splicer
+
+    if rec.created_date is None:
+        today = date.today()
+        rec.created_date = datetime(today.year, today.month, today.day)
+
+    # Recalcula preços usando a mesma regra da tela de lançamento
+    company = rec.company
+    project_id = rec.project_id
+    device_for_price = rec.type or rec.device
+
+    
+    included_override = None
+    included_applied = None
+
+    included_override, included_applied, map_cfg = resolve_included_override(
+        company,
+        project_id,
+        None,
+        rec.map,
+        rec.map_role,
+    )
+
+    price_splices, price_device, total = compute_prices(
+        int(rec.splices or 0),
+        device_for_price or "",
+        company,
+        project_id,
+        included_override=included_override,
+    )
+    rec.price_splices_usd = price_splices
+    rec.price_device_usd = price_device
+    rec.total_usd = total
+    rec.included_splices_applied = included_applied
+
+    # Fotos opcionais
+    files = request.files.getlist("photos")
+    if files:
+        for f in files[:5]:
+            if not f or not getattr(f, "filename", None):
+                continue
+            filename, content_type, data, thumb_data, thumb_ct = process_uploaded_photo(f)
+            if not data:
+                continue
+
+            photo = RecordPhoto(
+                record_id=rec.id,
+                filename=(filename or "photo")[:255],
+                content_type=content_type,
+                data=data,
+                thumb_data=thumb_data,
+                thumb_content_type=thumb_ct,
+                size_bytes=len(data),
+            )
+            db.session.add(photo)
+
+    db.session.commit()
+    return jsonify({"ok": True})
+
+@app.route("/api/records/<int:record_id>/save-test", methods=["POST"])
+@login_required
+def api_save_record_test(record_id):
+    rec = Record.query.get_or_404(record_id)
+    # Dispositivos CAN não exigem teste: bloqueia salvamento de teste
+    if (rec.type or "").strip().upper().startswith("CAN"):
+        return jsonify({"ok": False, "error": "Dispositivo CAN não exige teste."}), 400
+
+    # Regra de permissão igual à tela de visualização do lançamento:
+    # 1) Admin ou dono da empresa: acesso total
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_owner = bool(getattr(current_user, "is_company_owner", False))
+
+    if not (is_admin or is_owner):
+        # 2) Tenta resolver o mapa desse record e usar a mesma lógica de acesso de mapas
+        mp = None
+        if rec.map:
+            mp = CompanyMap.query.filter_by(name=rec.map, company=rec.company).first()
+
+        if mp is not None:
+            # Usa a regra centralizada de acesso a mapas
+            ensure_map_access(mp)
+        else:
+            # Fallback: mesma empresa ou mesmo splicer do registro
+            if _current_user_company_name() != rec.company:
+                current_splicer = (getattr(current_user, "splicer_name", None) or current_user.username)
+                if (rec.splicer or "") != current_splicer:
+                    abort(403)
+
+
+    levels_raw = (request.form.get("levels") or "").strip()
+    rec.test_levels = levels_raw or None
+    rec.test_done = bool(levels_raw)
+
+    # Fotos de teste (opcional)
+    files = request.files.getlist("photos")
+    if files:
+        for f in files[:5]:
+            if not f or not getattr(f, "filename", None):
+                continue
+            filename, content_type, data, thumb_data, thumb_ct = process_uploaded_photo(f)
+            if not data:
+                continue
+
+            photo = RecordPhoto(
+                record_id=rec.id,
+                filename=(filename or "test")[:255],
+                content_type=content_type,
+                data=data,
+                thumb_data=thumb_data,
+                thumb_content_type=thumb_ct,
+                size_bytes=len(data),
+                is_test=True,
+            )
+
+@app.route("/api/maps/<int:map_id>/add-record", methods=["POST"])
+@login_required
+def api_add_record_to_map(map_id):
+    mp = CompanyMap.query.get_or_404(map_id)
+
+    ensure_map_access(mp)
+
+    device_name = (request.form.get("device") or "").strip()
+    lat_raw = (request.form.get("lat") or "").strip()
+    lng_raw = (request.form.get("lng") or "").strip()
+    device_info = (request.form.get("device_info") or "").strip()
+
+    if not device_name or not lat_raw or not lng_raw:
+        return jsonify({"ok": False, "error": "Campos obrigatórios faltando."}), 400
+
+    try:
+        lat = float(lat_raw)
+        lng = float(lng_raw)
+    except ValueError:
+        return jsonify({"ok": False, "error": "Coordenadas inválidas."}), 400
+
+    # Regra: um dispositivo não pode ser lançado duas vezes no mesmo mapa/projeto.
+    existing = Record.query.filter(
+        Record.map == mp.name,
+        Record.device == device_name,
+        Record.company == mp.company,
+    )
+    if mp.project_id is not None:
+        existing = existing.filter(Record.project_id == mp.project_id)
+    existing = existing.order_by(Record.id.desc()).first()
+    if existing is not None:
+        return jsonify({
+            "ok": False,
+            "error": "Este dispositivo já foi lançado neste mapa. Peça ao admin para excluir ou alterar o lançamento anterior.",
+        }), 400
+
+    rec = Record(
+        map=mp.name,
+        company=mp.company,
+        project_id=mp.project_id,
+        device=device_name,
+        type=None,
+        splices=0,
+        splicer="",
+        created_date=None,
+        latitude=lat,
+        longitude=lng,
+        device_info=device_info or None,
+    )
+    db.session.add(rec)
+    db.session.commit()
+
+    return jsonify({"ok": True, "id": rec.id})
+
+
+
+
+
 if __name__ == "__main__":
     app.run(debug=True)
 
@@ -2680,4 +3682,4 @@ if __name__ == "__main__":
 
 @app.route('/__version')
 def __version__():
-    return 'FULL-FIX-503 2026-02-12'
+    return 'PHOTO-REMOVE-V49 2026-02-12'

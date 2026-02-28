@@ -147,9 +147,19 @@
         {% if maps %}
           <ul class="list-unstyled mb-0 small">
             {% for m in maps %}
-              <li class="mb-2">
+              <li class="mb-3">
                 <div class="d-flex justify-content-between align-items-center">
-                  <span><b>{{ m.name }}</b></span>
+                  <div>
+                    <div><b>{{ m.name }}</b></div>
+                    {% if m.project_id %}
+                      <a href="{{ url_for('map_view', map_id=m.id) }}" class="badge bg-info text-dark mt-1">
+                        Abrir mapa interativo
+                      </a>
+                      <a href="{{ url_for('settings_map_access', map_id=m.id) }}" class="badge bg-secondary text-light mt-1 ms-1">
+                        Splicers do mapa
+                      </a>
+                    {% endif %}
+                  </div>
                   <a href="{{ url_for('settings_project_detail', pid=project.id) }}?del_map={{ m.id }}" class="text-danger"
                      onclick="return confirm('Remover mapa?');">✕</a>
                 </div>
