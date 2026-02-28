@@ -2766,6 +2766,7 @@ def export_invoice():
             (r.device or "").strip(),
             (r.map_role or "").strip(),
             int(r.included_splices_applied) if r.included_splices_applied is not None else None,
+
         )
         if key not in grouped:
             grouped[key] = {
@@ -2774,18 +2775,27 @@ def export_invoice():
                 "map_role": key[2] or "",
                 "included": key[3],
                 "splices": 0,
-                "price_device_usd": float(r.price_device_usd or 0.0),
+                "price_device_usd": 0.0,
                 "total_usd": 0.0,
             }
-        grouped[key]["splices"] += int(r.splices or 0)
-        grouped[key]["total_usd"] += float(r.total_usd or 0.0)
-        # se o preço do dispositivo vier zero mas houver total,
-        # tenta inferir um valor médio por dispositivo
-        if grouped[key]["price_device_usd"] == 0.0 and (r.total_usd or 0) and (r.splices or 0):
-            grouped[key]["price_device_usd"] = float(r.total_usd or 0.0) / float(r.splices or 1)
 
-    lines = list(grouped.values())
-    lines.sort(key=lambda x: (x["map"], x["device"]))
+        # Recalcula valores com as regras ATUAIS (projeto > empresa > global),
+        # ignorando o total_usd gravado no lançamento, para garantir que
+        # invoice sempre siga a configuração mais recente.
+        price_splices, price_device, total_calc = compute_prices(
+            int(r.splices or 0),
+            r.device or "",
+            r.company or company_filter,
+            r.project_id,
+            included_override=r.included_splices_applied,
+        )
+
+        grouped[key]["splices"] += int(r.splices or 0)
+        # O preço do device fica sempre o último recalculado (os devices
+        # iguais dentro do mesmo grupo devem ter o mesmo valor).
+        grouped[key]["price_device_usd"] = float(price_device or 0.0)
+        grouped[key]["total_usd"] += float(total_calc or 0.0)
+
 
     total_invoice = sum(l["total_usd"] for l in lines)
 
