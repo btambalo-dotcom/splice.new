@@ -2895,7 +2895,7 @@ def export_invoice():
             line["role"],
             str(line["included"]),
             str(line["splices"]),
-            f"$ {line['device_usd']:.2f}",
+            f"$ {line['price_device_usd']:.2f}",
             f"$ {line['total_usd']:.2f}",
         ]
 
