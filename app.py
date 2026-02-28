@@ -2796,7 +2796,10 @@ def export_invoice():
         grouped[key]["price_device_usd"] = float(price_device or 0.0)
         grouped[key]["total_usd"] += float(total_calc or 0.0)
 
+    # lista final de linhas da invoice (um item por grupo mapa/device/tipo)
+    lines = list(grouped.values())
 
+    # total geral da invoice (soma de todos os grupos)
     total_invoice = sum(l["total_usd"] for l in lines)
 
     # persist invoice for accounting (PDF será salvo no banco para visualizar depois)
