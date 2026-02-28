@@ -2907,7 +2907,8 @@ def export_invoice():
         for w, val in zip(col_widths, row):
             pdf.cell(w, line_h, str(val), border=1)
         pdf.ln(line_h)
-pdf.ln(4)
+
+    pdf.ln(4)
     pdf.set_font("Arial", "B", 11)
     pdf.cell(0, 8, f"Invoice total: $ {total_invoice:.2f}", ln=1)
 
