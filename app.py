@@ -2780,22 +2780,16 @@ def export_invoice():
                 "total_usd": 0.0,
             }
 
-        # Recalcula valores com as regras ATUAIS (projeto > empresa > global),
-        # ignorando o total_usd gravado no lançamento, para garantir que
-        # invoice sempre siga a configuração mais recente.
-        price_splices, price_device, total_calc = compute_prices(
-            int(r.splices or 0),
-            r.device or "",
-            r.company or company_filter,
-            r.project_id,
-            included_override=r.included_splices_applied,
-        )
-
+        # Usa diretamente os valores gravados em cada lançamento, para garantir
+        # que a invoice some exatamente o que você vê na tela de Produção.
         grouped[key]["splices"] += int(r.splices or 0)
-        # O preço do device fica sempre o último recalculado (os devices
-        # iguais dentro do mesmo grupo devem ter o mesmo valor).
-        grouped[key]["price_device_usd"] = float(price_device or 0.0)
-        grouped[key]["total_usd"] += float(total_calc or 0.0)
+
+        device_price = float(getattr(r, "price_device_usd", 0.0) or 0.0)
+        # Mantém sempre o último valor de device do grupo (todos devem ser iguais).
+        if device_price > 0:
+            grouped[key]["price_device_usd"] = device_price
+
+        grouped[key]["total_usd"] += float(getattr(r, "total_usd", 0.0) or 0.0)
 
     # lista final de linhas da invoice (um item por grupo mapa/device/tipo)
     lines = list(grouped.values())
