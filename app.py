@@ -773,24 +773,55 @@ def device_value_for(name: str, company: str | None, project_id: int | None = No
     return float(dt.value_usd) if dt else 0.0
 
 def tier_price_for(count: int, company: str | None, project_id: int | None = None) -> float:
-    """Retorna o $/fusão da faixa com base APENAS no intervalo de splices.
+    """Retorna o $/fusão da faixa respeitando prioridade:
 
-    Por enquanto, ignoramos filtros de empresa / projeto nas faixas e usamos
-    só a tabela global de intervalos:
-        - min_splices <= count
-        - max_splices é NULL ou >= count
-    e escolhemos a faixa com maior min_splices que atenda a condição.
+    1. Faixa específica do PROJETO (independente da empresa).
+    2. Se não houver faixa de projeto, usa faixa da EMPRESA (sem projeto).
+    3. Se ainda assim não tiver, usa faixa GLOBAL (sem empresa e sem projeto).
+
+    Em todos os casos, escolhe a faixa cujo intervalo contenha `count`:
+        min_splices <= count <= max_splices (ou max_splices is NULL)
+    e, dentre elas, pega a de maior `min_splices` (faixa mais específica).
     """
     from sqlalchemy import or_ as _or
 
-    q = (
-        SpliceTier.query.filter(SpliceTier.min_splices <= count)
-        .filter(_or(SpliceTier.max_splices == None, SpliceTier.max_splices >= count))
-        .order_by(SpliceTier.min_splices.desc())
-    )
+    def _best_for(base_query):
+        q = (
+            base_query.filter(SpliceTier.min_splices <= count)
+            .filter(_or(SpliceTier.max_splices == None, SpliceTier.max_splices >= count))
+            .order_by(SpliceTier.min_splices.desc())
+        )
+        return q.first()
 
-    tier = q.first()
-    return float(tier.price_per_splice_usd or 0.0) if tier else 0.0
+    # 1) Faixas específicas do PROJETO (se houver project_id)
+    if project_id:
+        tier_proj = _best_for(SpliceTier.query.filter(SpliceTier.project_id == project_id))
+        if tier_proj:
+            return float(tier_proj.price_per_splice_usd or 0.0)
+
+    # 2) Faixas por EMPRESA (sem projeto)
+    if company:
+        tier_company = _best_for(
+            SpliceTier.query.filter(
+                SpliceTier.company == company,
+                SpliceTier.project_id.is_(None),
+            )
+        )
+        if tier_company:
+            return float(tier_company.price_per_splice_usd or 0.0)
+
+    # 3) Faixas GLOBAIS (sem empresa e sem projeto)
+    tier_global = _best_for(
+        SpliceTier.query.filter(
+            SpliceTier.company.is_(None),
+            SpliceTier.project_id.is_(None),
+        )
+    )
+    if tier_global:
+        return float(tier_global.price_per_splice_usd or 0.0)
+
+    # Se não houver nenhuma faixa cadastrada
+    return 0.0
 
 
 def resolve_included_override(company: str | None, project_id: int | None, map_obj, map_val: str | None, map_role: str | None):
