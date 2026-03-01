@@ -207,15 +207,28 @@ def import_kmz_for_map(company_map, file_storage):
         filters = [
             Record.company == company_map.company,
             Record.device == name,
+            Record.map == company_map.name,
         ]
         if company_map.project_id is not None:
             filters.append(Record.project_id == company_map.project_id)
 
+        # Agora só reaproveitamos um Record se ele já for deste mesmo mapa.
+        # Se existir apenas em outro mapa, vamos criar um novo registro,
+        # para não "roubar" o dispositivo de outro mapa diferente.
         rec = Record.query.filter(and_(*filters)).order_by(Record.id.desc()).first()
 
-        # se achou em outro mapa, atualiza o campo map para o mapa atual
-        if rec is not None and rec.map != company_map.name:
-            rec.map = company_map.name
+        if rec is None:
+            rec = Record(
+                company=company_map.company,
+                project_id=company_map.project_id,
+                map=company_map.name,
+                device=name,
+                splicer="",
+                created_date=None,
+                section=section_name,
+                device_info=device_info_val,
+            )
+            db.session.add(rec)
 
         if not rec:
             rec = Record(
