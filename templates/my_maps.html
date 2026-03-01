@@ -49,10 +49,15 @@
               {% if current_user.is_admin %}
               <form method="post"
                     action="{{ url_for('delete_map', map_id=m.id) }}"
-                    class="d-inline"
-                    onsubmit="return confirm('Tem certeza que deseja excluir este mapa?');">
-                <button type="submit" class="btn btn-sm btn-outline-danger ms-1">
-                  Excluir
+                    class="d-inline ms-1">
+                <input type="password"
+                       name="admin_password"
+                       class="form-control form-control-sm d-inline-block mb-1"
+                       style="width: 150px;"
+                       placeholder="Senha admin"
+                       required>
+                <button type="submit" class="btn btn-sm btn-outline-danger w-100">
+                  Excluir mapa
                 </button>
               </form>
               {% endif %}
