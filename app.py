@@ -3433,9 +3433,6 @@ def map_view(map_id):
 
 @app.route("/maps/<int:map_id>/delete", methods=["POST"])
 @login_required
-
-@app.route("/maps/<int:map_id>/delete", methods=["POST"])
-@login_required
 def delete_map(map_id):
     """
     DESABILITADO: exclusão de mapas foi bloqueada para evitar perda acidental
@@ -3447,8 +3444,11 @@ def delete_map(map_id):
 
 
 
-get_or_404(map_id)
 
+@app.route("/maps/<int:map_id>/section_colors", methods=["GET", "POST"])
+@login_required
+def map_section_colors(map_id):
+    mp = CompanyMap.query.get_or_404(map_id)
     ensure_map_access(mp)
 
     # Modo leitura: qualquer usuário com acesso ao mapa pode ler as cores
@@ -3489,6 +3489,7 @@ get_or_404(map_id)
     mp.section_colors_json = json.dumps(normalized, ensure_ascii=False)
     db.session.commit()
     return jsonify({"ok": True, "colors": normalized})
+
 
 
 @app.route("/api/maps/<int:map_id>/records", methods=["GET"])
