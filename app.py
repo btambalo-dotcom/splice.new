@@ -3434,8 +3434,8 @@ def map_view(map_id):
 @app.route("/maps/<int:map_id>/delete", methods=["POST"])
 @login_required
 def delete_map(map_id):
-    """Exclui um mapa (CompanyMap). Não apaga os lançamentos de produção,
-    apenas remove o cadastro do mapa e suas configurações de cores/KMZ.
+    """Exclui um mapa (CompanyMap) e também limpa os lançamentos de produção
+    associados a esse mapa (mesma empresa + mesmo nome de mapa).
 
     Somente ADMIN pode excluir mapas. Dono de empresa (company_owner) tem
     acesso apenas para visualização e não pode excluir nem alterar nada.
@@ -3445,6 +3445,24 @@ def delete_map(map_id):
     is_admin = bool(getattr(current_user, "is_admin", False))
     if not is_admin:
         abort(403)
+
+    # Remove todos os registros de produção ligados a esse mapa
+    # (mesma empresa + mesmo nome de mapa). Isso garante que,
+    # ao recriar o mapa com o mesmo nome, ele venha "zerado"
+    # e não reaproveite dados antigos nem de outros mapas.
+    records = Record.query.filter(
+        Record.company == mp.company,
+        Record.map == mp.name,
+    ).all()
+
+    if records:
+        record_ids = [r.id for r in records]
+        # Apaga fotos associadas a esses registros
+        if record_ids:
+            RecordPhoto.query.filter(RecordPhoto.record_id.in_(record_ids)).delete(synchronize_session=False)
+        # Apaga os registros em si
+        for r in records:
+            db.session.delete(r)
 
     db.session.delete(mp)
     db.session.commit()
