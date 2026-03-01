@@ -1,0 +1,253 @@
+
+{% extends 'base.html' %}
+{% block title %}SPLICER{% endblock %}
+{% block content %}
+<h3 class="mb-3">SPLICER · Produção</h3>
+
+<div class="row mb-4 g-3">
+  <div class="col-md-4">
+    <div class="card p-3">
+      <span class="text-secondary">Registros no banco</span>
+      <h2 class="mb-0">{{ total_rows }}</h2>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card p-3">
+      <span class="text-secondary">Valor total acumulado (USD)</span>
+      <h2 class="mb-0">$ {{ '%.2f'|format(total_amount or 0) }}</h2>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card p-3">
+      <span class="text-secondary">Formato aceito</span>
+      <h2 class="mb-0">.xlsx</h2>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+    <div class="card p-4">
+      
+      <h5>Filtros</h5>
+      <form method="get" class="row g-2">
+        <div class="col-md-6">
+          <label class="form-label">Empresa</label>
+          {% if current_user.is_admin %}
+          <select name="company" class="form-control">
+            <option value="">Todas</option>
+            {% for c in companies %}
+              <option value="{{ c }}" {% if company_filter == c %}selected{% endif %}>{{ c }}</option>
+            {% endfor %}
+          </select>
+          {% elif current_user.is_company_owner and current_user.company_name %}
+          <!-- Dono de empresa: empresa fixa, sem possibilidade de trocar -->
+          <input class="form-control" value="{{ current_user.company_name }}" disabled>
+          <input type="hidden" name="company" value="{{ current_user.company_name }}">
+          {% else %}
+          <!-- Usuário comum: não escolhe empresa, apenas vê a empresa do lançamento -->
+          <input class="form-control" value="(empresa do seu lançamento)" disabled>
+          {% endif %}
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Splicer / Usuário</label>
+          {% if current_user.is_admin %}
+          <select name="splicer" class="form-control">
+            <option value="">Todos</option>
+            {% for s in splicers %}
+              <option value="{{ s }}" {% if splicer_filter == s %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+          {% else %}
+          <input class="form-control" value="{{ current_user.splicer_name or current_user.username }}" disabled>
+          {% endif %}
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Map</label>
+          <input name="map" class="form-control" value="{{ map_filter }}">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Buscar por dispositivo</label>
+          <input name="device" class="form-control" value="{{ device_filter }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Data início</label>
+          <input type="date" name="start" class="form-control" value="{{ start }}">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label">Data fim</label>
+          <input type="date" name="end" class="form-control" value="{{ end }}">
+        </div>
+        <div class="col-md-12">
+          <button class="btn btn-outline-light w-100 mt-2">Aplicar filtros</button>
+        </div>
+      </form>
+mb-3">Registros</h5>
+  
+  <div class="mb-2 text-end">
+    {% if current_user.is_admin %}
+    <a class="btn btn-sm btn-outline-info me-2"
+       href="{{ url_for('export_pdf', company=company_filter, splicer=splicer_filter, map=map_filter, start=start, end=end) }}">
+      PDF com valores
+    </a>
+    <a class="btn btn-sm btn-outline-secondary me-2"
+       href="{{ url_for('export_pdf', company=company_filter, splicer=splicer_filter, map=map_filter, start=start, end=end, no_values=1) }}">
+      PDF sem valores
+    </a>
+    <a class="btn btn-sm btn-warning me-2"
+       href="{{ url_for('export_invoice', company=company_filter, splicer=splicer_filter, map=map_filter, start=start, end=end) }}">
+      Generate invoice (PDF)
+    </a>
+    <a class="btn btn-sm btn-success me-2"
+       href="{{ url_for('export_excel', company=company_filter, splicer=splicer_filter, map=map_filter, start=start, end=end) }}">
+      Export Excel
+    </a>
+    <a class="btn btn-sm btn-outline-light"
+       href="{{ url_for('photos_filtered_zip', company=company_filter, splicer=splicer_filter, map=map_filter, device=device_filter, start=start, end=end) }}">
+      Download fotos filtradas (.zip)
+    </a>
+    {% else %}
+    <a class="btn btn-sm btn-outline-info me-2"
+       href="{{ url_for('export_pdf', company=company_filter, splicer=splicer_filter, map=map_filter, start=start, end=end) }}">
+      PDF com valores
+    </a>
+    <a class="btn btn-sm btn-success me-2"
+       href="{{ url_for('export_excel', company=company_filter, splicer=splicer_filter, map=map_filter, start=start, end=end) }}">
+      Export Excel
+    </a>
+    <a class="btn btn-sm btn-outline-light"
+       href="{{ url_for('photos_filtered_zip', company=company_filter, splicer=splicer_filter, map=map_filter, device=device_filter, start=start, end=end) }}">
+      Download fotos filtradas (.zip)
+    </a>
+    {% endif %}
+  </div>
+
+
+  <div class="table-responsive" style="max-height: 60vh;">
+    <table class="table table-sm table-dark align-middle">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Data</th>
+          <th>Empresa</th>
+          <th>Map</th>
+          <th class="nowrap-cell">Type</th>
+          <th>Device</th>
+          <th>Splicer</th>
+          <th>Splices</th>
+          <th>$ Fusões</th>
+          <th>$ Device</th>
+          <th>$ Total</th>
+          <th>Fotos</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in records %}
+          <tr>
+            <td>{{ r.id }}</td>
+            <td>{{ r.created_date.date() if r.created_date else '' }}</td>
+            <td>{{ r.company or '-' }}</td>
+            <td>{{ r.map }}</td>
+            <td class="nowrap-cell">{{ r.type }}</td>
+            <td>{{ r.device }}</td>
+            <td>{{ r.splicer }}</td>
+            <td>{{ r.splices }}</td>
+            <td>$ {{ '%.2f'|format(r.price_splices_usd or 0) }}</td>
+            <td>$ {{ '%.2f'|format(r.price_device_usd or 0) }}</td>
+            <td>$ {{ '%.2f'|format(r.total_usd or 0) }}</td>
+            <td>
+              {% if r.photos|length > 0 %}
+              <button type="button"
+                      class="btn btn-sm btn-outline-light"
+                      title="Ver fotos"
+                      data-bs-toggle="modal"
+                      data-bs-target="#photosModal-{{ r.id }}">
+                📷
+              </button>
+              {% else %}
+              <span class="text-secondary small">—</span>
+              {% endif %}
+            </td>
+            <td class="text-end">
+              {% set can_edit = false %}
+              {% if current_user.is_admin %}
+                {% set can_edit = true %}
+              {% elif (not current_user.is_company_owner) and (editable_maps and (r.map in editable_maps)) %}
+                {% set can_edit = true %}
+              {% endif %}
+              {% if can_edit %}
+              <a href="{{ url_for('record_edit', rid=r.id) }}" class="btn btn-sm btn-outline-primary me-1">Editar</a>
+              {% endif %}
+              {% if (not current_user.is_company_owner) or current_user.is_admin %}
+              <a href="{{ url_for('record_delete', rid=r.id) }}" class="btn btn-sm btn-outline-danger" onclick="return confirm('Excluir este registro?');">✕</a>
+              {% endif %}
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="11" class="text-center text-secondary">Nenhum registro encontrado.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  
+
+{# Modais de fotos por registro #}
+{% for r in records %}
+  {% if r.photos|length > 0 %}
+  <div class="modal fade" id="photosModal-{{ r.id }}" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-fullscreen modal-dialog-centered">
+      <div class="modal-content bg-dark">
+        <div class="modal-header border-0">
+          <h5 class="modal-title">Fotos do dispositivo · ID {{ r.id }}</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Fechar"></button>
+        </div>
+        <div class="modal-body">
+          <div id="carousel-{{ r.id }}" class="carousel slide" data-bs-ride="carousel">
+            <div class="carousel-inner">
+              {% for photo in r.photos|sort(attribute='created_at') %}
+              <div class="carousel-item {% if loop.first %}active{% endif %}">
+                <a href="{{ url_for('photo_file', photo_id=photo.id) }}" target="_blank" rel="noopener">
+                <img src="{{ url_for('photo_file', photo_id=photo.id, size='thumb') }}" loading="lazy" data-full="{{ url_for('photo_file', photo_id=photo.id) }}"
+                     class="d-block mx-auto img-fluid"
+                     style="max-width: 100%; max-height: calc(100vh - 220px); object-fit: contain;"
+                     alt="Foto {{ loop.index }} do dispositivo {{ r.device }}">
+                </a>
+              </div>
+              {% endfor %}
+            </div>
+            <button class="carousel-control-prev" type="button" data-bs-target="#carousel-{{ r.id }}" data-bs-slide="prev">
+              <span class="carousel-control-prev-icon" aria-hidden="true"></span>
+              <span class="visually-hidden">Anterior</span>
+            </button>
+            <button class="carousel-control-next" type="button" data-bs-target="#carousel-{{ r.id }}" data-bs-slide="next">
+              <span class="carousel-control-next-icon" aria-hidden="true"></span>
+              <span class="visually-hidden">Próxima</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="mt-3 text-center">
+          <a href="{{ url_for('record_photos_zip', rid=r.id) }}"
+             class="btn btn-sm btn-warning me-2 mb-2">
+            Download todas as fotos (.zip)
+          </a>
+          {% for photo in r.photos|sort(attribute='created_at') %}
+          <a href="{{ url_for('static', filename='uploads/' ~ photo.filename) }}"
+             download
+             class="btn btn-sm btn-outline-light me-2 mb-2">
+            Download foto {{ loop.index }}
+          </a>
+          {% endfor %}
+        </div>
+
+        <div class="modal-footer border-0">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Fechar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+{% endfor %}
+
+</div>
+</div>
+{% endblock %}

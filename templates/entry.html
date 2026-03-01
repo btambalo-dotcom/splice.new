@@ -1,0 +1,490 @@
+
+{% extends 'base.html' %}
+{% block title %}Lançamentos · SPLICER{% endblock %}
+{% block content %}
+<h3 class="mb-3">Lançamento manual</h3>
+
+<div class="row g-4">
+  <div class="col-lg-6">
+    <div class="card p-4">
+      <h5 class="mb-3">
+        {% if is_edit %}Editar lançamento{% else %}Novo lançamento{% endif %}
+      </h5>
+      <form id="entry-form" method="post" enctype="multipart/form-data">
+        {% if duplicate_record %}
+        <div class="alert alert-warning small">
+          Dispositivo <b>{{ duplicate_record.device }}</b> já foi lançado no mapa
+          <b>{{ duplicate_record.map }}</b> em
+          <b>{{ duplicate_record.created_date.date() if duplicate_record.created_date else '-' }}</b>
+          pelo splicer <b>{{ duplicate_record.splicer }}</b>.
+          Se desejar lançar novamente, confirme salvando o formulário mais uma vez.
+        </div>
+        {% endif %}
+        <div class="mb-3">
+          <label class="form-label">Empresa</label>
+          <select id="company-select" class="form-control" name="company" required>
+            <option value="">Selecione a empresa</option>
+            {% for c in companies %}
+              <option value="{{ c }}" {% if form_company is defined and form_company == c %}selected{% endif %}>{{ c }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% if not is_splicer %}
+        <div class="mb-3">
+          <label class="form-label">Projeto</label>
+          <select id="project-select" class="form-control" {% if not is_edit %}name="project_id"{% endif %}>
+            <option value="">Sem projeto (valores da empresa)</option>
+          </select>
+          <div class="form-text">Selecione o projeto para aplicar a tabela de valores correta.</div>
+        </div>
+        {% else %}
+          <input type="hidden" name="project_id" id="project-id-hidden" value="">
+        {% endif %}
+
+        <div class="mb-3">
+          <label class="form-label">Map</label>
+          <input type="hidden" name="map" id="map-name-hidden" value="">
+          <select id="map-select" class="form-control" name="map_id" required>
+            <option value="">Selecione a empresa primeiro</option>
+          </select>
+        </div>
+
+        <div class="mb-3" id="map-role-wrap" style="display:none;">
+          <label class="form-label">Tipo do mapa (obrigatório)</label>
+          <select name="map_role" id="map-role-select" class="form-control">
+            <option value="">Selecione MEIO ou PONTA</option>
+            <option value="MEIO">MEIO</option>
+            <option value="PONTA">PONTA</option>
+          </select>
+          <div class="form-text" id="map-role-hint"></div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Tipo / Dispositivo</label>
+          <select name="type" id="type-select" class="form-control" required>
+            <option value="">Selecione a empresa primeiro</option>
+          </select>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Nome do dispositivo</label>
+          <input id="device-name-input"
+           name="device_name"
+           class="form-control"
+           placeholder="Ex.: CAM 01, CTO 02"
+           value="{{ form_device_name|default('') }}"
+           autocomplete="off"
+           autofocus>
+        </div>
+        <div class="row g-2">
+          <div class="col-6">
+            <label class="form-label">Splices</label>
+            <input name="splices" type="number" min="0" class="form-control" value="{{ form_splices|default('0') }}">
+          </div>
+          <div class="col-6">
+            <label class="form-label">Data</label>
+            <input name="created" type="date" class="form-control" value="{{ form_created|default(today) }}">
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Fotos do dispositivo (opcional)</label>
+          <input type="file"
+                 id="photos-input"
+                 name="photos"
+                 accept="image/*"
+                 multiple
+                 class="form-control">
+          <div id="photo-upload-status" class="small text-muted mt-2"></div>
+          <small class="form-text text-muted">
+            Você pode anexar até 5 fotos. O sistema reduz o tamanho automaticamente para salvar mais leve.
+          </small>
+        </div>
+
+        {% if current_user.is_admin %}
+        <div class="mb-3 mt-2">
+          <label class="form-label">Splicer (quem lançou)</label>
+          <select name="splicer" class="form-control">
+            {% for s in splicer_options %}
+            <option value="{{ s }}"
+              {% if is_edit and record.splicer == s %}
+                selected
+              {% elif (not is_edit) and default_splicer == s %}
+                selected
+              {% endif %}>
+              {{ s }}
+            </option>
+            {% endfor %}
+          </select>
+          <div class="form-text">Somente o admin pode alterar quem lançou o dispositivo.</div>
+        </div>
+        {% else %}
+        <input type="hidden" name="splicer" value="{{ default_splicer }}">
+        {% endif %}
+
+        {% if confirm_duplicate %}
+        <input type="hidden" name="confirm_duplicate" value="yes">
+        {% endif %}
+        <button class="btn btn-primary w-100" type="submit">Salvar lançamento</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="card p-4 text-light">
+      <h5 class="mb-3">Como funciona</h5>
+      <ul class="small text-light">
+        <li>Escolha a <b>empresa</b>. O campo de <b>map</b> só mostra mapas cadastrados para ela.</li>
+        <li>As regras de <b>fusões inclusas</b> e <b>preços</b> vêm da tela de Configurações.</li>
+        <li>Esse formulário lança <b>apenas uma linha</b> por vez, igual a uma linha da planilha.</li>
+        <li>Todos os lançamentos aparecem depois na tela principal de <b>Produção</b>.</li>
+        <li>Se você for usuário normal, só vê e lança <b>os seus próprios registros</b>. O admin vê tudo.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script>
+
+  // NOTE: Em algumas telas (ex: /record/<id>/edit) nem todos os dicts são enviados.
+  // Usamos default({}) para evitar "Undefined is not JSON serializable" (500) em produção.
+  const projectsByCompany = {{ (projects_by_company|default({}))|tojson }};
+  const mapsByProject = {{ (maps_by_project|default({}))|tojson }};
+  const devicesByProject = {{ (devices_by_project|default({}))|tojson }};
+  const mapsByCompany = {{ (maps_by_company|default({}))|tojson }};
+  const mapsByCompanyAll = {{ (maps_by_company_all|default({}))|tojson }};
+  const IS_SPLICER = {{ (is_splicer|default(false))|tojson }};
+  const devicesByCompany = {{ (devices_by_company|default({}))|tojson }};
+
+  const companySelect = document.getElementById('company-select');
+  const projectSelect = document.getElementById('project-select');
+  const mapSelect = document.getElementById('map-select');
+  const mapRoleWrap = document.getElementById('map-role-wrap');
+  const mapRoleSelect = document.getElementById('map-role-select');
+  const mapRoleHint = document.getElementById('map-role-hint');
+  const typeSelect = document.getElementById('type-select');
+
+  function updateProjects() {
+    if (!projectSelect) return;
+    const company = companySelect.value;
+    projectSelect.innerHTML = '';
+
+    const opt0 = document.createElement('option');
+    opt0.value = '';
+    opt0.textContent = 'Sem projeto (valores da empresa)';
+    projectSelect.appendChild(opt0);
+
+    if (!company) {
+      projectSelect.disabled = true;
+      return;
+    }
+    projectSelect.disabled = false;
+
+    const projects = projectsByCompany[company] || [];
+    if (projects.length === 0) return;
+
+    projects.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = String(p.id);
+      opt.textContent = p.name;
+      projectSelect.appendChild(opt);
+    });
+  }
+
+  function updateTypes() {
+    const company = companySelect.value || '__global__';
+    const pid = (projectSelect && projectSelect.value) ? String(projectSelect.value) : '';
+
+    let types = [];
+    if (pid && devicesByProject[pid]) {
+      types = devicesByProject[pid];
+    } else {
+      types = devicesByCompany[company] || devicesByCompany['__global__'] || [];
+    }
+
+    typeSelect.innerHTML = '';
+
+    if (!companySelect.value) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'Selecione a empresa primeiro';
+      typeSelect.appendChild(opt);
+      return;
+    }
+
+    if (types.length === 0) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'Nenhum dispositivo cadastrado para esta seleção';
+      typeSelect.appendChild(opt);
+      return;
+    }
+
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = 'Selecione o tipo / dispositivo';
+    typeSelect.appendChild(empty);
+
+    types.forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t;
+      opt.textContent = t;
+      typeSelect.appendChild(opt);
+    });
+  }
+
+  function updateMaps() {
+    const company = companySelect.value;
+    const pid = (projectSelect && projectSelect.value) ? String(projectSelect.value) : '';
+
+    let maps = [];
+    if (IS_SPLICER) {
+      maps = mapsByCompanyAll[company] || [];
+    } else {
+      if (pid && mapsByProject[pid]) {
+        maps = mapsByProject[pid];
+      } else {
+        maps = mapsByCompany[company] || [];
+      }
+    }
+
+    mapSelect.innerHTML = '';
+
+    if (!company) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'Selecione a empresa primeiro';
+      mapSelect.appendChild(opt);
+      return;
+    }
+
+    if (maps.length === 0) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'Nenhum mapa cadastrado para esta seleção';
+      mapSelect.appendChild(opt);
+      return;
+    }
+
+    const empty = document.createElement('option');
+    empty.value = '';
+    empty.textContent = 'Selecione o mapa';
+    mapSelect.appendChild(empty);
+
+    maps.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = String(m.id);
+      opt.textContent = m.name;
+      opt.dataset.projectId = (m.project_id === null || m.project_id === undefined) ? '' : String(m.project_id);
+      opt.dataset.midEndEnabled = m.mid_end_enabled ? '1' : '0';
+      opt.dataset.inclMeio = String(m.included_splices_meio ?? 0);
+      opt.dataset.inclPonta = String(m.included_splices_ponta ?? 0);
+      mapSelect.appendChild(opt);
+    });
+
+    // após atualizar lista, recalcula visibilidade do MEIO/PONTA
+    updateMapRoleVisibility();
+  }
+
+  function updateMapRoleVisibility() {
+    const opt = mapSelect.options[mapSelect.selectedIndex];
+    // snapshot do nome do mapa (usado no backend/duplicidade)
+    const mapNameHidden = document.getElementById('map-name-hidden');
+    if (mapNameHidden) mapNameHidden.value = (opt && opt.textContent) ? opt.textContent : '';
+    // para splicer: deriva projeto pelo mapa
+    if (IS_SPLICER) {
+      const projectHidden = document.getElementById('project-id-hidden');
+      if (projectHidden) projectHidden.value = (opt && opt.dataset && opt.dataset.projectId) ? opt.dataset.projectId : '';
+    }
+    const enabled = opt && opt.dataset && opt.dataset.midEndEnabled === '1';
+    if (!enabled) {
+      mapRoleWrap.style.display = 'none';
+      mapRoleSelect.required = false;
+      mapRoleSelect.value = '';
+      mapRoleHint.textContent = '';
+      return;
+    }
+
+    mapRoleWrap.style.display = '';
+    mapRoleSelect.required = true;
+
+    const inclMeio = opt.dataset.inclMeio || '0';
+    const inclPonta = opt.dataset.inclPonta || '0';
+    mapRoleHint.textContent = `Inclusas: MEIO = ${inclMeio} | PONTA = ${inclPonta} (travado pela configuração do mapa)`;
+  }
+
+  companySelect.addEventListener('change', () => {
+    updateProjects();
+    updateMaps();
+    updateTypes();
+  });
+
+  if (projectSelect) projectSelect.addEventListener('change', () => {
+    updateMaps();
+    updateTypes();
+  });
+
+  mapSelect.addEventListener('change', () => {
+    updateMapRoleVisibility();
+    const deviceInput = document.getElementById('device-name-input');
+    if (deviceInput) { deviceInput.focus(); deviceInput.select(); }
+  });
+
+  document.addEventListener('DOMContentLoaded', () => {
+    // Garante que a empresa do registro fique aplicada antes de carregar projetos/mapas
+    const preselectedCompany = "{{ form_company|default('') }}";
+    if (preselectedCompany && companySelect) {
+      companySelect.value = preselectedCompany;
+    }
+    updateProjects();
+    const preselectedProject = "{{ form_project_id|default('') }}";
+    if (preselectedProject && projectSelect) {
+      projectSelect.value = preselectedProject;
+    }
+    updateMaps();
+    updateTypes();
+
+    const preselectedMap = "{{ form_map_id|default('') }}";
+    if (preselectedMap) {
+      mapSelect.value = preselectedMap;
+    }
+
+    const preselectedRole = "{{ form_map_role|default('') }}";
+    if (preselectedRole && mapRoleSelect) {
+      mapRoleSelect.value = preselectedRole;
+    }
+
+
+    updateMapRoleVisibility();
+
+    // garante visibilidade correta ao carregar
+    updateMapRoleVisibility();
+
+    const preselectedType = "{{ form_type|default('') }}";
+    if (preselectedType && typeSelect) {
+      typeSelect.value = preselectedType;
+    }
+
+    const deviceInput = document.getElementById('device-name-input');
+    if (deviceInput) {
+      deviceInput.focus();
+      deviceInput.select();
+    }
+
+    
+    // Upload de fotos em segundo plano (NÃO trava o próximo lançamento)
+    const form = document.getElementById('entry-form');
+    const photosInput = document.getElementById('photos-input');
+    const statusEl = document.getElementById('photo-upload-status');
+
+    // Fila global de uploads (evita travar quando tem 3-5 fotos)
+    const uploadQueue = [];
+    let uploading = false;
+
+    async function uploadOneRecordPhotos(job) {
+      const { rid, files } = job;
+      if (!files || files.length === 0) return;
+
+      // envia 1 foto por vez para ter progresso e não pesar no Postgres
+      for (let i = 0; i < files.length; i++) {
+        const fdPhotos = new FormData();
+        fdPhotos.append('photos', files[i]);
+
+        if (statusEl) {
+          statusEl.textContent = `Enviando fotos do lançamento #${rid} (${i+1}/${files.length})...`;
+        }
+
+        const upResp = await fetch(`/record/${rid}/photos`, { method: 'POST', body: fdPhotos });
+        let upJson = null;
+        try { upJson = await upResp.json(); } catch (e) {}
+
+        if (!upResp.ok || !upJson || !upJson.ok) {
+          throw new Error('Falha ao enviar fotos');
+        }
+      }
+    }
+
+    async function processUploadQueue() {
+      if (uploading) return;
+      uploading = true;
+      try {
+        while (uploadQueue.length > 0) {
+          const job = uploadQueue.shift();
+          try {
+            await uploadOneRecordPhotos(job);
+          } catch (err) {
+            console.error(err);
+            if (statusEl) statusEl.textContent = `Erro ao enviar fotos do lançamento #${job.rid}. Você pode tentar novamente no editar.`;
+          }
+        }
+        if (statusEl) statusEl.textContent = '✅ Pronto. Nenhuma foto pendente.';
+      } finally {
+        uploading = false;
+      }
+    }
+
+    if (form) {
+      form.addEventListener('submit', async (ev) => {
+        // se não tem fotos: deixa o formulário normal (sem ajax)
+        if (!photosInput || !photosInput.files || photosInput.files.length === 0) {
+          return;
+        }
+
+        ev.preventDefault();
+
+        const submitBtn = form.querySelector('button[type="submit"], input[type="submit"]');
+        if (submitBtn) submitBtn.disabled = true;
+
+        if (statusEl) statusEl.textContent = 'Salvando lançamento...';
+
+        try {
+          // 1) salva o lançamento SEM as fotos (rápido)
+          const fd = new FormData(form);
+          fd.delete('photos');
+          fd.append('_ajax', '1');
+
+          const saveResp = await fetch(window.location.pathname, { method: 'POST', body: fd });
+          const saveJson = await saveResp.json();
+
+          if (!saveResp.ok || !saveJson.ok || !saveJson.record_id) {
+            throw new Error('Falha ao salvar lançamento');
+          }
+
+          const rid = saveJson.record_id;
+
+          // 2) captura os arquivos AGORA, limpa input e libera para o próximo lançamento
+          const files = Array.from(photosInput.files);
+          photosInput.value = '';
+
+          // limpa campos rápidos para próximo lançamento
+          const deviceField = document.getElementById('device-name-input');
+          if (deviceField) deviceField.value = '';
+          const splicesField = document.querySelector('input[name="splices"]');
+          if (splicesField) splicesField.value = '0';
+          if (deviceField) deviceField.focus();
+
+          // 3) enfileira upload e processa em background (não espera terminar)
+          uploadQueue.push({ rid, files });
+
+          if (statusEl) {
+            statusEl.textContent = `Lançamento #${rid} salvo ✅. Fotos na fila: ${uploadQueue.length}.`;
+          }
+
+          // libera o botão imediatamente
+          if (submitBtn) submitBtn.disabled = false;
+
+          // inicia o processamento da fila (se ainda não estiver rodando)
+          processUploadQueue();
+
+          return;
+        } catch (err) {
+          console.error(err);
+          if (statusEl) statusEl.textContent = 'Erro ao salvar lançamento. Tente novamente.';
+        } finally {
+          if (submitBtn) submitBtn.disabled = false;
+        }
+      });
+    }
+  });
+</script>
+{% endblock %}
