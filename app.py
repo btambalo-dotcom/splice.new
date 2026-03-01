@@ -3433,61 +3433,21 @@ def map_view(map_id):
 
 @app.route("/maps/<int:map_id>/delete", methods=["POST"])
 @login_required
+
+@app.route("/maps/<int:map_id>/delete", methods=["POST"])
+@login_required
 def delete_map(map_id):
-    """Exclui um mapa (CompanyMap) e também limpa os lançamentos de produção
-    associados a esse mapa (mesma empresa + mesmo nome de mapa).
-
-    Somente ADMIN pode excluir mapas. Dono de empresa (company_owner) tem
-    acesso apenas para visualização e não pode excluir nem alterar nada.
     """
-    mp = CompanyMap.query.get_or_404(map_id)
-
-    is_admin = bool(getattr(current_user, "is_admin", False))
-    if not is_admin:
-        abort(403)
-
-    # Remove todos os registros de produção ligados a esse mapa
-    # (mesma empresa + mesmo nome de mapa). Isso garante que,
-    # ao recriar o mapa com o mesmo nome, ele venha "zerado"
-    # e não reaproveite dados antigos nem de outros mapas.
-    records = Record.query.filter(
-        Record.company == mp.company,
-        Record.map == mp.name,
-    ).all()
-
-    if records:
-        record_ids = [r.id for r in records]
-        # Apaga fotos associadas a esses registros
-        if record_ids:
-            RecordPhoto.query.filter(RecordPhoto.record_id.in_(record_ids)).delete(synchronize_session=False)
-        # Apaga os registros em si
-        for r in records:
-            db.session.delete(r)
-
-    db.session.delete(mp)
-    db.session.commit()
-    flash("Mapa excluído com sucesso.", "success")
+    DESABILITADO: exclusão de mapas foi bloqueada para evitar perda acidental
+    de dados de produção. Esta rota existe apenas para compatibilidade, mas
+    não executa nenhuma remoção.
+    """
+    flash("A exclusão de mapas está desabilitada para proteger seus dados. Entre em contato com o administrador do sistema se realmente precisar remover um mapa.", "warning")
     return redirect(url_for("my_maps"))
 
 
 
-@app.route("/api/maps/<int:map_id>/import-kmz", methods=["POST"])
-@login_required
-def api_import_kmz(map_id):
-    mp = CompanyMap.query.get_or_404(map_id)
-
-    ensure_map_access(mp)
-
-    file = request.files.get("kmz_file")
-    total = import_kmz_for_map(mp, file)
-    return jsonify({"ok": True, "imported": total})
-
-
-
-@app.route("/api/maps/<int:map_id>/section-colors", methods=["GET", "POST"])
-@login_required
-def api_update_map_section_colors(map_id):
-    mp = CompanyMap.query.get_or_404(map_id)
+get_or_404(map_id)
 
     ensure_map_access(mp)
 

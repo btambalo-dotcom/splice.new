@@ -46,22 +46,7 @@
               <a href="{{ url_for('map_view', map_id=m.id) }}" class="btn btn-sm btn-primary">
                 Abrir mapa
               </a>
-              {% if current_user.is_admin %}
-              <form method="post"
-                    action="{{ url_for('delete_map', map_id=m.id) }}"
-                    class="d-inline ms-1">
-                <input type="password"
-                       name="admin_password"
-                       class="form-control form-control-sm d-inline-block mb-1"
-                       style="width: 150px;"
-                       placeholder="Senha admin"
-                       required>
-                <button type="submit" class="btn btn-sm btn-outline-danger w-100">
-                  Excluir mapa
-                </button>
-              </form>
-              {% endif %}
-            </td>
+</td>
           </tr>
         {% endfor %}
         </tbody>
