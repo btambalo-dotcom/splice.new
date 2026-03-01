@@ -3771,6 +3771,119 @@ def api_add_record_to_map(map_id):
 
 
 
+
+
+@app.route("/admin/restore_rn51e", methods=["GET", "POST"])
+@admin_required
+def admin_restore_rn51e():
+    """Restaura lançamentos do mapa RN51E (LORENZ TECH) a partir de um CSV.
+
+    Regras importantes:
+    - Somente ADMIN pode usar.
+    - Nunca substitui nada que já exista.
+      * Para cada linha, se já houver um Record com mesmo company+map+device,
+        a linha é ignorada.
+    - Apenas company='LORENZ TECH' e map='RN51E' são aceitos.
+    """
+    inserted = 0
+    skipped = 0
+    errors = []
+
+    if request.method == "POST":
+        file = request.files.get("csv_file")
+        if not file or file.filename == "":
+            flash("Selecione um arquivo CSV para importar.", "danger")
+            return redirect(url_for("admin_restore_rn51e"))
+
+        try:
+            from io import TextIOWrapper
+            import csv
+
+            wrapped = TextIOWrapper(file.stream, encoding="utf-8")
+            reader = csv.DictReader(wrapped)
+
+            for idx, row in enumerate(reader, start=1):
+                try:
+                    company = (row.get("company") or "").strip()
+                    map_name = (row.get("map") or "").strip()
+                    device = (row.get("device") or "").strip()
+
+                    if not company or not map_name or not device:
+                        skipped += 1
+                        errors.append(f"Linha {idx}: company/map/device vazios.")
+                        continue
+
+                    # Garante que só LORENZ TECH / RN51E seja importado
+                    if company != "LORENZ TECH" or map_name != "RN51E":
+                        skipped += 1
+                        continue
+
+                    # Verifica se já existe algum registro para esse company+map+device
+                    existing = (
+                        Record.query
+                        .filter_by(company=company, map=map_name, device=device)
+                        .first()
+                    )
+                    if existing:
+                        skipped += 1
+                        continue
+
+                    # Converte campos numéricos com segurança
+                    def to_int(val):
+                        try:
+                            return int(str(val).strip())
+                        except Exception:
+                            return 0
+
+                    def to_float(val):
+                        try:
+                            return float(str(val).strip())
+                        except Exception:
+                            return 0.0
+
+                    map_role = (row.get("tipo") or row.get("map_role") or "").strip().upper() or None
+                    included_splices = to_int(row.get("incl") or row.get("included_splices_applied") or 0)
+                    splices = to_int(row.get("splices") or 0)
+                    price_device = to_float(row.get("device_price_usd") or 0.0)
+                    total_usd = to_float(row.get("total_usd") or 0.0)
+                    splicer = (row.get("splicer") or "DESCONHECIDO").strip()
+
+                    rec = Record(
+                        company=company,
+                        map=map_name,
+                        device=device,
+                        splicer=splicer,
+                        map_role=map_role,
+                        included_splices_applied=included_splices,
+                        splices=splices,
+                        price_device_usd=price_device,
+                        total_usd=total_usd,
+                    )
+                    db.session.add(rec)
+                    inserted += 1
+
+                except Exception as e:
+                    skipped += 1
+                    errors.append(f"Linha {idx}: erro {e}")
+
+            db.session.commit()
+            flash(
+                f"Importação concluída. Inseridos: {inserted}, pulados: {skipped}.",
+                "success",
+            )
+        except Exception as e:
+            db.session.rollback()
+            flash(f"Erro ao processar CSV: {e}", "danger")
+
+        return redirect(url_for("admin_restore_rn51e"))
+
+    return render_template(
+        "admin_restore_rn51e.html",
+        inserted=inserted,
+        skipped=skipped,
+        errors=errors,
+    )
+
 if __name__ == "__main__":
     app.run(debug=True)
 
