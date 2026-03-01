@@ -3434,21 +3434,61 @@ def map_view(map_id):
 @app.route("/maps/<int:map_id>/delete", methods=["POST"])
 @login_required
 def delete_map(map_id):
+    """Exclui um mapa (CompanyMap) e também limpa os lançamentos de produção
+    associados a esse mapa (mesma empresa + mesmo nome de mapa).
+
+    Somente ADMIN pode excluir mapas. Dono de empresa (company_owner) tem
+    acesso apenas para visualização e não pode excluir nem alterar nada.
     """
-    DESABILITADO: exclusão de mapas foi bloqueada para evitar perda acidental
-    de dados de produção. Esta rota existe apenas para compatibilidade, mas
-    não executa nenhuma remoção.
-    """
-    flash("A exclusão de mapas está desabilitada para proteger seus dados. Entre em contato com o administrador do sistema se realmente precisar remover um mapa.", "warning")
+    mp = CompanyMap.query.get_or_404(map_id)
+
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if not is_admin:
+        abort(403)
+
+    # Remove todos os registros de produção ligados a esse mapa
+    # (mesma empresa + mesmo nome de mapa). Isso garante que,
+    # ao recriar o mapa com o mesmo nome, ele venha "zerado"
+    # e não reaproveite dados antigos nem de outros mapas.
+    records = Record.query.filter(
+        Record.company == mp.company,
+        Record.map == mp.name,
+    ).all()
+
+    if records:
+        record_ids = [r.id for r in records]
+        # Apaga fotos associadas a esses registros
+        if record_ids:
+            RecordPhoto.query.filter(RecordPhoto.record_id.in_(record_ids)).delete(synchronize_session=False)
+        # Apaga os registros em si
+        for r in records:
+            db.session.delete(r)
+
+    db.session.delete(mp)
+    db.session.commit()
+    flash("Mapa excluído com sucesso.", "success")
     return redirect(url_for("my_maps"))
 
 
 
-
-@app.route("/maps/<int:map_id>/section_colors", methods=["GET", "POST"])
+@app.route("/api/maps/<int:map_id>/import-kmz", methods=["POST"])
 @login_required
-def map_section_colors(map_id):
+def api_import_kmz(map_id):
     mp = CompanyMap.query.get_or_404(map_id)
+
+    ensure_map_access(mp)
+
+    file = request.files.get("kmz_file")
+    total = import_kmz_for_map(mp, file)
+    return jsonify({"ok": True, "imported": total})
+
+
+
+@app.route("/api/maps/<int:map_id>/section-colors", methods=["GET", "POST"])
+@login_required
+def api_update_map_section_colors(map_id):
+    mp = CompanyMap.query.get_or_404(map_id)
+
     ensure_map_access(mp)
 
     # Modo leitura: qualquer usuário com acesso ao mapa pode ler as cores
@@ -3489,46 +3529,6 @@ def map_section_colors(map_id):
     mp.section_colors_json = json.dumps(normalized, ensure_ascii=False)
     db.session.commit()
     return jsonify({"ok": True, "colors": normalized})
-
-
-
-
-
-@app.route("/api/maps/<int:map_id>/import_kmz", methods=["POST"])
-@login_required
-def api_import_kmz(map_id):
-    """
-    Endpoint para importar dispositivos via arquivo KMZ para um mapa específico.
-    Usado pela tela de mapa (Meus Mapas -> Abrir mapa).
-    """
-    mp = CompanyMap.query.get_or_404(map_id)
-    ensure_map_access(mp)
-
-    # Apenas admin ou dono da empresa do mapa podem importar KMZ
-    is_admin = bool(getattr(current_user, "is_admin", False))
-    is_owner = bool(
-        getattr(current_user, "is_company_owner", False)
-        and _current_user_company_name() == mp.company
-    )
-    if not (is_admin or is_owner):
-        abort(403)
-
-    file_storage = (
-        request.files.get("kmz_file")
-        or request.files.get("file")
-        or None
-    )
-    if not file_storage or not getattr(file_storage, "filename", None):
-        return jsonify({"ok": False, "error": "Arquivo KMZ obrigatório."}), 400
-
-    try:
-        imported = import_kmz_for_map(mp, file_storage)
-        db.session.commit()
-    except Exception:
-        db.session.rollback()
-        return jsonify({"ok": False, "error": "Falha ao importar KMZ."}), 500
-
-    return jsonify({"ok": True, "imported": imported})
 
 
 @app.route("/api/maps/<int:map_id>/records", methods=["GET"])
@@ -3770,119 +3770,6 @@ def api_add_record_to_map(map_id):
 
 
 
-
-
-
-@app.route("/admin/restore_rn51e", methods=["GET", "POST"])
-@admin_required
-def admin_restore_rn51e():
-    """Restaura lançamentos do mapa RN51E (LORENZ TECH) a partir de um CSV.
-
-    Regras importantes:
-    - Somente ADMIN pode usar.
-    - Nunca substitui nada que já exista.
-      * Para cada linha, se já houver um Record com mesmo company+map+device,
-        a linha é ignorada.
-    - Apenas company='LORENZ TECH' e map='RN51E' são aceitos.
-    """
-    inserted = 0
-    skipped = 0
-    errors = []
-
-    if request.method == "POST":
-        file = request.files.get("csv_file")
-        if not file or file.filename == "":
-            flash("Selecione um arquivo CSV para importar.", "danger")
-            return redirect(url_for("admin_restore_rn51e"))
-
-        try:
-            from io import TextIOWrapper
-            import csv
-
-            wrapped = TextIOWrapper(file.stream, encoding="utf-8")
-            reader = csv.DictReader(wrapped)
-
-            for idx, row in enumerate(reader, start=1):
-                try:
-                    company = (row.get("company") or "").strip()
-                    map_name = (row.get("map") or "").strip()
-                    device = (row.get("device") or "").strip()
-
-                    if not company or not map_name or not device:
-                        skipped += 1
-                        errors.append(f"Linha {idx}: company/map/device vazios.")
-                        continue
-
-                    # Garante que só LORENZ TECH / RN51E seja importado
-                    if company != "LORENZ TECH" or map_name != "RN51E":
-                        skipped += 1
-                        continue
-
-                    # Verifica se já existe algum registro para esse company+map+device
-                    existing = (
-                        Record.query
-                        .filter_by(company=company, map=map_name, device=device)
-                        .first()
-                    )
-                    if existing:
-                        skipped += 1
-                        continue
-
-                    # Converte campos numéricos com segurança
-                    def to_int(val):
-                        try:
-                            return int(str(val).strip())
-                        except Exception:
-                            return 0
-
-                    def to_float(val):
-                        try:
-                            return float(str(val).strip())
-                        except Exception:
-                            return 0.0
-
-                    map_role = (row.get("tipo") or row.get("map_role") or "").strip().upper() or None
-                    included_splices = to_int(row.get("incl") or row.get("included_splices_applied") or 0)
-                    splices = to_int(row.get("splices") or 0)
-                    price_device = to_float(row.get("device_price_usd") or 0.0)
-                    total_usd = to_float(row.get("total_usd") or 0.0)
-                    splicer = (row.get("splicer") or "DESCONHECIDO").strip()
-
-                    rec = Record(
-                        company=company,
-                        map=map_name,
-                        device=device,
-                        splicer=splicer,
-                        map_role=map_role,
-                        included_splices_applied=included_splices,
-                        splices=splices,
-                        price_device_usd=price_device,
-                        total_usd=total_usd,
-                    )
-                    db.session.add(rec)
-                    inserted += 1
-
-                except Exception as e:
-                    skipped += 1
-                    errors.append(f"Linha {idx}: erro {e}")
-
-            db.session.commit()
-            flash(
-                f"Importação concluída. Inseridos: {inserted}, pulados: {skipped}.",
-                "success",
-            )
-        except Exception as e:
-            db.session.rollback()
-            flash(f"Erro ao processar CSV: {e}", "danger")
-
-        return redirect(url_for("admin_restore_rn51e"))
-
-    return render_template(
-        "admin_restore_rn51e.html",
-        inserted=inserted,
-        skipped=skipped,
-        errors=errors,
-    )
 
 if __name__ == "__main__":
     app.run(debug=True)
