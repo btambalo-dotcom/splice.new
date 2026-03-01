@@ -1442,6 +1442,15 @@ def entry():
 
     Para splicer: modo rápido (não escolhe projeto). O sistema deriva o projeto pelo mapa.
     """
+    # Dono de empresa (company_owner) tem acesso apenas para visualização.
+    # Ele não pode lançar produção manualmente. Se tentar acessar /entry,
+    # redirecionamos para a tela principal.
+    is_owner = bool(getattr(current_user, "is_company_owner", False))
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if is_owner and not is_admin:
+        flash("Dono de empresa só pode visualizar. Utilize um usuário splicer para lançar produção.", "danger")
+        return redirect(url_for("index"))
+
     companies = [c.name for c in CompanyConfig.query.order_by(CompanyConfig.name).all()]
 
     # Modo rápido (padrão): não escolhe projeto. O sistema deriva o projeto pelo mapa.
@@ -3380,6 +3389,27 @@ def map_view(map_id):
     focus_record_id = request.args.get("focus_record", type=int)
 
     return render_template("map_view.html", map_obj=mp, focus_record_id=focus_record_id)
+
+@app.route("/maps/<int:map_id>/delete", methods=["POST"])
+@login_required
+def delete_map(map_id):
+    """Exclui um mapa (CompanyMap). Não apaga os lançamentos de produção,
+    apenas remove o cadastro do mapa e suas configurações de cores/KMZ.
+
+    Somente ADMIN pode excluir mapas. Dono de empresa (company_owner) tem
+    acesso apenas para visualização e não pode excluir nem alterar nada.
+    """
+    mp = CompanyMap.query.get_or_404(map_id)
+
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if not is_admin:
+        abort(403)
+
+    db.session.delete(mp)
+    db.session.commit()
+    flash("Mapa excluído com sucesso.", "success")
+    return redirect(url_for("my_maps"))
+
 
 
 @app.route("/api/maps/<int:map_id>/import-kmz", methods=["POST"])

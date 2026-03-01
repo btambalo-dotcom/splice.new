@@ -46,6 +46,16 @@
               <a href="{{ url_for('map_view', map_id=m.id) }}" class="btn btn-sm btn-primary">
                 Abrir mapa
               </a>
+              {% if current_user.is_admin %}
+              <form method="post"
+                    action="{{ url_for('delete_map', map_id=m.id) }}"
+                    class="d-inline"
+                    onsubmit="return confirm('Tem certeza que deseja excluir este mapa?');">
+                <button type="submit" class="btn btn-sm btn-outline-danger ms-1">
+                  Excluir
+                </button>
+              </form>
+              {% endif %}
             </td>
           </tr>
         {% endfor %}
