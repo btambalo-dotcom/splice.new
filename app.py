@@ -3492,6 +3492,45 @@ def map_section_colors(map_id):
 
 
 
+
+
+@app.route("/api/maps/<int:map_id>/import_kmz", methods=["POST"])
+@login_required
+def api_import_kmz(map_id):
+    """
+    Endpoint para importar dispositivos via arquivo KMZ para um mapa específico.
+    Usado pela tela de mapa (Meus Mapas -> Abrir mapa).
+    """
+    mp = CompanyMap.query.get_or_404(map_id)
+    ensure_map_access(mp)
+
+    # Apenas admin ou dono da empresa do mapa podem importar KMZ
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_owner = bool(
+        getattr(current_user, "is_company_owner", False)
+        and _current_user_company_name() == mp.company
+    )
+    if not (is_admin or is_owner):
+        abort(403)
+
+    file_storage = (
+        request.files.get("kmz_file")
+        or request.files.get("file")
+        or None
+    )
+    if not file_storage or not getattr(file_storage, "filename", None):
+        return jsonify({"ok": False, "error": "Arquivo KMZ obrigatório."}), 400
+
+    try:
+        imported = import_kmz_for_map(mp, file_storage)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        return jsonify({"ok": False, "error": "Falha ao importar KMZ."}), 500
+
+    return jsonify({"ok": True, "imported": imported})
+
+
 @app.route("/api/maps/<int:map_id>/records", methods=["GET"])
 @login_required
 def api_map_records(map_id):
