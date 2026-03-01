@@ -275,9 +275,50 @@ if db_url.startswith("postgres://"):
 app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
+
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 login_manager.login_view = "login"
+
+# --- Performance: ensure important DB indexes exist (idempotent) ---
+from sqlalchemy import text as _sql_text
+
+def ensure_db_indexes() -> None:
+    """Create indexes used by filters (company/map/device, date, etc.).
+
+    This runs on startup and is safe to call multiple times. On SQLite and
+    Postgres, CREATE INDEX IF NOT EXISTS will no-op when the index already exists.
+    """
+    try:
+        with app.app_context():
+            # Index for main production records, used heavily in filters and map/KMZ.
+            db.session.execute(
+                _sql_text(
+                    "CREATE INDEX IF NOT EXISTS idx_records_company_map_device "
+                    "ON record (company, map, device)"
+                )
+            )
+            db.session.execute(
+                _sql_text(
+                    "CREATE INDEX IF NOT EXISTS idx_records_company_date "
+                    "ON record (company, created_date)"
+                )
+            )
+            # Index for invoices listing / filtering.
+            db.session.execute(
+                _sql_text(
+                    "CREATE INDEX IF NOT EXISTS idx_invoices_created_at "
+                    "ON invoice (created_at)"
+                )
+            )
+            db.session.commit()
+    except Exception:
+        # Index creation is a best-effort optimization; never break the app
+        # if the database backend doesn't support IF NOT EXISTS or indexes
+        # haven't been created yet.
+        db.session.rollback()
+
+ensure_db_indexes()
 
 # --------- R2 (S3-compatible) storage helpers ---------
 _r2_client = None
