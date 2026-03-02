@@ -241,7 +241,7 @@
     const recordsUrl = "{{ url_for('api_map_records', map_id=map_obj.id) }}";
     const importKmzUrl = "{{ url_for('api_import_kmz', map_id=map_obj.id) }}";
     const addRecordUrl = "{{ url_for('api_add_record_to_map', map_id=map_obj.id) }}";
-    const sectionColorsUrl = "{{ url_for('api_update_map_section_colors', map_id=map_obj.id) }}";
+    const sectionColorsUrl = "{{ url_for('map_section_colors', map_id=map_obj.id) }}";
     const initialFocusRecordId = {{ focus_record_id if focus_record_id is not none else "null" }};
     const IS_OWNER_READONLY = {{ "true" if current_user.is_company_owner and not current_user.is_admin else "false" }};
 
