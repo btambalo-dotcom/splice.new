@@ -32,7 +32,7 @@
         {% if not is_splicer %}
         <div class="mb-3">
           <label class="form-label">Projeto</label>
-          <select id="project-select" class="form-control" {% if not is_edit %}name="project_id"{% endif %}>
+          <select id="project-select" class="form-control" name="project_id">
             <option value="">Sem projeto (valores da empresa)</option>
           </select>
           <div class="form-text">Selecione o projeto para aplicar a tabela de valores correta.</div>
@@ -295,6 +295,17 @@
     if (IS_SPLICER) {
       const projectHidden = document.getElementById('project-id-hidden');
       if (projectHidden) projectHidden.value = (opt && opt.dataset && opt.dataset.projectId) ? opt.dataset.projectId : '';
+    } else {
+      // Para admin em modo completo: se o mapa já está vinculado a um projeto,
+      // e nenhum projeto foi selecionado manualmente, preenche o select automaticamente
+      const projectSelect = document.getElementById('project-select');
+      if (projectSelect && !projectSelect.value && opt && opt.dataset && opt.dataset.projectId) {
+        const pid = String(opt.dataset.projectId);
+        const optionToSelect = Array.from(projectSelect.options).find(o => o.value === pid);
+        if (optionToSelect) {
+          projectSelect.value = pid;
+        }
+      }
     }
     const enabled = opt && opt.dataset && opt.dataset.midEndEnabled === '1';
     if (!enabled) {
