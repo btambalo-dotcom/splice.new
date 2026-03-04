@@ -1,1 +1,1 @@
-PHOTO-EDIT-V60
+v90 - corrige chamada resolve_included_override em photo_entry

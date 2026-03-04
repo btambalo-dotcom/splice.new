@@ -244,6 +244,7 @@
     const sectionColorsUrl = "{{ url_for('map_section_colors', map_id=map_obj.id) }}";
     const initialFocusRecordId = {{ focus_record_id if focus_record_id is not none else "null" }};
     const IS_OWNER_READONLY = {{ "true" if current_user.is_company_owner and not current_user.is_admin else "false" }};
+    const MAP_NAME = "{{ map_obj.name }}";
 
 
     // Cores personalizadas das seções (carregadas via API)
@@ -412,7 +413,73 @@
     }
 
 
-    async function loadMarkers() {
+    
+    function copyDeviceInfo(mapName, deviceName) {
+      const template = `MAP: ${mapName}
+DEVICE: ${deviceName}
+FUSION: 0
+T: P`;
+
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(template)
+          .then(() => {
+            alert('Informações copiadas. Agora é só colar no app de foto, ajustar FUSION e T (P/M).');
+          })
+          .catch(err => {
+            console.error('Erro ao copiar para a área de transferência:', err);
+            alert('Não foi possível copiar automaticamente. Você pode copiar manualmente se necessário.');
+          });
+      } else {
+        const temp = document.createElement('textarea');
+        temp.value = template;
+        document.body.appendChild(temp);
+        temp.select();
+        try {
+          document.execCommand('copy');
+          alert('Informações copiadas. Agora é só colar no app de foto, ajustar FUSION e T (P/M).');
+        } catch (e) {
+          console.error('Erro ao copiar (execCommand):', e);
+          alert('Não foi possível copiar automaticamente. Você pode copiar manualmente se necessário.');
+        }
+        document.body.removeChild(temp);
+      }
+    }
+
+
+    
+function openRecordFromMap(recordId) {
+  try {
+    window.location.href = '/entry-focus/' + recordId;
+  } catch (e) {
+    console.error('Erro ao abrir dispositivo a partir do mapa:', e);
+  }
+}
+
+function copyDeviceInfoFromRecord(recordId) {
+      try {
+        const list = window._mapRecords || [];
+        const rec = list.find(r => r.id === recordId);
+        if (!rec) {
+          alert('Não consegui encontrar este dispositivo na lista do mapa.');
+          return;
+        }
+        const deviceName = rec.device || ('ID ' + recordId);
+
+        // 1) Copia o texto para usar no app de Timestamp (fluxo antigo).
+        copyDeviceInfo(MAP_NAME, deviceName);
+
+        // 2) Abre a tela de lançamento por foto já com MAP/DEVICE preenchidos.
+        const url = '/photo-entry?map_name=' + encodeURIComponent(MAP_NAME) +
+                    '&device_name=' + encodeURIComponent(deviceName);
+        window.open(url, '_blank');
+      } catch (e) {
+        console.error('Erro ao preparar texto para copiar / abrir foto-entry:', e);
+        alert('Não foi possível preparar as informações para copiar / abrir a tela de fotos.');
+      }
+    }
+
+
+async function loadMarkers() {
       // Limpa camada anterior
       markersLayer.clearLayers();
 
@@ -549,7 +616,10 @@ if (rec.photo_ids && rec.photo_ids.length > 0) {
 popupParts.push('<div class="mt-2 d-flex flex-wrap gap-1">');
 if (!IS_OWNER_READONLY) {
   popupParts.push(
-    '<button class="btn btn-primary btn-sm" onclick="window.open(\'/record/' + rec.id + '/view\', \'_blank\')">Abrir dispositivo</button>'
+    '<button class="btn btn-primary btn-sm" onclick="openRecordFromMap(' + rec.id + ')">Abrir dispositivo</button>'
+  );
+  popupParts.push(
+    '<button class="btn btn-warning btn-sm" onclick="copyDeviceInfoFromRecord(' + rec.id + ')">Copiar info</button>'
   );
 }
 popupParts.push(

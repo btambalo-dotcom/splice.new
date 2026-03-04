@@ -23,6 +23,7 @@
             <a href="{{ url_for('my_maps') }}" class="btn btn-sm btn-outline-info me-2">Meus Mapas</a>
             {% if (not current_user.is_company_owner) or current_user.is_admin %}
             <a href="{{ url_for('entry') }}" class="btn btn-sm btn-outline-light me-2">Lançar</a>
+            <a href="{{ url_for('photo_entry') }}" class="btn btn-sm btn-outline-info me-2">Lançar (foto)</a>
             <a href="{{ url_for('expenses') }}" class="btn btn-sm btn-outline-light me-2">Despesas</a>
             {% endif %}
             {% if current_user.is_admin %}

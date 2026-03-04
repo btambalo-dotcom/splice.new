@@ -374,6 +374,12 @@
     const preselectedType = "{{ form_type|default('') }}";
     if (preselectedType && typeSelect) {
       typeSelect.value = preselectedType;
+    } else if (typeSelect) {
+      // Se não houver tipo pré-selecionado, tenta forçar OTE como padrão (se existir na lista)
+      const optOte = Array.from(typeSelect.options || []).find(o => o.value === 'OTE');
+      if (optOte) {
+        typeSelect.value = 'OTE';
+      }
     }
 
     const deviceInput = document.getElementById('device-name-input');

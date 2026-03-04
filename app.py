@@ -24,6 +24,8 @@ from openpyxl.styles import Font, Alignment, Border, Side
 import re
 import xml.etree.ElementTree as ET
 
+import base64
+import requests
 
 import uuid
 import boto3
@@ -95,6 +97,37 @@ def process_uploaded_photo(file_storage, max_size=(1600, 1600), quality=80, thum
             return None, None, None, None, None
 
 
+
+
+
+
+
+def extract_photo_date_from_exif(raw_bytes):
+    """Tenta extrair a data da foto a partir do EXIF.
+
+    Retorna um datetime.date ou None.
+    """
+    if not raw_bytes:
+        return None
+    try:
+        img = Image.open(BytesIO(raw_bytes))
+        exif = getattr(img, "_getexif", lambda: None)() or {}
+        # 36867 = DateTimeOriginal, 306 = DateTime
+        dt_str = exif.get(36867) or exif.get(306)
+        if not dt_str:
+            return None
+        # Formato típico: 'YYYY:MM:DD HH:MM:SS'
+        parts = str(dt_str).split()
+        if not parts:
+            return None
+        date_part = parts[0].replace(":", "-")
+        try:
+            dt = datetime.strptime(date_part, "%Y-%m-%d")
+            return dt.date()
+        except Exception:
+            return None
+    except Exception:
+        return None
 
 
 
@@ -746,6 +779,7 @@ with app.app_context():
     ensure("company_config", "invoice_address", "TEXT")
     ensure("user", "is_admin", "BOOLEAN")
     ensure("user", "splicer_name", "VARCHAR(120)")
+    ensure("user", "is_company_owner", "BOOLEAN")
     ensure("expense", "paid", "BOOLEAN")
     ensure("expense", "paid_at", "TIMESTAMP")
     ensure("expense", "paid_by", "INTEGER")
@@ -906,6 +940,183 @@ def resolve_included_override(company: str | None, project_id: int | None, map_o
         included_applied = included_override
 
     return included_override, included_applied, map_cfg
+
+
+
+
+def parse_timestamp_block_from_text(text: str):
+    """Interpreta o bloco de 4 linhas usado no Timestamp.
+
+    Espera algo como:
+        MAP: RN51E
+        DEVICE: FT10 - P1
+        FUSION: 12
+        T: P
+
+    Retorna dict com: map_name, device_name, splices (int), map_role ('MEIO' ou 'PONTA'),
+    ou None se não conseguir interpretar.
+    """
+    if not text:
+        return None
+
+    # Normaliza quebras de linha
+    lines = [ln.strip() for ln in str(text).replace("\r", "\n").split("\n") if ln.strip()]
+    map_name = None
+    device_name = None
+    splices_val = None
+    map_role = None
+
+    for ln in lines:
+        upper = ln.upper()
+        if upper.startswith("MAP"):
+            parts = ln.split(":", 1)
+            if len(parts) == 2:
+                map_name = parts[1].strip()
+        elif upper.startswith("DEVICE") or upper.startswith("DISPOSITIVO"):
+            parts = ln.split(":", 1)
+            if len(parts) == 2:
+                device_name = parts[1].strip()
+        elif "FUS" in upper:  # FUSION / FUSÕES / FUSAO
+            import re as _re
+            m = _re.search(r"(\d+)", ln)
+            if m:
+                try:
+                    splices_val = int(m.group(1))
+                except Exception:
+                    splices_val = None
+        elif upper.startswith("T"):
+            parts = ln.split(":", 1)
+            if len(parts) == 2:
+                val = parts[1].strip().upper()
+                if val in ("P", "M"):
+                    map_role = "PONTA" if val == "P" else "MEIO"
+
+    if not (map_name and device_name and splices_val is not None and map_role):
+        return None
+
+    return {
+        "map_name": map_name,
+        "device_name": device_name,
+        "splices": splices_val,
+        "map_role": map_role,
+    }
+
+
+def extract_timestamp_fields_with_ai(image_bytes: bytes):
+    """Usa um modelo de IA (via API) para ler MAP / DEVICE / FUSION / T de uma foto.
+
+    Retorna (dict, error_message). Se der certo, error_message = None e o dict contém
+    as chaves: map_name, device_name, splices (int), map_role ('MEIO' ou 'PONTA').
+    """
+    if not image_bytes:
+        return None, "Imagem vazia"
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return None, "OPENAI_API_KEY não configurada no servidor."
+
+    # Modelo default pode ser alterado via variável de ambiente
+    model = os.environ.get("OPENAI_VISION_MODEL", "gpt-4o-mini")
+
+    try:
+        # Prepara imagem em base64 para enviar inline
+        img_b64 = base64.b64encode(image_bytes).decode("ascii")
+
+        prompt = (
+            "Você é um assistente que lê fotos do app de câmera com carimbo de texto. "
+            "A imagem sempre terá um bloco com 4 linhas com esse formato, em português ou inglês:\n\n"
+            "MAP: <nome_do_mapa>\n"
+            "DEVICE: <nome_do_dispositivo>\n"
+            "FUSION: <numero_de_fusoes>\n"
+            "T: P ou M (PONTA ou MEIO).\n\n"
+            "Sua tarefa é APENAS devolver um JSON válido, SEM explicações, com este formato exato:\n\n"
+            "{\"map_name\": \"...\", \"device_name\": \"...\", \"splices\": 0, \"map_role\": \"PONTA\"}\n\n"
+            "map_role deve ser 'PONTA' se a letra for P, ou 'MEIO' se a letra for M. "
+            "Se não conseguir ler algum campo, use null nesse campo."
+        )
+
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{img_b64}",
+                            },
+                        },
+                    ],
+                }
+            ],
+            "max_tokens": 256,
+            "temperature": 0.0,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            data=json.dumps(payload),
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            return None, f"Erro HTTP {resp.status_code} ao chamar a IA."
+
+        data = resp.json()
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        if not content:
+            return None, "Resposta vazia da IA."
+
+        # Remove possíveis marcas de bloco de código ```json ... ```
+        if content.startswith("```"):
+            content = content.strip("`\n ")
+            if content.lower().startswith("json"):
+                content = content[4:].lstrip()
+
+        try:
+            parsed = json.loads(content)
+        except Exception as e:
+            return None, f"Não consegui interpretar o JSON da IA: {e}"
+
+        # Normaliza o resultado em nosso formato padrão
+        map_name = (parsed.get("map_name") or "").strip() or None
+        device_name = (parsed.get("device_name") or "").strip() or None
+
+        splices_val = parsed.get("splices")
+        try:
+            splices_val = int(splices_val) if splices_val is not None else None
+        except Exception:
+            splices_val = None
+
+        role_raw = (parsed.get("map_role") or "").strip().upper()
+        if role_raw in ("PONTA", "P"):
+            map_role = "PONTA"
+        elif role_raw in ("MEIO", "M"):
+            map_role = "MEIO"
+        else:
+            map_role = None
+
+        result = {
+            "map_name": map_name,
+            "device_name": device_name,
+            "splices": splices_val,
+            "map_role": map_role,
+        }
+
+        if not (result["map_name"] and result["device_name"] and result["splices"] is not None and result["map_role"]):
+            return None, "IA não retornou todos os campos necessários."
+
+        return result, None
+    except Exception as e:
+        return None, f"Erro ao processar IA: {e}"
+
 
 def compute_prices(
     splices: int,
@@ -1797,6 +2008,188 @@ def entry():
         form_type=pre_type or "",
         is_splicer=is_splicer,
     )
+
+
+
+
+
+@app.route("/photo-entry", methods=["GET", "POST"])
+@login_required
+def photo_entry():
+    """Lançamento de produção a partir de uma foto com carimbo (Timestamp).
+
+    Versão beta:
+      - Você pode deixar o campo de texto preenchido (4 linhas MAP/DEVICE/FUSION/T),
+        ou marcar a opção de ler automaticamente com IA.
+      - Se a IA estiver configurada (OPENAI_API_KEY), o sistema tenta ler os dados direto da foto.
+      - Se algo falhar, cai no modo texto manual.
+    """
+    is_owner = bool(getattr(current_user, "is_company_owner", False))
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if is_owner and not is_admin:
+        flash("Dono de empresa só pode visualizar. Utilize um usuário splicer para lançar produção.", "danger")
+        return redirect(url_for("index"))
+
+
+    if request.method == "POST":
+        stamp_text = (request.form.get("stamp_text") or "").strip()
+        use_ai = bool(request.form.get("use_ai"))
+
+        # Aceita várias fotos; usa a primeira como base para IA/EXIF,
+        # mas anexa todas ao lançamento.
+        photos = [p for p in request.files.getlist("photos") if getattr(p, "filename", None)]
+        if not photos:
+            flash("Envie pelo menos uma foto.", "danger")
+            return redirect(url_for("photo_entry"))
+
+        main_photo = photos[0]
+
+        raw_bytes = None
+        try:
+            raw_bytes = main_photo.read()
+            try:
+                main_photo.seek(0)
+            except Exception:
+                pass
+        except Exception:
+            raw_bytes = None
+
+        parsed = None
+        ai_error = None
+
+        # Primeiro tenta IA, se marcado e se houver bytes da imagem.
+        if use_ai and raw_bytes:
+            parsed, ai_error = extract_timestamp_fields_with_ai(raw_bytes)
+            if parsed is None and ai_error:
+                flash(f"Não consegui ler automaticamente os dados da foto (IA): {ai_error}", "warning")
+
+        # Se IA não foi usada ou falhou, tenta interpretar o texto manual.
+        if parsed is None:
+            if not stamp_text:
+                flash("Cole o texto em 4 linhas (MAP / DEVICE / FUSION / T) ou ative a leitura automática por IA.", "danger")
+                return redirect(url_for("photo_entry"))
+            parsed = parse_timestamp_block_from_text(stamp_text)
+            if not parsed:
+                flash("Não consegui entender o texto. Confirme que está no formato MAP/DEVICE/FUSION/T.", "danger")
+                return redirect(url_for("photo_entry"))
+        map_name = parsed["map_name"]
+        device_name = parsed["device_name"]
+        splices_val = parsed["splices"]
+        map_role = parsed["map_role"]  # 'MEIO' ou 'PONTA'
+
+        # Determina empresa/projeto com base em um Record existente desse dispositivo.
+        base_query = Record.query.filter(Record.map == map_name, Record.device == device_name)
+        user_company = getattr(current_user, "company_name", None) or getattr(current_user, "default_company", None)
+        if user_company:
+            base_query = base_query.filter(Record.company == user_company)
+        base_rec = base_query.order_by(Record.id.asc()).first()
+        if not base_rec:
+            flash(f"Não encontrei nenhum dispositivo '{device_name}' no mapa '{map_name}'.", "danger")
+            return redirect(url_for("photo_entry"))
+
+        company = base_rec.company
+        project_id = base_rec.project_id
+        type_val = base_rec.type or ""
+        map_val = map_name
+
+        # Busca o objeto CompanyMap para aplicar regras de MEIO/PONTA.
+        map_obj = CompanyMap.query.filter(
+            CompanyMap.company == company,
+            CompanyMap.name == map_name,
+            CompanyMap.project_id == project_id,
+        ).order_by(CompanyMap.id.asc()).first()
+
+        included_override, included_applied, map_cfg = resolve_included_override(
+            company=company,
+            project_id=project_id,
+            map_obj=map_obj,
+            map_val=map_val,
+            map_role=map_role,
+        )
+
+        device_for_price = type_val or device_name
+
+        price_splices, price_device, total = compute_prices(
+            splices=splices_val,
+            device_name=device_for_price,
+            company=company,
+            project_id=project_id,
+            included_override=included_override,
+        )
+
+        rec = base_rec
+        rec.splicer = (getattr(current_user, "splicer_name", None) or current_user.username)
+        rec.map_role = map_role
+        rec.splices = splices_val
+        rec.price_splices_usd = price_splices
+        rec.price_device_usd = price_device
+        rec.total_usd = total
+        rec.included_splices_applied = included_applied
+
+        # Data de criação: tenta usar a data EXIF da foto.
+        photo_date = extract_photo_date_from_exif(raw_bytes) if raw_bytes else None
+        if photo_date:
+            rec.created_date = datetime.combine(photo_date, datetime.min.time())
+        elif not rec.created_date:
+            rec.created_date = datetime.utcnow()
+
+
+        # Processa e anexa as fotos ao lançamento.
+        for p in photos:
+            try:
+                filename, content_type, data_bytes, thumb_bytes, thumb_ct = process_uploaded_photo(p)
+            except Exception:
+                continue
+            if data_bytes:
+                photo_obj = RecordPhoto(
+                    record_id=rec.id,
+                    filename=(filename or "foto.jpg")[:255],
+                    content_type=content_type,
+                    data=data_bytes,
+                    thumb_data=thumb_bytes,
+                    thumb_content_type=thumb_ct,
+                )
+                db.session.add(photo_obj)
+
+        db.session.commit()
+        flash(f"Lançamento atualizado para {map_name} / {device_name} com {splices_val} fusões e {len(photos)} foto(s).", "success")
+        # Depois de lançar por foto, volta para o mapa correspondente,
+        # focando no dispositivo que acabou de ser atualizado.
+        if map_obj and getattr(map_obj, "id", None):
+            return redirect(url_for("map_view", map_id=map_obj.id, focus_record=rec.id))
+        return redirect(url_for("index"))
+
+    # GET: monta o texto padrão (MAP/DEVICE/FUSION/T) se vierem dados via querystring.
+    if request.method == "GET":
+        map_name_q = (request.args.get("map_name") or "").strip()
+        device_name_q = (request.args.get("device_name") or "").strip()
+
+        stamp_text = ""
+        if map_name_q or device_name_q:
+            # Monta o bloco em 4 linhas, deixando FUSION e T para você preencher.
+            lines = []
+            lines.append(f"MAP: {map_name_q}" if map_name_q else "MAP:")
+            lines.append(f"DEVICE: {device_name_q}" if device_name_q else "DEVICE:")
+            lines.append("FUSION: ")
+            lines.append("T: ")
+            stamp_text = "\n".join(lines)
+
+        return render_template("photo_entry.html", stamp_text=stamp_text)
+
+    return render_template("photo_entry.html")
+
+
+@app.route("/entry-focus/<int:rid>")
+@login_required
+def entry_focus_redirect(rid: int):
+    """
+    Redireciona para a tela de edição de um lançamento específico.
+
+    Usado pelo botão "Abrir dispositivo" no mapa. Assim evitamos hardcode
+    de URLs diretas de /record/<id>/edit no JavaScript e mantemos as regras
+    de permissão centralizadas na view de edição.
+    """
+    return redirect(url_for("record_edit", rid=rid))
 
 
 @app.route("/record/<int:rid>/edit", methods=["GET", "POST"])
