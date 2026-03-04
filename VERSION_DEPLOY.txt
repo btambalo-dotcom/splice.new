@@ -1,1 +1,2 @@
 v90 - corrige chamada resolve_included_override em photo_entry
+v97 - auto-migrate on import

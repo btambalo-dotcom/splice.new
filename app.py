@@ -310,6 +310,14 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 
 db = SQLAlchemy(app)
+# --- Auto-migrate SQLite schemas on startup (Render/local) ---
+try:
+    from auto_migrate_all_dbs import main as _auto_migrate_all_dbs_main
+    _auto_migrate_all_dbs_main()
+except Exception as _e:
+    # Log but do not crash the app; migrations are additive and idempotent.
+    print('DB auto-migration failed:', _e)
+
 login_manager = LoginManager(app)
 login_manager.login_view = "login"
 
