@@ -2613,6 +2613,60 @@ def settings():
         db.session.commit()
     return render_template("settings.html", companies=companies, syscfg=syscfg)
 
+
+@app.route("/settings/backup-db", methods=["GET"])
+@login_required
+@admin_required
+def settings_backup_db():
+    """Gera um backup do arquivo de banco de dados SQLite e envia para download."""
+    try:
+        from auto_migrate_all_dbs import find_candidate_dbs
+    except ImportError:
+        find_candidate_dbs = None
+
+    db_path = None
+
+    # Primeiro, tenta localizar o mesmo caminho usado pelo SQLAlchemy.
+    db_url = app.config.get("SQLALCHEMY_DATABASE_URI", "") or ""
+    if db_url.startswith("sqlite:///"):
+        rel_path = db_url[len("sqlite:///"):]
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        candidate = os.path.join(base_dir, rel_path)
+        if os.path.exists(candidate):
+            db_path = candidate
+
+    # Se ainda não encontrou, tenta usar o utilitário de migração (procura *.db* dentro do projeto).
+    if db_path is None and find_candidate_dbs is not None:
+        try:
+            dbs = find_candidate_dbs()
+        except Exception:
+            dbs = []
+        if dbs:
+            # Se existir mais de um, pega o primeiro por simplicidade.
+            db_path = dbs[0]
+
+    if not db_path or not os.path.exists(db_path):
+        flash("Não foi possível localizar um arquivo de banco de dados (.db) para backup.", "error")
+        return redirect(url_for("settings"))
+
+    import tempfile, shutil, datetime
+
+    tmp_dir = tempfile.mkdtemp(prefix="splice-backup-")
+    timestamp = datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    base_name = os.path.basename(db_path)
+    backup_name = f"splice-backup-{timestamp}-{base_name}"
+    backup_path = os.path.join(tmp_dir, backup_name)
+
+    try:
+        shutil.copy2(db_path, backup_path)
+    except Exception as e:
+        flash(f"Erro ao gerar backup: {e}", "error")
+        return redirect(url_for("settings"))
+
+    # Envia o arquivo para o navegador fazer o download.
+    return send_file(backup_path, as_attachment=True, download_name=backup_name, mimetype="application/octet-stream")
+
+
 @app.route("/settings/company/add", methods=["POST"])
 @login_required
 def settings_company_add():

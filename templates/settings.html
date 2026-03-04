@@ -4,6 +4,37 @@
 {% block content %}
 <h3 class="mb-3">Configurações</h3>
 
+
+<div class="row g-4 mt-1 mb-3">
+  <div class="col-lg-7">
+    <div class="card p-4 h-100">
+      <h5 class="mb-2">Backup do banco de dados</h5>
+      <p class="small text-muted mb-3">
+        Gere e baixe uma cópia do arquivo <code>.db</code> com todos os lançamentos, empresas,
+        mapas, usuários, etc. Guarde esse arquivo em um local seguro.
+      </p>
+      <a href="{{ url_for('settings_backup_db') }}" class="btn btn-outline-primary">
+        Baixar backup (.db)
+      </a>
+      <p class="small text-muted mt-3 mb-0">
+        O backup funciona para os bancos SQLite usados pelo sistema (arquivo <code>.db</code>).
+        Em servidores como o Render, é uma boa prática baixar esse arquivo com frequência.
+      </p>
+    </div>
+  </div>
+  <div class="col-lg-5">
+    <div class="card p-4 h-100">
+      <h6 class="mb-2">Importante</h6>
+      <ul class="small mb-0">
+        <li>O arquivo baixado contém todos os dados atuais do sistema.</li>
+        <li>Para restaurar um backup, um técnico pode substituir manualmente o arquivo
+          de banco de dados no servidor.</li>
+        <li>Recomendo fazer backup antes de grandes mudanças ou atualizações.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
 <div class="row g-4">
   <div class="col-lg-5">
     <div class="card p-4 h-100">
