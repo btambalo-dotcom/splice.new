@@ -2097,7 +2097,10 @@ def photo_entry():
 
         company = base_rec.company
         project_id = base_rec.project_id
-        type_val = base_rec.type or ""
+        # IMPORTANT: muitos dispositivos importados (ou criados) podem estar com type NULL.
+        # Para manter consistência e garantir cobrança do dispositivo no lançamento por foto,
+        # o padrão do sistema é OTE (o usuário pode trocar manualmente para CAN depois).
+        type_val = (base_rec.type or "OTE").strip() or "OTE"
         map_val = map_name
 
         # Busca o objeto CompanyMap para aplicar regras de MEIO/PONTA.
@@ -2126,6 +2129,8 @@ def photo_entry():
         )
 
         rec = base_rec
+        # Garante que o lançamento fique com type preenchido (default OTE).
+        rec.type = type_val
         rec.splicer = (getattr(current_user, "splicer_name", None) or current_user.username)
         rec.map_role = map_role
         rec.splices = splices_val
