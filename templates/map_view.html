@@ -264,6 +264,43 @@
     let markersLayer = L.layerGroup();
     let currentFocusRecordId = initialFocusRecordId;
 
+    function _median(arr){
+      if(!arr.length) return null;
+      const a=[...arr].sort((x,y)=>x-y);
+      const mid=Math.floor(a.length/2);
+      return a.length%2 ? a[mid] : (a[mid-1]+a[mid])/2;
+    }
+
+    function _haversineKm(lat1, lon1, lat2, lon2){
+      const R = 6371;
+      const toRad = (d) => d * Math.PI / 180;
+      const dLat = toRad(lat2 - lat1);
+      const dLon = toRad(lon2 - lon1);
+      const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2)**2;
+      return 2 * R * Math.asin(Math.sqrt(a));
+    }
+
+    function _robustFitPoints(records){
+      // Remove invalid coords and drop extreme outliers so 1 bad device doesn't zoom the whole world
+      const pts = (records || [])
+        .map(r => ({ lat: Number(r.lat), lng: Number(r.lng) }))
+        .filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lng) && Math.abs(p.lat) <= 90 && Math.abs(p.lng) <= 180);
+
+      if(!pts.length) return [];
+
+      const medLat = _median(pts.map(p => p.lat));
+      const medLng = _median(pts.map(p => p.lng));
+      if(medLat === null || medLng === null) return pts;
+
+      const dists = pts.map(p => _haversineKm(medLat, medLng, p.lat, p.lng));
+      const medDist = _median(dists) ?? 0;
+      const thr = Math.max(50, medDist * 5); // km
+
+      const kept = pts.filter((p, i) => dists[i] <= thr);
+      return kept.length >= 3 ? kept : pts;
+    }
+
+
     // Marcador da localização atual do usuário (GPS)
     let userLocationMarker = null;
     let userLocationCircle = null;
@@ -644,19 +681,20 @@ const popupHtml = popupParts.join('');
 marker.bindPopup(popupHtml);
               marker.on('click', function () { this.openPopup(); });
               marker.addTo(markersLayer);
-
-              bounds.push([rec.lat, rec.lng]);
               if (currentFocusRecordId && rec.id === currentFocusRecordId) {
                 focusLatLng = [rec.lat, rec.lng];
                 marker.openPopup();
               }
             });
+            // Compute robust bounds so a single wrong coordinate doesn't zoom the whole world
+            const fitPoints = _robustFitPoints(records);
+            const fitBounds = fitPoints.map(p => [p.lat, p.lng]);
 
             if (focusLatLng) {
               leafletMap.setView(focusLatLng, 18);
               currentFocusRecordId = null;
-            } else if (bounds.length) {
-              leafletMap.fitBounds(bounds, { padding: [20, 20] });
+            } else if (fitBounds.length) {
+              leafletMap.fitBounds(fitBounds, { padding: [20, 20] });
             }
           }
 
