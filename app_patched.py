@@ -1000,10 +1000,17 @@ def export_invoice():
             grouped[key] = {
                 "map": key[0] or "-",
                 "device": key[1] or "-",
+                # primeira data em que houve lançamento (dentro do filtro)
+                "launch_date": (r.created_date.date().isoformat() if r.created_date else ""),
                 "splices": 0,
                 "price_device_usd": float(r.price_device_usd or 0.0),
                 "total_usd": 0.0,
             }
+        # manter a data mais antiga
+        if r.created_date:
+            d = r.created_date.date().isoformat()
+            if grouped[key].get("launch_date") in (None, "") or d < grouped[key]["launch_date"]:
+                grouped[key]["launch_date"] = d
         grouped[key]["splices"] += int(r.splices or 0)
         grouped[key]["total_usd"] += float(r.total_usd or 0.0)
         # se o preço do dispositivo vier zero mas houver total,
@@ -1011,7 +1018,12 @@ def export_invoice():
         if grouped[key]["price_device_usd"] == 0.0 and (r.total_usd or 0) and (r.splices or 0):
             grouped[key]["price_device_usd"] = float(r.total_usd or 0.0) / float(r.splices or 1)
 
-    lines = list(grouped.values())
+    # invoice só pode aparecer o que for realmente lançado/cobrado.
+    # Regra: entra se tiver total > 0 OU preço do device > 0 OU splices > 0.
+    lines = [
+        v for v in grouped.values()
+        if (float(v.get("total_usd") or 0) > 0) or (float(v.get("price_device_usd") or 0) > 0) or (int(v.get("splices") or 0) > 0)
+    ]
     lines.sort(key=lambda x: (x["map"], x["device"]))
 
     total_invoice = sum(l["total_usd"] for l in lines)
@@ -1079,8 +1091,8 @@ def export_invoice():
     # OBS: FPDF "cell" não faz quebra de linha. Para não "estourar" a tabela e
     # mostrar o nome COMPLETO do device dentro da coluna, desenhamos a linha com
     # multi_cell e quebra manual (principalmente em '_' e '-').
-    col_widths = [55, 70, 20, 22, 23]
-    headers = ["Map", "Device", "Splices", "Device price", "Total"]
+    col_widths = [45, 60, 22, 18, 22, 23]
+    headers = ["Map", "Device", "Date", "Splices", "Device price", "Total"]
 
     pdf.set_font("Arial", "B", 10)
     for w, h in zip(col_widths, headers):
@@ -1104,6 +1116,7 @@ def export_invoice():
         row = [
             str(l["map"] or "-"),
             _break_for_table(str(l["device"] or "-")),
+            str(l.get("launch_date") or ""),
             str(l["splices"]),
             f"$ {l['price_device_usd']:.2f}",
             f"$ {l['total_usd']:.2f}",
@@ -1125,9 +1138,10 @@ def export_invoice():
     pdf.set_font("Arial", "B", 11)
     pdf.cell(0, 8, f"Invoice total: $ {total_invoice:.2f}", ln=1)
 
-    buf = BytesIO()
-    pdf.output(buf)
-    buf.seek(0)
+    # FPDF não escreve direto em BytesIO com pdf.output(buf) em algumas versões.
+    # Usamos dest='S' (string) e convertemos para bytes.
+    pdf_bytes = pdf.output(dest="S").encode("latin-1")
+    buf = BytesIO(pdf_bytes)
     filename = "invoice_splicer.pdf"
     return send_file(buf, as_attachment=True, download_name=filename, mimetype="application/pdf")
 

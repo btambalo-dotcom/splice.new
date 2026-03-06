@@ -3300,6 +3300,7 @@ def export_invoice():
             grouped[key] = {
                 "map": key[0] or "-",
                 "device": key[1] or "-",
+                "launch_date": None,  # primeira data de lançamento do device no período
                 "map_role": key[2] or "",
                 "role": key[2] or "",
                 "included": key[3],
@@ -3310,6 +3311,14 @@ def export_invoice():
 
         # Usa diretamente os valores gravados em cada lançamento, para garantir
         # que a invoice some exatamente o que você vê na tela de Produção.
+                # Data de lançamento (primeiro record do grupo no intervalo)
+        dt_src = r.created_date or getattr(r, "created_at", None)
+        if dt_src:
+            d_iso = dt_src.date().isoformat()
+            cur = grouped[key].get("launch_date")
+            if (cur is None) or (d_iso < cur):
+                grouped[key]["launch_date"] = d_iso
+
         grouped[key]["splices"] += int(r.splices or 0)
 
         device_price = float(getattr(r, "price_device_usd", 0.0) or 0.0)
@@ -3320,7 +3329,13 @@ def export_invoice():
         grouped[key]["total_usd"] += float(getattr(r, "total_usd", 0.0) or 0.0)
 
     # lista final de linhas da invoice (um item por grupo mapa/device/tipo)
-    lines = list(grouped.values())
+    # A invoice deve mostrar SOMENTE o que foi realmente lançado/cobrado.
+    # Regra: manter linhas com qualquer valor > 0 (splices, device price ou total).
+    lines = [
+        l for l in grouped.values()
+        if (float(l.get("total_usd") or 0.0) > 0.0) or (int(l.get("splices") or 0) > 0) or (float(l.get("price_device_usd") or 0.0) > 0.0)
+    ]
+
 
     # total geral da invoice (soma de todos os grupos)
     total_invoice = sum(l["total_usd"] for l in lines)
@@ -3395,8 +3410,9 @@ def export_invoice():
     # com multi_cell e quebra manual (principalmente em '_' e '-').
     
     # === Tabela das linhas (uma linha por registro) ===
-    col_widths = [40, 64, 18, 12, 16, 20, 20]
-    headers = ["Map", "Device", "Tipo", "Incl.", "Splices", "Device price", "Total"]
+    # Coluna de data primeiro, como solicitado
+    col_widths = [22, 32, 52, 16, 12, 14, 20, 22]
+    headers = ["Date", "Map", "Device", "Tipo", "Incl.", "Splices", "Device price", "Total"]
 
     pdf.set_font("Arial", "B", 10)
 
@@ -3412,6 +3428,7 @@ def export_invoice():
 
     for line in lines:
         row = [
+            (line.get("launch_date") or "-"),
             line["map"] or "-",
             line["device"] or "-",
             line["role"],
@@ -4122,6 +4139,33 @@ def api_update_record_from_map(record_id):
 
     db.session.commit()
     return jsonify({"ok": True})
+
+@app.route("/api/records/<int:record_id>/update-coords", methods=["POST"])
+@login_required
+def api_update_record_coords(record_id):
+    rec = Record.query.get_or_404(record_id)
+
+    # Permissão: somente ADMIN pode mover coordenadas
+    if not current_user.is_admin:
+        abort(403)
+
+    data = request.get_json(silent=True) or {}
+    try:
+        lat = float(data.get("lat"))
+        lng = float(data.get("lng"))
+    except Exception:
+        return jsonify({"ok": False, "error": "Lat/Lng inválidos."}), 400
+
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        return jsonify({"ok": False, "error": "Lat/Lng fora do intervalo."}), 400
+
+    rec.latitude = lat
+    rec.longitude = lng
+    db.session.commit()
+
+    return jsonify({"ok": True, "id": rec.id, "lat": rec.latitude, "lng": rec.longitude})
+
+
 
 @app.route("/api/records/<int:record_id>/save-test", methods=["POST"])
 @login_required

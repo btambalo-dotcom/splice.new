@@ -55,6 +55,12 @@
 {% if current_user.is_company_owner and not current_user.is_admin %}
 <div class="row g-4">
   <div class="col-12">
+        <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+      <input id="deviceSearch" class="form-control form-control-sm" style="max-width: 340px" placeholder="Buscar device (ex: FT61, RN51E)..." />
+      <button id="deviceSearchBtn" class="btn btn-outline-light btn-sm">Buscar</button>
+      <button id="showAllBtn" class="btn btn-outline-secondary btn-sm">Mostrar tudo</button>
+      <span id="deviceSearchHint" class="small text-muted"></span>
+    </div>
     <div id="map"></div>
   </div>
 </div>
@@ -149,6 +155,12 @@
   </div>
 
   <div class="col-lg-8">
+        <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+      <input id="deviceSearch" class="form-control form-control-sm" style="max-width: 340px" placeholder="Buscar device (ex: FT61, RN51E)..." />
+      <button id="deviceSearchBtn" class="btn btn-outline-light btn-sm">Buscar</button>
+      <button id="showAllBtn" class="btn btn-outline-secondary btn-sm">Mostrar tudo</button>
+      <span id="deviceSearchHint" class="small text-muted"></span>
+    </div>
     <div id="map"></div>
   </div>
 </div>
@@ -254,6 +266,7 @@
     const sectionColorsUrl = "{{ url_for('map_section_colors', map_id=map_obj.id) }}";
     const initialFocusRecordId = {{ focus_record_id if focus_record_id is not none else "null" }};
     const IS_OWNER_READONLY = {{ "true" if current_user.is_company_owner and not current_user.is_admin else "false" }};
+const IS_ADMIN = {{ "true" if current_user.is_admin else "false" }};
     const MAP_NAME = "{{ map_obj.name }}";
 
 
@@ -262,6 +275,7 @@
 
     let leafletMap;
     let markersLayer = L.layerGroup();
+    window._recordMarkers = new Map();
     let currentFocusRecordId = initialFocusRecordId;
 
     function _median(arr){
@@ -463,14 +477,12 @@
     
     function copyDeviceInfo(mapName, deviceName) {
       const template = `MAP: ${mapName}
-DEVICE: ${deviceName}
-FUSION: 0
-T: P`;
+DEVICE: ${deviceName}`;
 
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(template)
           .then(() => {
-            alert('Informações copiadas. Agora é só colar no app de foto, ajustar FUSION e T (P/M).');
+            alert('Informações copiadas.');
           })
           .catch(err => {
             console.error('Erro ao copiar para a área de transferência:', err);
@@ -501,6 +513,150 @@ function openRecordFromMap(recordId) {
     console.error('Erro ao abrir dispositivo a partir do mapa:', e);
   }
 }
+// ===== Busca e foco de dispositivo no mapa (FT61, RN51E, ID etc.) =====
+function _norm(s){
+  return String(s || "").trim().toLowerCase();
+}
+
+function _setSearchHint(msg){
+  const el = document.getElementById('deviceSearchHint');
+  if (el) el.textContent = msg || "";
+}
+
+function _findRecordByQuery(q){
+  const query = _norm(q);
+  const list = window._mapRecords || [];
+  if (!query) return null;
+
+  // Se for número, tentar por ID exato
+  if (/^\d+$/.test(query)){
+    const id = Number(query);
+    return list.find(r => r.id === id) || null;
+  }
+
+  // Match exato por device
+  let rec = list.find(r => _norm(r.device) === query);
+  if (rec) return rec;
+
+  // Match parcial por device / info / section
+  rec = list.find(r => _norm(r.device).includes(query) || _norm(r.info).includes(query) || _norm(r.section).includes(query));
+  return rec || null;
+}
+
+function focusRecord(rec){
+  if (!rec) return;
+  const marker = (window._recordMarkers && window._recordMarkers.get(rec.id)) ? window._recordMarkers.get(rec.id) : null;
+  const latlng = [Number(rec.lat), Number(rec.lng)];
+  if (!Number.isFinite(latlng[0]) || !Number.isFinite(latlng[1])) {
+    _setSearchHint("Coordenadas inválidas para esse device.");
+    return;
+  }
+
+  leafletMap.setView(latlng, Math.max(leafletMap.getZoom(), 18));
+  if (marker) {
+    marker.openPopup();
+  } else {
+    _setSearchHint("Ponto não encontrado na camada (recarregue o mapa).");
+  }
+}
+
+function performDeviceSearch(){
+  const input = document.getElementById('deviceSearch');
+  const q = input ? input.value : "";
+  const rec = _findRecordByQuery(q);
+  if (!rec){
+    _setSearchHint("Não encontrei: " + (q || ""));
+    return;
+  }
+  _setSearchHint("Encontrado: " + (rec.device || ("ID " + rec.id)));
+  focusRecord(rec);
+}
+
+// ===== Mover device (arrastar e salvar coordenadas) =====
+window.enableMoveRecord = function(recordId){
+  if (!IS_ADMIN) { alert("Apenas o ADMIN pode mover dispositivos."); return; }
+
+  const rec = (window._mapRecords || []).find(r => r.id === recordId);
+  if (!rec) return alert("Registro não encontrado.");
+
+  const baseMarker = window._recordMarkers ? window._recordMarkers.get(recordId) : null;
+  const startLatLng = baseMarker ? baseMarker.getLatLng() : L.latLng(rec.lat, rec.lng);
+
+  // Remove temporário anterior
+  if (window._moveTmpMarker){
+    try { leafletMap.removeLayer(window._moveTmpMarker); } catch(e) {}
+    window._moveTmpMarker = null;
+  }
+
+  const tmp = L.marker(startLatLng, { draggable: true, autoPan: true });
+  tmp.addTo(leafletMap);
+  window._moveTmpMarker = tmp;
+
+  alert("Arraste o ponto e solte. Ao soltar, vou salvar a nova coordenada.");
+
+  tmp.once('dragend', async function(){
+    const ll = tmp.getLatLng();
+    try {
+      const resp = await fetch(`/api/records/${recordId}/update-coords`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lat: ll.lat, lng: ll.lng })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) throw new Error(data.error || "Erro ao salvar coordenadas.");
+
+      // Atualiza em memória e recarrega marcadores (cores/bounds)
+      rec.lat = data.lat;
+      rec.lng = data.lng;
+
+      _setSearchHint("Coordenadas atualizadas para " + (rec.device || ("ID " + rec.id)));
+      try { leafletMap.removeLayer(tmp); } catch(e) {}
+      window._moveTmpMarker = null;
+
+      loadMarkers();
+      // Re-focar
+      setTimeout(() => {
+        const r2 = _findRecordByQuery(rec.device || String(rec.id));
+        if (r2) focusRecord(r2);
+      }, 400);
+
+    } catch(e){
+      alert("Falha ao salvar: " + e.message);
+      try { leafletMap.removeLayer(tmp); } catch(err) {}
+      window._moveTmpMarker = null;
+    }
+  });
+};
+
+// Setup UI
+function setupDeviceSearch(){
+  const input = document.getElementById('deviceSearch');
+  const btn = document.getElementById('deviceSearchBtn');
+  const allBtn = document.getElementById('showAllBtn');
+
+  if (btn) btn.addEventListener('click', performDeviceSearch);
+  if (input) {
+    input.addEventListener('keydown', function(e){
+      if (e.key === 'Enter'){
+        e.preventDefault();
+        performDeviceSearch();
+      }
+    });
+  }
+  if (allBtn){
+    allBtn.addEventListener('click', function(){
+      try{
+        const recs = window._mapRecords || [];
+        const fitPoints = _robustFitPoints(recs);
+        const fitBounds = fitPoints.map(p => [p.lat, p.lng]);
+        if (fitBounds.length){
+          leafletMap.fitBounds(fitBounds, { padding: [20, 20] });
+        }
+      } catch(e){}
+    });
+  }
+}
+
 
 function copyDeviceInfoFromRecord(recordId) {
       try {
@@ -529,6 +685,7 @@ function copyDeviceInfoFromRecord(recordId) {
 async function loadMarkers() {
       // Limpa camada anterior
       markersLayer.clearLayers();
+      try { window._recordMarkers.clear(); } catch(e) {}
 
       // Carrega cores das seções via API
       try {
@@ -663,12 +820,20 @@ if (rec.photo_ids && rec.photo_ids.length > 0) {
 
 popupParts.push('<div class="mt-2 d-flex flex-wrap gap-1">');
 if (!IS_OWNER_READONLY) {
+  // Abrir + copiar: permitido para quem pode operar o mapa (não-readonly)
   popupParts.push(
     '<button class="btn btn-primary btn-sm" onclick="openRecordFromMap(' + rec.id + ')">Abrir dispositivo</button>'
   );
   popupParts.push(
     '<button class="btn btn-warning btn-sm" onclick="copyDeviceInfoFromRecord(' + rec.id + ')">Copiar info</button>'
   );
+
+  // Mover: SOMENTE ADMIN
+  if (IS_ADMIN) {
+    popupParts.push(
+      '<button class="btn btn-secondary btn-sm" onclick="enableMoveRecord(' + rec.id + ')">Mover</button>'
+    );
+  }
 }
 popupParts.push(
   '<a class="btn btn-outline-info btn-sm" href="https://www.google.com/maps?q=' +
@@ -680,6 +845,7 @@ popupParts.push('</div>');
 const popupHtml = popupParts.join('');
 marker.bindPopup(popupHtml);
               marker.on('click', function () { this.openPopup(); });
+              try { window._recordMarkers.set(rec.id, marker); } catch(e) {}
               marker.addTo(markersLayer);
               if (currentFocusRecordId && rec.id === currentFocusRecordId) {
                 focusLatLng = [rec.lat, rec.lng];
@@ -907,6 +1073,7 @@ function openDeviceModalById(id) {
     document.addEventListener('DOMContentLoaded', initMap);
 
     document.addEventListener('DOMContentLoaded', function () {
+      try { setupDeviceSearch(); } catch(e) {}
       const saveBtn = document.getElementById('save-section-colors-btn');
       if (saveBtn) {
         saveBtn.addEventListener('click', async function () {
