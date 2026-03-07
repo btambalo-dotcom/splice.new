@@ -4035,6 +4035,7 @@ def api_map_records(map_id):
         # Separamos até 4 fotos de lançamento (não de teste) para mostrar no popup do mapa
         device_photos = [p for p in r.photos if not getattr(p, "is_test", False)]
         device_photos = device_photos[:4]
+        device_type = (r.type or "OTE").strip() or "OTE"
 
         data.append({
             "id": r.id,
@@ -4042,10 +4043,13 @@ def api_map_records(map_id):
             "device": r.device or "",
             "lng": r.longitude,
             "info": r.device_info or "",
-            "has_photos": len(r.photos),
+            "has_photos": len(device_photos),
             "photo_ids": [p.id for p in device_photos],
             "splicer": r.splicer or "",
+            "splices": int(r.splices or 0),
+            "type": device_type,
             "test_done": bool(r.test_done),
+            "test_levels": r.test_levels or "",
             "section": r.section or "",
             "created_date": r.created_date.isoformat() if r.created_date else None,
         })
@@ -4199,7 +4203,8 @@ def api_save_record_test(record_id):
 
     levels_raw = (request.form.get("levels") or "").strip()
     rec.test_levels = levels_raw or None
-    rec.test_done = bool(levels_raw)
+
+    saved_test_photos = 0
 
     # Fotos de teste (opcional)
     files = request.files.getlist("photos")
@@ -4215,12 +4220,24 @@ def api_save_record_test(record_id):
                 record_id=rec.id,
                 filename=(filename or "test")[:255],
                 content_type=content_type,
-                data=data,
+                data=data if data else b"",
                 thumb_data=thumb_data,
                 thumb_content_type=thumb_ct,
-                size_bytes=len(data),
+                size_bytes=int(len(data) if data else 0),
                 is_test=True,
             )
+            db.session.add(photo)
+            saved_test_photos += 1
+
+    rec.test_done = bool(levels_raw or saved_test_photos)
+    db.session.commit()
+
+    return jsonify({
+        "ok": True,
+        "record_id": int(rec.id),
+        "test_done": bool(rec.test_done),
+        "saved_test_photos": int(saved_test_photos),
+    })
 
 @app.route("/api/maps/<int:map_id>/add-record", methods=["POST"])
 @login_required

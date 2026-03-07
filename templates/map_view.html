@@ -35,6 +35,14 @@
       border-radius: 4px;
       border: 1px solid #555;
     }
+    .tested-device-icon {
+      background: transparent;
+      border: 0;
+    }
+    .tested-device-icon svg {
+      display: block;
+      overflow: visible;
+    }
   </style>
 {% endblock %}
 
@@ -658,6 +666,34 @@ function setupDeviceSearch(){
 }
 
 
+function _isCanType(rec) {
+  const t = String((rec && rec.type) || 'OTE').trim().toUpperCase();
+  return t.startsWith('CAN');
+}
+
+function createTestedDeviceMarker(rec, strokeColor) {
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+      <defs>
+        <clipPath id="clip-left-${rec.id}"><rect x="0" y="0" width="10" height="20" /></clipPath>
+        <clipPath id="clip-right-${rec.id}"><rect x="10" y="0" width="10" height="20" /></clipPath>
+      </defs>
+      <circle cx="10" cy="10" r="7" fill="#03c04a" clip-path="url(#clip-left-${rec.id})"></circle>
+      <circle cx="10" cy="10" r="7" fill="#dc3545" clip-path="url(#clip-right-${rec.id})"></circle>
+      <circle cx="10" cy="10" r="7" fill="none" stroke="${strokeColor}" stroke-width="2"></circle>
+    </svg>`;
+
+  const icon = L.divIcon({
+    className: 'tested-device-icon',
+    html: svg,
+    iconSize: [20, 20],
+    iconAnchor: [10, 10],
+    popupAnchor: [0, -10]
+  });
+
+  return L.marker([rec.lat, rec.lng], { icon });
+}
+
 function copyDeviceInfoFromRecord(recordId) {
       try {
         const list = window._mapRecords || [];
@@ -767,27 +803,24 @@ async function loadMarkers() {
               if (hasSpliceData) {
                 color = "#03c04a"; // verde = lançado
               }
-              if (rec.test_done) {
-                color = "#ff9800"; // laranja = teste feito
-              }
 
               // Se tiver seção, usa a cor da seção como contorno
               if (rec.section) {
                 const secColor = colorForSection(rec.section);
-                // Deixa o interior pela situação (pendente/lançado/teste)
-                // e o contorno com a cor da seção.
                 var strokeColor = secColor;
               } else {
                 var strokeColor = color;
               }
 
-              const marker = L.circleMarker([rec.lat, rec.lng], {
-                radius: 8,
-                color: strokeColor,
-                fillColor: color,
-                fillOpacity: 0.9,
-                weight: 2
-              });
+              const marker = rec.test_done
+                ? createTestedDeviceMarker(rec, strokeColor)
+                : L.circleMarker([rec.lat, rec.lng], {
+                    radius: 8,
+                    color: strokeColor,
+                    fillColor: color,
+                    fillOpacity: 0.9,
+                    weight: 2
+                  });
 
 
               const popupParts = [];
@@ -820,7 +853,6 @@ if (rec.photo_ids && rec.photo_ids.length > 0) {
 
 popupParts.push('<div class="mt-2 d-flex flex-wrap gap-1">');
 if (!IS_OWNER_READONLY) {
-  // Abrir + copiar: permitido para quem pode operar o mapa (não-readonly)
   popupParts.push(
     '<button class="btn btn-primary btn-sm" onclick="openRecordFromMap(' + rec.id + ')">Abrir dispositivo</button>'
   );
@@ -828,7 +860,12 @@ if (!IS_OWNER_READONLY) {
     '<button class="btn btn-warning btn-sm" onclick="copyDeviceInfoFromRecord(' + rec.id + ')">Copiar info</button>'
   );
 
-  // Mover: SOMENTE ADMIN
+  if (!_isCanType(rec) && Number(rec.splices || 0) > 0) {
+    popupParts.push(
+      '<button class="btn btn-success btn-sm" onclick="openTestModalById(' + rec.id + ')">Lançar teste</button>'
+    );
+  }
+
   if (IS_ADMIN) {
     popupParts.push(
       '<button class="btn btn-secondary btn-sm" onclick="enableMoveRecord(' + rec.id + ')">Mover</button>'
@@ -901,7 +938,11 @@ function openDeviceModalById(id) {
       const levelsRaw = rec.test_levels || "";
       const parsedLevels = levelsRaw ? levelsRaw.split(',').map(s => s.trim()) : [];
 
-      const count = totalSplices || parsedLevels.length || 1;
+      const count = Math.max(totalSplices, parsedLevels.length, 0);
+      if (count <= 0) {
+        alert('Este dispositivo ainda não tem fusões lançadas para testar.');
+        return;
+      }
 
       for (let i = 0; i < count; i++) {
         const group = document.createElement('div');
