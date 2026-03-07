@@ -222,6 +222,7 @@
       </div>
     </form>
   </div>
+</div>
 
 <div class="modal fade" id="testModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered">
@@ -911,7 +912,7 @@ function openDeviceModalById(id) {
       }
     }
 
-    function openTestModalById(id) {
+    window.openTestModalById = function(id) {
       const list = window._mapRecords || [];
       const rec = list.find(r => r.id === id);
       if (rec) {
@@ -920,7 +921,7 @@ function openDeviceModalById(id) {
     }
 
     
-    function openTestModal(rec) {
+    window.openTestModal = function(rec) {
       const modalEl = document.getElementById('testModal');
       const modal = new bootstrap.Modal(modalEl);
       document.getElementById('test-record-id').value = rec.id || "";
