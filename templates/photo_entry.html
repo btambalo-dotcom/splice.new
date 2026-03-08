@@ -61,7 +61,7 @@
     </div>
 
     <div class="form-check form-switch mt-3">
-      <input class="form-check-input" type="checkbox" id="is_can" name="is_can" value="1" {% if (device_type or '')|upper|trim.startswith('CAN') %}checked{% endif %}>
+      <input class="form-check-input" type="checkbox" id="is_can" name="is_can" value="1" {% if (device_type or '').upper().strip().startswith('CAN') %}checked{% endif %}>
       <label class="form-check-label" for="is_can">
         Este dispositivo é CAN (informar FT de todos os cabos)
       </label>
