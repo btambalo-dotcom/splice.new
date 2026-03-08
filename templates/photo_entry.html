@@ -49,8 +49,105 @@
       </div>
     </div>
 
+    <div class="row g-2 mt-1" id="single-ft-wrap">
+      <div class="col-md-6">
+        <label for="ft_in" class="form-label">FT IN</label>
+        <input type="text" class="form-control" id="ft_in" name="ft_in" value="{{ form_ft_in or '' }}" placeholder="Ex.: FT01">
+      </div>
+      <div class="col-md-6">
+        <label for="ft_out" class="form-label">FT OUT</label>
+        <input type="text" class="form-control" id="ft_out" name="ft_out" value="{{ form_ft_out or '' }}" placeholder="Ex.: FT02">
+      </div>
+    </div>
+
+    <div class="form-check form-switch mt-3">
+      <input class="form-check-input" type="checkbox" id="is_can" name="is_can" value="1" {% if (device_type or '')|upper|trim.startswith('CAN') %}checked{% endif %}>
+      <label class="form-check-label" for="is_can">
+        Este dispositivo é CAN (informar FT de todos os cabos)
+      </label>
+    </div>
+
+    <div id="can-cables-wrap" class="mt-3" style="display:none;">
+      <div class="row g-2 align-items-end">
+        <div class="col-md-6">
+          <label class="form-label">Quantidade de cabos</label>
+          <input name="can_cable_count" id="can-cable-count" type="number" min="1" class="form-control" value="{{ form_can_cable_count|default('') }}" placeholder="Ex.: 2">
+        </div>
+        <div class="col-md-6">
+          <button type="button" id="build-can-cables" class="btn btn-outline-info w-100">Montar cabos CAN</button>
+        </div>
+      </div>
+      <div class="form-text mb-2">Quando for CAN, informe quantos cabos existem e preencha FT IN / FT OUT de cada cabo.</div>
+      <div id="can-cables-container" class="d-flex flex-column gap-2"></div>
+    </div>
+
     <button type="submit" class="btn btn-primary">Lançar com estas fotos</button>
     <a href="{{ url_for('index') }}" class="btn btn-secondary ms-2">Voltar</a>
   </form>
 </div>
+
+<script>
+  const isCanToggle = document.getElementById('is_can');
+  const singleFtWrap = document.getElementById('single-ft-wrap');
+  const canCablesWrap = document.getElementById('can-cables-wrap');
+  const canCableCountInput = document.getElementById('can-cable-count');
+  const canCablesContainer = document.getElementById('can-cables-container');
+  const existingCanCables = {{ (form_can_cables_json|default('[]'))|safe }};
+
+  function renderCanCableInputs(forceCount) {
+    if (!canCablesContainer) return;
+    let count = forceCount != null ? Number(forceCount) : Number((canCableCountInput && canCableCountInput.value) || 0);
+    if (!Number.isFinite(count) || count < 0) count = 0;
+    count = Math.floor(count);
+    if (canCableCountInput) canCableCountInput.value = count ? String(count) : '';
+    canCablesContainer.innerHTML = '';
+    for (let i = 0; i < count; i++) {
+      const existing = Array.isArray(existingCanCables) ? (existingCanCables[i] || {}) : {};
+      const idx = i + 1;
+      const row = document.createElement('div');
+      row.className = 'border rounded p-2';
+      row.innerHTML = `
+        <div class="fw-bold small mb-2">Cabo ${idx}</div>
+        <div class="row g-2">
+          <div class="col-4">
+            <label class="form-label small">Nome do cabo</label>
+            <input type="text" class="form-control form-control-sm" name="can_cable_${idx}_name" value="${existing.name || ('Cabo ' + idx)}">
+          </div>
+          <div class="col-4">
+            <label class="form-label small">FT IN</label>
+            <input type="text" class="form-control form-control-sm" name="can_cable_${idx}_ft_in" value="${existing.ft_in || ''}">
+          </div>
+          <div class="col-4">
+            <label class="form-label small">FT OUT</label>
+            <input type="text" class="form-control form-control-sm" name="can_cable_${idx}_ft_out" value="${existing.ft_out || ''}">
+          </div>
+        </div>`;
+      canCablesContainer.appendChild(row);
+    }
+  }
+
+  function updateFtVisibility() {
+    const isCan = !!(isCanToggle && isCanToggle.checked);
+    if (singleFtWrap) singleFtWrap.style.display = isCan ? 'none' : '';
+    if (canCablesWrap) canCablesWrap.style.display = isCan ? '' : 'none';
+    if (isCan && canCablesContainer && !canCablesContainer.children.length) {
+      let existingCount = Array.isArray(existingCanCables) ? existingCanCables.length : 0;
+      let countVal = Number((canCableCountInput && canCableCountInput.value) || 0) || existingCount;
+      if (!countVal) {
+        const ans = window.prompt('Quantos cabos esse CAN possui?', '1');
+        if (ans === null) return;
+        countVal = Number(ans || 0);
+      }
+      if (countVal > 0) renderCanCableInputs(countVal);
+    }
+  }
+
+  document.getElementById('build-can-cables')?.addEventListener('click', function() {
+    renderCanCableInputs();
+  });
+  canCableCountInput?.addEventListener('change', function() { renderCanCableInputs(); });
+  isCanToggle?.addEventListener('change', updateFtVisibility);
+  updateFtVisibility();
+</script>
+
 {% endblock %}

@@ -2145,6 +2145,10 @@ def photo_entry():
         device_name = parsed["device_name"]
         splices_val = parsed["splices"]
         map_role = parsed["map_role"]  # 'MEIO' ou 'PONTA'
+        ft_in = (request.form.get("ft_in") or "").strip()
+        ft_out = (request.form.get("ft_out") or "").strip()
+        can_cable_count, can_cables = _parse_can_cables_from_form(request.form)
+        photo_is_can = bool(request.form.get("is_can"))
 
         # Determina empresa/projeto com base em um Record existente desse dispositivo.
         base_query = Record.query.filter(Record.map == map_name, Record.device == device_name)
@@ -2162,6 +2166,8 @@ def photo_entry():
         # Para manter consistência e garantir cobrança do dispositivo no lançamento por foto,
         # o padrão do sistema é OTE (o usuário pode trocar manualmente para CAN depois).
         type_val = (base_rec.type or "OTE").strip() or "OTE"
+        if photo_is_can and not str(type_val).upper().startswith("CAN"):
+            type_val = "CAN"
         map_val = map_name
 
         # Busca o objeto CompanyMap para aplicar regras de MEIO/PONTA.
@@ -2199,6 +2205,16 @@ def photo_entry():
         rec.price_device_usd = price_device
         rec.total_usd = total
         rec.included_splices_applied = included_applied
+        if str(type_val).upper().startswith("CAN"):
+            rec.ft_in = None
+            rec.ft_out = None
+            rec.can_cable_count = can_cable_count or None
+            rec.can_cables_json = json.dumps(can_cables, ensure_ascii=False) if can_cables else None
+        else:
+            rec.ft_in = ft_in or None
+            rec.ft_out = ft_out or None
+            rec.can_cable_count = None
+            rec.can_cables_json = None
 
         # Data de criação: tenta usar a data EXIF da foto.
         photo_date = extract_photo_date_from_exif(raw_bytes) if raw_bytes else None
