@@ -649,6 +649,10 @@ class Record(db.Model):
 
     # Informações adicionais do dispositivo (fibra usada, porta, etc.)
     device_info = db.Column(db.String(255), nullable=True)
+    ft_in = db.Column(db.String(120), nullable=True)
+    ft_out = db.Column(db.String(120), nullable=True)
+    can_cable_count = db.Column(db.Integer, nullable=True)
+    can_cables_json = db.Column(db.Text, nullable=True)
 
     # Snapshot (opcional): se o mapa estiver configurado com MEIO/PONTA,
     # salvamos o tipo escolhido e quantas fusões inclusas foram aplicadas.
@@ -772,6 +776,10 @@ with app.app_context():
     ensure("record", "latitude", "DOUBLE PRECISION")
     ensure("record", "longitude", "DOUBLE PRECISION")
     ensure("record", "device_info", "VARCHAR(255)")
+    ensure("record", "ft_in", "VARCHAR(120)")
+    ensure("record", "ft_out", "VARCHAR(120)")
+    ensure("record", "can_cable_count", "INTEGER")
+    ensure("record", "can_cables_json", "TEXT")
     ensure("record", "section", "VARCHAR(120)")
     ensure("device_type", "project_id", "INTEGER")
     ensure("splice_tier", "project_id", "INTEGER")
@@ -1697,6 +1705,42 @@ def record_photos_zip(rid):
     )
 
 
+def _parse_can_cables_from_form(form):
+    raw_count = (form.get("can_cable_count") or "").strip()
+    try:
+        count = max(0, int(raw_count or 0))
+    except Exception:
+        count = 0
+
+    cables = []
+    for i in range(1, count + 1):
+        name = (form.get(f"can_cable_{i}_name") or f"Cabo {i}").strip() or f"Cabo {i}"
+        ft_in = (form.get(f"can_cable_{i}_ft_in") or "").strip()
+        ft_out = (form.get(f"can_cable_{i}_ft_out") or "").strip()
+        cables.append({"name": name, "ft_in": ft_in, "ft_out": ft_out})
+    return count, cables
+
+
+def _record_ft_lines(rec):
+    lines = []
+    if (rec.type or "").strip().upper().startswith("CAN"):
+        try:
+            cables = json.loads(rec.can_cables_json or "[]") if rec.can_cables_json else []
+        except Exception:
+            cables = []
+        for idx, c in enumerate(cables, start=1):
+            cname = (c.get("name") or f"Cabo {idx}").strip() or f"Cabo {idx}"
+            cin = (c.get("ft_in") or "").strip()
+            cout = (c.get("ft_out") or "").strip()
+            part = f"{cname}: IN {cin or '-'} | OUT {cout or '-'}"
+            lines.append(part)
+    else:
+        if (rec.ft_in or "").strip() or (rec.ft_out or "").strip():
+            lines.append(f"FT IN: {(rec.ft_in or '-').strip() or '-'}")
+            lines.append(f"FT OUT: {(rec.ft_out or '-').strip() or '-'}")
+    return lines
+
+
 @app.route("/entry", methods=["GET", "POST"])
 @login_required
 def entry():
@@ -1813,6 +1857,9 @@ def entry():
         created_raw = request.form.get("created") or ""
         splicer = (request.form.get("splicer") or "").strip() or default_splicer
         confirm_duplicate = (request.form.get("confirm_duplicate") == "yes")
+        ft_in = (request.form.get("ft_in") or "").strip()
+        ft_out = (request.form.get("ft_out") or "").strip()
+        can_cable_count, can_cables = _parse_can_cables_from_form(request.form)
 
         existing = None
         if map_val and device_name:
@@ -1863,6 +1910,10 @@ def entry():
                     form_device_name=device_name,
                     form_splices=splices_raw,
                     form_created=created_raw or date.today().isoformat(),
+                    form_ft_in=ft_in,
+                    form_ft_out=ft_out,
+                    form_can_cable_count=str(can_cable_count or ""),
+                    form_can_cables_json=json.dumps(can_cables, ensure_ascii=False),
                     confirm_duplicate=True,
                     is_splicer=is_splicer,
                 )
@@ -1930,6 +1981,10 @@ def entry():
             price_splices_usd=price_splices,
             price_device_usd=price_device,
             total_usd=total,
+            ft_in=(None if type_val.strip().upper().startswith("CAN") else (ft_in or None)),
+            ft_out=(None if type_val.strip().upper().startswith("CAN") else (ft_out or None)),
+            can_cable_count=(can_cable_count if type_val.strip().upper().startswith("CAN") else None),
+            can_cables_json=(json.dumps(can_cables, ensure_ascii=False) if type_val.strip().upper().startswith("CAN") and can_cables else None),
         )
         db.session.add(rec)
         db.session.commit()
@@ -2016,6 +2071,10 @@ def entry():
         form_map_id=str(pre_map_id or ""),
         form_map_role=pre_map_role or "",
         form_type=pre_type or "",
+        form_ft_in="",
+        form_ft_out="",
+        form_can_cable_count="",
+        form_can_cables_json="[]",
         is_splicer=is_splicer,
     )
 
@@ -2294,6 +2353,9 @@ def record_edit(rid):
         splices_raw = request.form.get("splices") or "0"
         created_raw = request.form.get("created") or ""
         splicer = (request.form.get("splicer") or "").strip() or default_splicer
+        ft_in = (request.form.get("ft_in") or "").strip()
+        ft_out = (request.form.get("ft_out") or "").strip()
+        can_cable_count, can_cables = _parse_can_cables_from_form(request.form)
 
         try:
             splices = int(splices_raw or 0)
@@ -2354,6 +2416,16 @@ def record_edit(rid):
         rec.price_splices_usd = price_splices
         rec.price_device_usd = price_device
         rec.total_usd = total
+        if type_val.strip().upper().startswith("CAN"):
+            rec.ft_in = None
+            rec.ft_out = None
+            rec.can_cable_count = can_cable_count
+            rec.can_cables_json = json.dumps(can_cables, ensure_ascii=False) if can_cables else None
+        else:
+            rec.ft_in = ft_in or None
+            rec.ft_out = ft_out or None
+            rec.can_cable_count = None
+            rec.can_cables_json = None
 
         db.session.commit()
         flash("Lançamento atualizado.", "success")
@@ -2410,6 +2482,10 @@ def record_edit(rid):
         form_device_name=rec.device,
         form_splices=str(rec.splices or 0),
         form_created=form_created,
+        form_ft_in=rec.ft_in or "",
+        form_ft_out=rec.ft_out or "",
+        form_can_cable_count=str(rec.can_cable_count or ""),
+        form_can_cables_json=rec.can_cables_json or "[]",
     )
 
 
@@ -4045,6 +4121,7 @@ def api_map_records(map_id):
             "device": r.device or "",
             "lng": r.longitude,
             "info": r.device_info or "",
+            "ft_lines": _record_ft_lines(r),
             "has_photos": len(device_photos),
             "photo_ids": [p.id for p in device_photos],
             "has_test_photos": len(test_photos),
@@ -4253,6 +4330,8 @@ def api_save_record_test(record_id):
 def export_map_tests_report(map_id):
     mp = CompanyMap.query.get_or_404(map_id)
     ensure_map_access(mp)
+    if not bool(getattr(current_user, "is_admin", False)):
+        abort(403)
 
     query = Record.query.filter(Record.map == mp.name)
     if mp.company:

@@ -67,7 +67,7 @@
       <input id="deviceSearch" class="form-control form-control-sm" style="max-width: 340px" placeholder="Buscar device (ex: FT61, RN51E)..." />
       <button id="deviceSearchBtn" class="btn btn-outline-light btn-sm">Buscar</button>
       <button id="showAllBtn" class="btn btn-outline-secondary btn-sm">Mostrar tudo</button>
-      <a href="{{ url_for('export_map_tests_report', map_id=map_obj.id) }}" class="btn btn-outline-success btn-sm">Relatório testes</a>
+      {% if current_user.is_admin %}<a href="{{ url_for('export_map_tests_report', map_id=map_obj.id) }}" class="btn btn-outline-success btn-sm">Relatório testes</a>{% endif %}
       <span id="deviceSearchHint" class="small text-muted"></span>
     </div>
     <div id="map"></div>
@@ -168,7 +168,7 @@
       <input id="deviceSearch" class="form-control form-control-sm" style="max-width: 340px" placeholder="Buscar device (ex: FT61, RN51E)..." />
       <button id="deviceSearchBtn" class="btn btn-outline-light btn-sm">Buscar</button>
       <button id="showAllBtn" class="btn btn-outline-secondary btn-sm">Mostrar tudo</button>
-      <a href="{{ url_for('export_map_tests_report', map_id=map_obj.id) }}" class="btn btn-outline-success btn-sm">Relatório testes</a>
+      {% if current_user.is_admin %}<a href="{{ url_for('export_map_tests_report', map_id=map_obj.id) }}" class="btn btn-outline-success btn-sm">Relatório testes</a>{% endif %}
       <span id="deviceSearchHint" class="small text-muted"></span>
     </div>
     <div id="map"></div>
@@ -838,6 +838,9 @@ if (rec.splicer) {
 }
 if (rec.info) {
   popupParts.push('<div class="small mb-1">' + rec.info + '</div>');
+}
+if (rec.ft_lines && rec.ft_lines.length) {
+  popupParts.push('<div class="small mb-1"><strong>FTs:</strong><br>' + rec.ft_lines.join('<br>') + '</div>');
 }
 if (rec.test_levels) {
   const parsedTests = String(rec.test_levels).split(',').map(function(v){ return v.trim(); }).filter(Boolean);

@@ -48,6 +48,15 @@
         <dt class="col-4">Observações</dt>
         <dd class="col-8">{{ rec.device_info or '-' }}</dd>
 
+        <dt class="col-4">FTs</dt>
+        <dd class="col-8">
+          {% if ft_lines and ft_lines|length > 0 %}
+            {% for line in ft_lines %}{{ line }}{% if not loop.last %}<br>{% endif %}{% endfor %}
+          {% else %}
+            -
+          {% endif %}
+        </dd>
+
         <dt class="col-4">Coordenadas</dt>
         <dd class="col-8">
           {% if rec.latitude and rec.longitude %}

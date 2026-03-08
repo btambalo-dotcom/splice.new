@@ -87,6 +87,31 @@
           </div>
         </div>
 
+        <div id="single-ft-wrap" class="row g-2 mt-1">
+          <div class="col-6">
+            <label class="form-label">FT IN</label>
+            <input name="ft_in" id="ft-in-input" type="text" class="form-control" value="{{ form_ft_in|default('') }}" placeholder="Ex.: FT01">
+          </div>
+          <div class="col-6">
+            <label class="form-label">FT OUT</label>
+            <input name="ft_out" id="ft-out-input" type="text" class="form-control" value="{{ form_ft_out|default('') }}" placeholder="Ex.: FT02">
+          </div>
+        </div>
+
+        <div id="can-cables-wrap" class="mt-3" style="display:none;">
+          <div class="row g-2 align-items-end">
+            <div class="col-6">
+              <label class="form-label">Quantidade de cabos</label>
+              <input name="can_cable_count" id="can-cable-count" type="number" min="1" class="form-control" value="{{ form_can_cable_count|default('') }}" placeholder="Ex.: 2">
+            </div>
+            <div class="col-6">
+              <button type="button" id="build-can-cables" class="btn btn-outline-info w-100">Montar cabos CAN</button>
+            </div>
+          </div>
+          <div class="form-text mb-2">Para CAN, informe quantos cabos existem e preencha FT IN / FT OUT de cada cabo.</div>
+          <div id="can-cables-container" class="d-flex flex-column gap-2"></div>
+        </div>
+
         <div class="mb-3">
           <label class="form-label">Fotos do dispositivo (opcional)</label>
           <input type="file"
@@ -163,6 +188,61 @@
   const mapRoleSelect = document.getElementById('map-role-select');
   const mapRoleHint = document.getElementById('map-role-hint');
   const typeSelect = document.getElementById('type-select');
+
+  const typeIsCan = () => String((typeSelect && typeSelect.value) || '').trim().toUpperCase().startsWith('CAN');
+  const singleFtWrap = document.getElementById('single-ft-wrap');
+  const canCablesWrap = document.getElementById('can-cables-wrap');
+  const canCableCountInput = document.getElementById('can-cable-count');
+  const canCablesContainer = document.getElementById('can-cables-container');
+  const existingCanCables = {{ (form_can_cables_json|default('[]'))|safe }};
+
+  function renderCanCableInputs(forceCount) {
+    if (!canCablesContainer) return;
+    let count = forceCount != null ? Number(forceCount) : Number(canCableCountInput && canCableCountInput.value || 0);
+    if (!Number.isFinite(count) || count < 0) count = 0;
+    count = Math.floor(count);
+    if (canCableCountInput) canCableCountInput.value = count ? String(count) : '';
+    canCablesContainer.innerHTML = '';
+    for (let i = 0; i < count; i++) {
+      const existing = Array.isArray(existingCanCables) ? (existingCanCables[i] || {}) : {};
+      const idx = i + 1;
+      const row = document.createElement('div');
+      row.className = 'border rounded p-2';
+      row.innerHTML = `
+        <div class="fw-bold small mb-2">Cabo ${idx}</div>
+        <div class="row g-2">
+          <div class="col-4">
+            <label class="form-label small">Nome do cabo</label>
+            <input type="text" class="form-control form-control-sm" name="can_cable_${idx}_name" value="${existing.name || ('Cabo ' + idx)}">
+          </div>
+          <div class="col-4">
+            <label class="form-label small">FT IN</label>
+            <input type="text" class="form-control form-control-sm" name="can_cable_${idx}_ft_in" value="${existing.ft_in || ''}">
+          </div>
+          <div class="col-4">
+            <label class="form-label small">FT OUT</label>
+            <input type="text" class="form-control form-control-sm" name="can_cable_${idx}_ft_out" value="${existing.ft_out || ''}">
+          </div>
+        </div>`;
+      canCablesContainer.appendChild(row);
+    }
+  }
+
+  function updateFtVisibility() {
+    const isCan = typeIsCan();
+    if (singleFtWrap) singleFtWrap.style.display = isCan ? 'none' : '';
+    if (canCablesWrap) canCablesWrap.style.display = isCan ? '' : 'none';
+    if (isCan && canCablesContainer && !canCablesContainer.children.length) {
+      let existingCount = Array.isArray(existingCanCables) ? existingCanCables.length : 0;
+      let countVal = Number(canCableCountInput && canCableCountInput.value || 0) || existingCount;
+      if (!countVal) {
+        const ans = window.prompt('Quantos cabos esse CAN possui?', '1');
+        if (ans === null) return;
+        countVal = Number(ans || 0);
+      }
+      if (countVal > 0) renderCanCableInputs(countVal);
+    }
+  }
 
   function updateProjects() {
     if (!projectSelect) return;
@@ -335,8 +415,22 @@
     updateTypes();
   });
 
+  if (typeSelect) typeSelect.addEventListener('change', () => {
+    if (typeIsCan() && canCablesContainer && !canCablesContainer.children.length) {
+      const ans = window.prompt('Quantos cabos esse CAN possui?', canCableCountInput && canCableCountInput.value ? canCableCountInput.value : '1');
+      if (ans !== null && canCableCountInput) canCableCountInput.value = ans;
+      renderCanCableInputs();
+    }
+    updateFtVisibility();
+  });
+
+  const buildCanBtn = document.getElementById('build-can-cables');
+  if (buildCanBtn) buildCanBtn.addEventListener('click', () => renderCanCableInputs());
+
   mapSelect.addEventListener('change', () => {
     updateMapRoleVisibility();
+    updateFtVisibility();
+
     const deviceInput = document.getElementById('device-name-input');
     if (deviceInput) { deviceInput.focus(); deviceInput.select(); }
   });
