@@ -4322,7 +4322,7 @@ def export_map_tests_report(map_id):
             pdf.cell(w, 7, text, border=1)
         pdf.ln()
 
-    pdf_bytes = pdf.output(dest="S").encode("latin-1")
+    pdf_bytes = bytes(pdf.output(dest="S"))
     filename = f"test-report-{(mp.name or 'map').replace(' ', '_')}.pdf"
     return send_file(io.BytesIO(pdf_bytes), mimetype="application/pdf", as_attachment=True, download_name=filename)
 
