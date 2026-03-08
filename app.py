@@ -2264,9 +2264,25 @@ def photo_entry():
             lines.append("T: ")
             stamp_text = "\n".join(lines)
 
-        return render_template("photo_entry.html", stamp_text=stamp_text)
+        return render_template(
+            "photo_entry.html",
+            stamp_text=stamp_text,
+            form_ft_in="",
+            form_ft_out="",
+            form_can_cable_count="",
+            form_can_cables_json="[]",
+            device_type="",
+        )
 
-    return render_template("photo_entry.html")
+    return render_template(
+        "photo_entry.html",
+        stamp_text="",
+        form_ft_in="",
+        form_ft_out="",
+        form_can_cable_count="",
+        form_can_cables_json="[]",
+        device_type="",
+    )
 
 
 @app.route("/entry-focus/<int:rid>")

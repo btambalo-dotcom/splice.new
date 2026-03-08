@@ -1,1 +1,1 @@
-SPLICER v114 - admin tests report + FT in/out + CAN cabos
+SPLICER v117 - full package photo entry FTs fix
