@@ -4034,9 +4034,9 @@ def api_map_records(map_id):
 
     data = []
     for r in query.order_by(Record.id.asc()).all():
-        # Separamos até 4 fotos de lançamento (não de teste) para mostrar no popup do mapa
-        device_photos = [p for p in r.photos if not getattr(p, "is_test", False)]
-        device_photos = device_photos[:4]
+        # Separamos miniaturas de lançamento e de teste para mostrar no popup do mapa
+        device_photos = [p for p in r.photos if not getattr(p, "is_test", False)][:4]
+        test_photos = [p for p in r.photos if getattr(p, "is_test", False)][:4]
         device_type = (r.type or "OTE").strip() or "OTE"
 
         data.append({
@@ -4047,11 +4047,14 @@ def api_map_records(map_id):
             "info": r.device_info or "",
             "has_photos": len(device_photos),
             "photo_ids": [p.id for p in device_photos],
+            "has_test_photos": len(test_photos),
+            "test_photo_ids": [p.id for p in test_photos],
             "splicer": r.splicer or "",
             "splices": int(r.splices or 0),
             "type": device_type,
             "test_done": bool(r.test_done),
             "test_levels": r.test_levels or "",
+            "test_date": r.test_date.isoformat() if r.test_date else None,
             "section": r.section or "",
             "created_date": r.created_date.isoformat() if r.created_date else None,
         })

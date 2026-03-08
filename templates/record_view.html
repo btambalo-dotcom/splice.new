@@ -111,20 +111,20 @@
 </div>
 {% endif %}
 
-{% if rec.photos|length > 0 %}
+{% set launch_photos = rec.photos | rejectattr('is_test') | list %}
+{% set test_photos = rec.photos | selectattr('is_test') | list %}
+
+{% if launch_photos|length > 0 %}
 <div class="card mt-4 p-3">
   <h5 class="mb-3">Fotos do dispositivo</h5>
   <div class="row g-3">
-    {% for p in rec.photos %}
+    {% for p in launch_photos %}
       <div class="col-md-3 col-6">
-        <a href="{{ url_for('photo_file', photo_id=p.id) }}" target="_blank">
+        <a href="#" class="js-photo-zoom" data-full="{{ url_for('photo_file', photo_id=p.id) }}">
           <img src="{{ url_for('photo_file', photo_id=p.id, size='thumb') }}"
                class="img-fluid rounded border"
                alt="Foto {{ loop.index }}">
         </a>
-        {% if p.is_test %}
-          <div class="small text-success mt-1">Foto de teste</div>
-        {% endif %}
         {% if can_edit_photos %}
           <form method="post"
                 action="{{ url_for('photo_remove_v2', photo_id=p.id) }}"
@@ -141,6 +141,49 @@
   </div>
 </div>
 {% endif %}
+
+{% if test_photos|length > 0 %}
+<div class="card mt-4 p-3">
+  <h5 class="mb-3">Fotos do teste</h5>
+  <div class="row g-3">
+    {% for p in test_photos %}
+      <div class="col-md-3 col-6">
+        <a href="#" class="js-photo-zoom" data-full="{{ url_for('photo_file', photo_id=p.id) }}">
+          <img src="{{ url_for('photo_file', photo_id=p.id, size='thumb') }}"
+               class="img-fluid rounded border"
+               alt="Foto de teste {{ loop.index }}">
+        </a>
+        <div class="small text-success mt-1">Foto de teste</div>
+        {% if can_edit_photos %}
+          <form method="post"
+                action="{{ url_for('photo_remove_v2', photo_id=p.id) }}"
+                class="mt-1">
+            <button type="submit"
+                    class="btn btn-sm btn-outline-danger w-100"
+                    onclick="return confirm('Excluir esta foto?');">
+              Excluir foto
+            </button>
+          </form>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<div class="modal fade" id="photoZoomModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-centered">
+    <div class="modal-content bg-dark border-secondary">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title">Foto</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body text-center">
+        <img id="photoZoomImg" src="" alt="Foto ampliada" class="img-fluid rounded">
+      </div>
+    </div>
+  </div>
+</div>
 
 <script>
 document.addEventListener('DOMContentLoaded', function () {
@@ -182,6 +225,23 @@ document.addEventListener('DOMContentLoaded', function () {
 
   buildInputs();
 
+
+
+  const zoomModalEl = document.getElementById('photoZoomModal');
+  const zoomImgEl = document.getElementById('photoZoomImg');
+  if (zoomModalEl && zoomImgEl) {
+    const zoomModal = new bootstrap.Modal(zoomModalEl);
+    document.querySelectorAll('.js-photo-zoom').forEach(function(a) {
+      a.addEventListener('click', function(ev) {
+        ev.preventDefault();
+        const full = a.getAttribute('data-full');
+        if (!full) return;
+        zoomImgEl.src = full;
+        zoomModal.show();
+      });
+    });
+  }
+
   const form = document.getElementById('test-form');
   form.addEventListener('submit', async function (ev) {
     ev.preventDefault();
@@ -207,6 +267,7 @@ document.addEventListener('DOMContentLoaded', function () {
       const data = await resp.json();
       if (data.ok) {
         alert('Teste salvo com sucesso.');
+        window.location.reload();
         // Opcional: marcar visualmente como concluído sem recarregar
       } else {
         alert(data.error || 'Erro ao salvar teste.');

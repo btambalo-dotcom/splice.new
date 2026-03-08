@@ -848,16 +848,37 @@ if (rec.test_levels) {
     popupParts.push('<div class="small mb-1"><strong>Testes:</strong><br>' + portLines + '</div>');
   }
 }
+if (rec.test_date) {
+  const d = String(rec.test_date).slice(0, 10);
+  popupParts.push('<div class="small text-success mb-1"><strong>Date:</strong> ' + d + '</div>');
+}
 
 // Miniaturas das fotos de lançamento (se houver)
 if (rec.photo_ids && rec.photo_ids.length > 0) {
-  popupParts.push('<div class="mt-2 popup-photos">');
+  popupParts.push('<div class="small mt-2"><strong>Fotos do lançamento:</strong></div>');
+  popupParts.push('<div class="mt-1 popup-photos">');
   rec.photo_ids.forEach(function(pid) {
     const thumbUrl = '/photo/' + pid + '?size=thumb';
     const fullUrl = '/photo/' + pid;
     popupParts.push(
       '<a href="' + fullUrl + '" target="_blank" class="me-1 mb-1 d-inline-block">' +
         '<img src="' + thumbUrl + '" class="popup-thumb" alt="Foto">' +
+      '</a>'
+    );
+  });
+  popupParts.push('</div>');
+}
+
+// Miniaturas das fotos de teste (se houver)
+if (rec.test_photo_ids && rec.test_photo_ids.length > 0) {
+  popupParts.push('<div class="small mt-2"><strong>Fotos do teste:</strong></div>');
+  popupParts.push('<div class="mt-1 popup-photos">');
+  rec.test_photo_ids.forEach(function(pid) {
+    const thumbUrl = '/photo/' + pid + '?size=thumb';
+    const fullUrl = '/photo/' + pid;
+    popupParts.push(
+      '<a href="' + fullUrl + '" target="_blank" class="me-1 mb-1 d-inline-block">' +
+        '<img src="' + thumbUrl + '" class="popup-thumb" alt="Foto de teste">' +
       '</a>'
     );
   });
