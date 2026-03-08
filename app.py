@@ -666,6 +666,7 @@ class Record(db.Model):
     # Testes (níveis por fusão, armazenados como CSV) e flag de concluído
     test_levels = db.Column(db.Text, nullable=True)
     test_done = db.Column(db.Boolean, default=False)
+    test_date = db.Column(db.DateTime, nullable=True)
 
 
 class RecordPhoto(db.Model):
@@ -767,6 +768,7 @@ with app.app_context():
     ensure("record", "included_splices_applied", "INTEGER")
     ensure("record", "test_levels", "TEXT")
     ensure("record", "test_done", "BOOLEAN")
+    ensure("record", "test_date", "TIMESTAMP")
     ensure("record", "latitude", "DOUBLE PRECISION")
     ensure("record", "longitude", "DOUBLE PRECISION")
     ensure("record", "device_info", "VARCHAR(255)")
@@ -4230,6 +4232,8 @@ def api_save_record_test(record_id):
             saved_test_photos += 1
 
     rec.test_done = bool(levels_raw or saved_test_photos)
+    if rec.test_done:
+        rec.test_date = datetime.utcnow()
     db.session.commit()
 
     return jsonify({
@@ -4251,40 +4255,76 @@ def export_map_tests_report(map_id):
     if mp.company:
         query = query.filter(Record.company == mp.company)
 
-    # Relatório somente de dispositivos testados (OTE).
     query = query.filter(Record.test_done.is_(True))
 
     rows = []
-    for r in query.order_by(Record.device.asc(), Record.id.asc()).all():
+    max_ports = 0
+    for r in query.order_by(func.coalesce(Record.test_date, Record.created_date).asc(), Record.device.asc(), Record.id.asc()).all():
         if (r.type or "").strip().upper().startswith("CAN"):
             continue
-        levels = (r.test_levels or "").strip()
+        levels = [x.strip() for x in (r.test_levels or "").split(",") if x.strip()]
         if not levels:
             continue
-        test_values = ", ".join([x.strip() for x in levels.split(",") if x.strip()])
-        created = r.created_date.strftime("%Y-%m-%d") if r.created_date else ""
+        max_ports = max(max_ports, len(levels))
+        test_dt = r.test_date or r.created_date
         rows.append({
-            "Date": created,
+            "Date": test_dt.strftime("%Y-%m-%d") if test_dt else "",
             "Map": r.map or mp.name or "",
             "Device": r.device or "",
-            "Splicer": r.splicer or "",
-            "Test values": test_values,
+            "ports": levels,
         })
 
-    output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=["Date", "Map", "Device", "Splicer", "Test values"])
-    writer.writeheader()
-    for row in rows:
-        writer.writerow(row)
+    # Permite CSV opcional via ?format=csv
+    out_format = (request.args.get("format") or "pdf").strip().lower()
+    if out_format == "csv":
+        output = io.StringIO()
+        fieldnames = ["Date", "Map", "Device"] + [f"Porta {i}" for i in range(1, max_ports + 1)]
+        writer = csv.DictWriter(output, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            base = {"Date": row["Date"], "Map": row["Map"], "Device": row["Device"]}
+            for i in range(max_ports):
+                base[f"Porta {i+1}"] = row["ports"][i] if i < len(row["ports"]) else ""
+            writer.writerow(base)
+        csv_bytes = output.getvalue().encode("utf-8-sig")
+        filename = f"test-report-{(mp.name or 'map').replace(' ', '_')}.csv"
+        return send_file(io.BytesIO(csv_bytes), mimetype="text/csv", as_attachment=True, download_name=filename)
 
-    csv_bytes = output.getvalue().encode("utf-8-sig")
-    filename = f"test-report-{(mp.name or 'map').replace(' ', '_')}.csv"
-    return send_file(
-        io.BytesIO(csv_bytes),
-        mimetype="text/csv",
-        as_attachment=True,
-        download_name=filename,
-    )
+    pdf = FPDF(orientation="L", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=10)
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 14)
+    title = f"Relatorio de Testes - {mp.company or ''} - {mp.name or ''}".strip(" -")
+    pdf.cell(0, 10, title, ln=1)
+    pdf.set_font("Arial", size=9)
+    pdf.cell(0, 6, f"Gerado em: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}", ln=1)
+    pdf.ln(2)
+
+    page_w = pdf.w - pdf.l_margin - pdf.r_margin
+    date_w = 28
+    map_w = 50
+    device_w = 52
+    port_cols = max(max_ports, 1)
+    port_w = max(18, min(28, (page_w - date_w - map_w - device_w) / port_cols))
+
+    pdf.set_font("Arial", "B", 9)
+    headers = ["Date", "Map", "Device"] + [f"Porta {i}" for i in range(1, max_ports + 1)]
+    widths = [date_w, map_w, device_w] + [port_w] * max_ports
+    for h, w in zip(headers, widths):
+        pdf.cell(w, 8, h, border=1, align="C")
+    pdf.ln()
+
+    pdf.set_font("Arial", size=8)
+    for row in rows:
+        values = [row["Date"], row["Map"], row["Device"]] + row["ports"] + [""] * (max_ports - len(row["ports"]))
+        for val, w in zip(values, widths):
+            text = str(val)[:40]
+            pdf.cell(w, 7, text, border=1)
+        pdf.ln()
+
+    pdf_bytes = pdf.output(dest="S").encode("latin-1")
+    filename = f"test-report-{(mp.name or 'map').replace(' ', '_')}.pdf"
+    return send_file(io.BytesIO(pdf_bytes), mimetype="application/pdf", as_attachment=True, download_name=filename)
 
 
 @app.route("/api/maps/<int:map_id>/add-record", methods=["POST"])

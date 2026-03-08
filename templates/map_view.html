@@ -840,9 +840,12 @@ if (rec.info) {
   popupParts.push('<div class="small mb-1">' + rec.info + '</div>');
 }
 if (rec.test_levels) {
-  const testValuesText = String(rec.test_levels).split(',').map(function(v){ return v.trim(); }).filter(Boolean).join(', ');
-  if (testValuesText) {
-    popupParts.push('<div class="small mb-1"><strong>Testes:</strong> ' + testValuesText + '</div>');
+  const parsedTests = String(rec.test_levels).split(',').map(function(v){ return v.trim(); }).filter(Boolean);
+  if (parsedTests.length) {
+    const portLines = parsedTests.map(function(v, idx){
+      return 'Porta ' + (idx + 1) + ': ' + v;
+    }).join('<br>');
+    popupParts.push('<div class="small mb-1"><strong>Testes:</strong><br>' + portLines + '</div>');
   }
 }
 
