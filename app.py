@@ -4239,6 +4239,54 @@ def api_save_record_test(record_id):
         "saved_test_photos": int(saved_test_photos),
     })
 
+
+
+@app.route("/maps/<int:map_id>/tests-report")
+@login_required
+def export_map_tests_report(map_id):
+    mp = CompanyMap.query.get_or_404(map_id)
+    ensure_map_access(mp)
+
+    query = Record.query.filter(Record.map == mp.name)
+    if mp.company:
+        query = query.filter(Record.company == mp.company)
+
+    # Relatório somente de dispositivos testados (OTE).
+    query = query.filter(Record.test_done.is_(True))
+
+    rows = []
+    for r in query.order_by(Record.device.asc(), Record.id.asc()).all():
+        if (r.type or "").strip().upper().startswith("CAN"):
+            continue
+        levels = (r.test_levels or "").strip()
+        if not levels:
+            continue
+        test_values = ", ".join([x.strip() for x in levels.split(",") if x.strip()])
+        created = r.created_date.strftime("%Y-%m-%d") if r.created_date else ""
+        rows.append({
+            "Date": created,
+            "Map": r.map or mp.name or "",
+            "Device": r.device or "",
+            "Splicer": r.splicer or "",
+            "Test values": test_values,
+        })
+
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=["Date", "Map", "Device", "Splicer", "Test values"])
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+
+    csv_bytes = output.getvalue().encode("utf-8-sig")
+    filename = f"test-report-{(mp.name or 'map').replace(' ', '_')}.csv"
+    return send_file(
+        io.BytesIO(csv_bytes),
+        mimetype="text/csv",
+        as_attachment=True,
+        download_name=filename,
+    )
+
+
 @app.route("/api/maps/<int:map_id>/add-record", methods=["POST"])
 @login_required
 def api_add_record_to_map(map_id):

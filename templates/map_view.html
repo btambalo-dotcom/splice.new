@@ -67,6 +67,7 @@
       <input id="deviceSearch" class="form-control form-control-sm" style="max-width: 340px" placeholder="Buscar device (ex: FT61, RN51E)..." />
       <button id="deviceSearchBtn" class="btn btn-outline-light btn-sm">Buscar</button>
       <button id="showAllBtn" class="btn btn-outline-secondary btn-sm">Mostrar tudo</button>
+      <a href="{{ url_for('export_map_tests_report', map_id=map_obj.id) }}" class="btn btn-outline-success btn-sm">Relatório testes</a>
       <span id="deviceSearchHint" class="small text-muted"></span>
     </div>
     <div id="map"></div>
@@ -167,6 +168,7 @@
       <input id="deviceSearch" class="form-control form-control-sm" style="max-width: 340px" placeholder="Buscar device (ex: FT61, RN51E)..." />
       <button id="deviceSearchBtn" class="btn btn-outline-light btn-sm">Buscar</button>
       <button id="showAllBtn" class="btn btn-outline-secondary btn-sm">Mostrar tudo</button>
+      <a href="{{ url_for('export_map_tests_report', map_id=map_obj.id) }}" class="btn btn-outline-success btn-sm">Relatório testes</a>
       <span id="deviceSearchHint" class="small text-muted"></span>
     </div>
     <div id="map"></div>
@@ -277,6 +279,7 @@
     const IS_OWNER_READONLY = {{ "true" if current_user.is_company_owner and not current_user.is_admin else "false" }};
 const IS_ADMIN = {{ "true" if current_user.is_admin else "false" }};
     const MAP_NAME = "{{ map_obj.name }}";
+    const testsReportUrl = "{{ url_for('export_map_tests_report', map_id=map_obj.id) }}";
 
 
     // Cores personalizadas das seções (carregadas via API)
@@ -835,6 +838,12 @@ if (rec.splicer) {
 }
 if (rec.info) {
   popupParts.push('<div class="small mb-1">' + rec.info + '</div>');
+}
+if (rec.test_levels) {
+  const testValuesText = String(rec.test_levels).split(',').map(function(v){ return v.trim(); }).filter(Boolean).join(', ');
+  if (testValuesText) {
+    popupParts.push('<div class="small mb-1"><strong>Testes:</strong> ' + testValuesText + '</div>');
+  }
 }
 
 // Miniaturas das fotos de lançamento (se houver)
