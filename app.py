@@ -10,6 +10,8 @@ import os
 from fpdf import FPDF
 from werkzeug.utils import secure_filename
 from io import BytesIO
+import urllib.parse
+import urllib.request
 import io
 import zipfile
 import hashlib
@@ -131,6 +133,180 @@ def extract_photo_date_from_exif(raw_bytes):
 
 
 
+def _extract_kmz_meta(name: str | None, description: str | None):
+    name = (name or '').strip()
+    description = (description or '').strip()
+    port_label = None
+    pon_name = None
+    ote_label = None
+    splitter_name = None
+
+    m = re.search(r"\b(P\d+)\b", name, re.I)
+    if m:
+        port_label = m.group(1).upper()
+
+    m = re.search(r"(?:^|[;|\n\r ]+)PON\s*[:= -]*\s*(\d+)\b", description, re.I)
+    if m:
+        pon_name = f"PON {m.group(1)}"
+
+    if not pon_name:
+        m = re.search(r"(?:^|[;|\n\r ]+)P(\d+)\b", description, re.I)
+        if m:
+            pon_name = f"PON {m.group(1)}"
+
+    m = re.search(r"(?:OTE|FIBRAS?)\s*[:= -]*\s*([0-9]+(?:\s*[-/]\s*[0-9]+)?)", description, re.I)
+    if m:
+        ote_label = re.sub(r"\s+", '', m.group(1))
+    else:
+        m = re.search(r"\b([0-9]+\s*[-/]\s*[0-9]+)\b", description)
+        if m:
+            ote_label = re.sub(r"\s+", '', m.group(1))
+
+    m = re.search(r"SPLITTER\s*[:= -]*\s*([^;|\n\r]+)", description, re.I)
+    if m:
+        splitter_name = m.group(1).strip()
+
+    return {
+        'port_label': port_label,
+        'pon_name': pon_name,
+        'ote_label': ote_label,
+        'splitter_name': splitter_name,
+    }
+
+
+def _get_syscfg():
+    cfg = SystemConfig.query.first()
+    if not cfg:
+        cfg = SystemConfig()
+        db.session.add(cfg)
+        db.session.commit()
+    return cfg
+
+
+def geoapify_reverse_geocode(lat, lng):
+    try:
+        cfg = _get_syscfg()
+        api_key = (getattr(cfg, 'geoapify_api_key', None) or os.environ.get('GEOAPIFY_API_KEY') or '').strip()
+        if not api_key:
+            return None
+        params = urllib.parse.urlencode({
+            'lat': f'{float(lat):.8f}',
+            'lon': f'{float(lng):.8f}',
+            'apiKey': api_key,
+        })
+        url = f'https://api.geoapify.com/v1/geocode/reverse?{params}'
+        with urllib.request.urlopen(url, timeout=12) as resp:
+            payload = json.loads(resp.read().decode('utf-8', errors='ignore'))
+        feats = payload.get('features') or []
+        if not feats:
+            return None
+        props = feats[0].get('properties') or {}
+        return (props.get('formatted') or '').strip() or None
+    except Exception:
+        return None
+
+
+
+def build_network_for_map(map_obj):
+    records = Record.query.filter(Record.map == map_obj.name)
+    if map_obj.company:
+        records = records.filter(Record.company == map_obj.company)
+    records = records.filter(Record.latitude.isnot(None), Record.longitude.isnot(None)).all()
+
+    def dist(a, b):
+        ax, ay = float(a.latitude or 0), float(a.longitude or 0)
+        bx, by = float(b.latitude or 0), float(b.longitude or 0)
+        return ((ax - bx) ** 2 + (ay - by) ** 2) ** 0.5
+
+    def norm(v):
+        return (v or '').strip().upper()
+
+    updated = 0
+    groups = {}
+    for rec in records:
+        pon = norm(getattr(rec, 'pon_name', None))
+        if not pon:
+            continue
+        groups.setdefault(pon, []).append(rec)
+
+    for pon, items in groups.items():
+        splitters = [r for r in items if norm(r.type) == 'SPLITTER']
+        devices = [r for r in items if norm(r.type or 'OTE') != 'SPLITTER']
+        if not splitters or not devices:
+            continue
+
+        splitter = next((r for r in splitters if (r.device or '').strip()), splitters[0])
+
+        # Regra correta:
+        # - o splitter é sempre a raiz do PON
+        # - o sinal sempre parte dele
+        # - FROM/OUT são calculados pela árvore mais econômica (MST),
+        #   orientada a partir do splitter
+        nodes = [splitter] + devices
+
+        # Prim MST
+        connected = {splitter}
+        parent = {}
+        children = {n: [] for n in nodes}
+
+        while len(connected) < len(nodes):
+            best_u = None
+            best_v = None
+            best_d = None
+            for u in list(connected):
+                for v in nodes:
+                    if v in connected:
+                        continue
+                    d = dist(u, v)
+                    if best_d is None or d < best_d:
+                        best_d = d
+                        best_u = u
+                        best_v = v
+            if best_v is None:
+                break
+            connected.add(best_v)
+            parent[best_v] = best_u
+            children.setdefault(best_u, []).append(best_v)
+            children.setdefault(best_v, [])
+
+        # Ordena filhos de cada nó por proximidade para ficar consistente
+        for u, childs in list(children.items()):
+            childs.sort(key=lambda c: dist(u, c))
+
+        # Grava FROM/OUT:
+        # - splitter tem FROM vazio e OUT como lista das primeiras saídas
+        # - cada dispositivo recebe FROM = pai
+        # - OUT = filhos, quando houver; se não houver, vazio
+        splitter_from = ''
+        splitter_out = ', '.join([(c.device or '').strip() for c in children.get(splitter, []) if (c.device or '').strip()])
+        if getattr(splitter, 'source_from', None) != (splitter_from or None):
+            splitter.source_from = splitter_from or None
+            updated += 1
+        if getattr(splitter, 'source_out', None) != (splitter_out or None):
+            splitter.source_out = splitter_out or None
+            updated += 1
+
+        for rec in devices:
+            p = parent.get(rec)
+            new_from = ((p.device or p.splitter_name or 'SPLITTER').strip() if p is not None else '')
+            child_names = [(c.device or '').strip() for c in children.get(rec, []) if (c.device or '').strip()]
+            # Se houver apenas um filho, OUT é esse próximo device.
+            # Se houver bifurcação, lista todos.
+            new_out = ', '.join(child_names) if child_names else ''
+
+            if getattr(rec, 'source_from', None) != (new_from or None):
+                rec.source_from = new_from or None
+                updated += 1
+            if getattr(rec, 'source_out', None) != (new_out or None):
+                rec.source_out = new_out or None
+                updated += 1
+
+    if updated:
+        db.session.commit()
+    return updated
+
+
+
 def import_kmz_for_map(company_map, file_storage):
     """Importa um arquivo KMZ e cria/atualiza Records com coordenadas
     para o mapa/projeto informado.
@@ -218,6 +394,7 @@ def import_kmz_for_map(company_map, file_storage):
         desc_el = pm.find("k:description", ns)
         description_text = (desc_el.text or "").strip() if desc_el is not None and desc_el.text else ""
         device_info_val = extra_info or description_text or None
+        kmz_meta = _extract_kmz_meta(name, device_info_val)
         coord_el = pm.find(".//k:Point/k:coordinates", ns)
         if coord_el is None or not coord_el.text:
             continue
@@ -256,10 +433,16 @@ def import_kmz_for_map(company_map, file_storage):
                 project_id=company_map.project_id,
                 map=company_map.name,
                 device=name,
+                type='OTE',
+                splices=0,
                 splicer="",
                 created_date=None,
                 section=section_name,
                 device_info=device_info_val,
+                port_label=kmz_meta.get('port_label'),
+                pon_name=kmz_meta.get('pon_name'),
+                ote_label=kmz_meta.get('ote_label'),
+                splitter_name=kmz_meta.get('splitter_name'),
             )
             db.session.add(rec)
 
@@ -269,12 +452,16 @@ def import_kmz_for_map(company_map, file_storage):
                 company=company_map.company,
                 project_id=company_map.project_id,
                 device=name or f"DEVICE-{created_or_updated+1}",
-                type=None,
+                type='OTE',
                 splices=0,
                 splicer="",
                 created_date=None,
                 section=section_name,
                 device_info=device_info_val,
+                port_label=kmz_meta.get('port_label'),
+                pon_name=kmz_meta.get('pon_name'),
+                ote_label=kmz_meta.get('ote_label'),
+                splitter_name=kmz_meta.get('splitter_name'),
             )
             db.session.add(rec)
 
@@ -285,6 +472,18 @@ def import_kmz_for_map(company_map, file_storage):
         # Atualiza coordenadas sempre que importar
         rec.latitude = lat
         rec.longitude = lon
+        if not (rec.type or '').strip():
+            rec.type = 'OTE'
+        if kmz_meta.get('port_label') and not getattr(rec, 'port_label', None):
+            rec.port_label = kmz_meta.get('port_label')
+        if kmz_meta.get('pon_name') and not getattr(rec, 'pon_name', None):
+            rec.pon_name = kmz_meta.get('pon_name')
+        if kmz_meta.get('ote_label') and not getattr(rec, 'ote_label', None):
+            rec.ote_label = kmz_meta.get('ote_label')
+        if kmz_meta.get('splitter_name') and not getattr(rec, 'splitter_name', None):
+            rec.splitter_name = kmz_meta.get('splitter_name')
+        if not getattr(rec, 'geo_address', None):
+            rec.geo_address = geoapify_reverse_geocode(lat, lon)
         created_or_updated += 1
 
 
@@ -325,39 +524,22 @@ login_manager.login_view = "login"
 from sqlalchemy import text as _sql_text
 
 def ensure_db_indexes() -> None:
-    """Create indexes used by filters (company/map/device, date, etc.).
-
-    This runs on startup and is safe to call multiple times. On SQLite and
-    Postgres, CREATE INDEX IF NOT EXISTS will no-op when the index already exists.
-    """
-    try:
-        with app.app_context():
-            # Index for main production records, used heavily in filters and map/KMZ.
-            db.session.execute(
-                _sql_text(
-                    "CREATE INDEX IF NOT EXISTS idx_records_company_map_device "
-                    "ON record (company, map, device)"
-                )
-            )
-            db.session.execute(
-                _sql_text(
-                    "CREATE INDEX IF NOT EXISTS idx_records_company_date "
-                    "ON record (company, created_date)"
-                )
-            )
-            # Index for invoices listing / filtering.
-            db.session.execute(
-                _sql_text(
-                    "CREATE INDEX IF NOT EXISTS idx_invoices_created_at "
-                    "ON invoice (created_at)"
-                )
-            )
+    """Create indexes used by filters (company/map/device, date, etc.)."""
+    with app.app_context():
+        try:
+            db.session.execute(_sql_text(
+                "CREATE INDEX IF NOT EXISTS idx_records_company_map_device ON record (company, map, device)"
+            ))
+            db.session.execute(_sql_text(
+                "CREATE INDEX IF NOT EXISTS idx_records_company_date ON record (company, created_date)"
+            ))
+            db.session.execute(_sql_text(
+                "CREATE INDEX IF NOT EXISTS idx_invoices_created_at ON invoice (created_at)"
+            ))
             db.session.commit()
-    except Exception:
-        # Index creation is a best-effort optimization; never break the app
-        # if the database backend doesn't support IF NOT EXISTS or indexes
-        # haven't been created yet.
-        db.session.rollback()
+        except Exception as e:
+            db.session.rollback()
+            print('ensure_db_indexes skipped:', e)
 
 ensure_db_indexes()
 
@@ -562,7 +744,8 @@ class SystemConfig(db.Model):
     my_company_tax_id = db.Column(db.String(120), nullable=True)
     my_company_email = db.Column(db.String(120), nullable=True)
     my_company_phone = db.Column(db.String(60), nullable=True)
-
+    geoapify_api_key = db.Column(db.String(255), nullable=True)
+    board_header = db.Column(db.String(120), nullable=True)
 
 
 class Invoice(db.Model):
@@ -661,6 +844,13 @@ class Record(db.Model):
 
     # Seção lógica do mapa (grupo alimentado por um splitter/ramal específico)
     section = db.Column(db.String(120), nullable=True)
+    geo_address = db.Column(db.String(255), nullable=True)
+    pon_name = db.Column(db.String(120), nullable=True)
+    splitter_name = db.Column(db.String(120), nullable=True)
+    source_from = db.Column(db.String(120), nullable=True)
+    source_out = db.Column(db.String(120), nullable=True)
+    ote_label = db.Column(db.String(120), nullable=True)
+    port_label = db.Column(db.String(120), nullable=True)
 
     price_splices_usd = db.Column(db.Float, default=0.0)
     price_device_usd = db.Column(db.Float, default=0.0)
@@ -781,6 +971,13 @@ with app.app_context():
     ensure("record", "can_cable_count", "INTEGER")
     ensure("record", "can_cables_json", "TEXT")
     ensure("record", "section", "VARCHAR(120)")
+    ensure("record", "geo_address", "VARCHAR(255)")
+    ensure("record", "pon_name", "VARCHAR(120)")
+    ensure("record", "splitter_name", "VARCHAR(120)")
+    ensure("record", "source_from", "VARCHAR(120)")
+    ensure("record", "source_out", "VARCHAR(120)")
+    ensure("record", "ote_label", "VARCHAR(120)")
+    ensure("record", "port_label", "VARCHAR(120)")
     ensure("device_type", "project_id", "INTEGER")
     ensure("splice_tier", "project_id", "INTEGER")
     ensure("company_map", "project_id", "INTEGER")
@@ -795,6 +992,8 @@ with app.app_context():
     ensure("project", "name", "VARCHAR(200)")
     ensure("project", "included_splices", "INTEGER")
     ensure("company_config", "invoice_address", "TEXT")
+    ensure("system_config", "geoapify_api_key", "VARCHAR(255)")
+    ensure("system_config", "board_header", "VARCHAR(120)")
     ensure("user", "is_admin", "BOOLEAN")
     ensure("user", "splicer_name", "VARCHAR(120)")
     ensure("user", "is_company_owner", "BOOLEAN")
@@ -1257,7 +1456,7 @@ def index():
             pass
 
     # Oculta dispositivos importados do KMZ que ainda não tiveram lançamento (splicer/splices)
-    query = query.filter((Record.splicer != "") | (Record.splices > 0))
+    query = query.filter((Record.splices > 0) | (Record.total_usd > 0) | (Record.price_device_usd > 0) | (Record.price_splices_usd > 0))
 
     records = query.order_by(Record.created_date.desc().nullslast(), Record.id.desc()).all()
     total_rows = len(records)
@@ -1376,7 +1575,7 @@ def build_filtered_record_query_from_request():
             pass
 
     # Oculta dispositivos importados do KMZ que ainda não viraram produção
-    query = query.filter((Record.splicer != "") | (Record.splices > 0))
+    query = query.filter((Record.splices > 0) | (Record.total_usd > 0) | (Record.price_device_usd > 0) | (Record.price_splices_usd > 0))
 
     return query
 
@@ -2856,6 +3055,8 @@ def settings_system_update():
     taxid = (request.form.get("my_company_tax_id") or "").strip() or None
     email = (request.form.get("my_company_email") or "").strip() or None
     phone = (request.form.get("my_company_phone") or "").strip() or None
+    geoapify_api_key = (request.form.get("geoapify_api_key") or "").strip() or None
+    board_header = (request.form.get("board_header") or "").strip() or None
 
     cfg = SystemConfig.query.first()
     if not cfg:
@@ -2867,6 +3068,8 @@ def settings_system_update():
     cfg.my_company_tax_id = taxid
     cfg.my_company_email = email
     cfg.my_company_phone = phone
+    cfg.geoapify_api_key = geoapify_api_key
+    cfg.board_header = board_header
 
     db.session.commit()
     flash("Dados da sua empresa atualizados.", "success")
@@ -4166,8 +4369,42 @@ def api_map_records(map_id):
             "test_date": r.test_date.isoformat() if r.test_date else None,
             "section": r.section or "",
             "created_date": r.created_date.isoformat() if r.created_date else None,
+            "address": getattr(r, 'geo_address', None) or '',
+            "pon_name": getattr(r, 'pon_name', None) or '',
+            "splitter_name": getattr(r, 'splitter_name', None) or '',
+            "source_from": getattr(r, 'source_from', None) or '',
+            "source_out": getattr(r, 'source_out', None) or '',
+            "ote_label": getattr(r, 'ote_label', None) or '',
+            "port_label": getattr(r, 'port_label', None) or '',
         })
     return jsonify({"records": data})
+
+
+@app.route("/api/records/<int:record_id>/refresh-address", methods=["POST"])
+@login_required
+def api_refresh_record_address(record_id):
+    rec = Record.query.get_or_404(record_id)
+    if not bool(getattr(current_user, "is_admin", False)):
+        abort(403)
+    if rec.latitude is None or rec.longitude is None:
+        return jsonify({"ok": False, "error": "Dispositivo sem coordenadas."}), 400
+    address = geoapify_reverse_geocode(rec.latitude, rec.longitude)
+    if not address:
+        return jsonify({"ok": False, "error": "Geoapify não retornou endereço."}), 400
+    rec.geo_address = address
+    db.session.commit()
+    return jsonify({"ok": True, "address": address})
+
+
+@app.route("/api/maps/<int:map_id>/auto-network", methods=["POST"])
+@login_required
+def api_auto_network(map_id):
+    mp = CompanyMap.query.get_or_404(map_id)
+    if not bool(getattr(current_user, "is_admin", False)):
+        abort(403)
+    ensure_map_access(mp)
+    updated = build_network_for_map(mp)
+    return jsonify({"ok": True, "updated": updated})
 
 
 @app.route("/api/records/<int:record_id>/update-from-map", methods=["POST"])
@@ -4195,44 +4432,55 @@ def api_update_record_from_map(record_id):
     info = (request.form.get("device_info") or "").strip()
     if is_admin or is_owner:
         rec.device_info = info or None
+        rec.type = (request.form.get('device_type') or rec.type or 'OTE').strip() or 'OTE'
+        rec.geo_address = (request.form.get('geo_address') or '').strip() or None
+        rec.pon_name = (request.form.get('pon_name') or '').strip() or None
+        rec.splitter_name = (request.form.get('splitter_name') or '').strip() or None
+        rec.source_from = (request.form.get('source_from') or '').strip() or None
+        rec.source_out = (request.form.get('source_out') or '').strip() or None
+        rec.ote_label = (request.form.get('ote_label') or '').strip() or None
+        rec.port_label = (request.form.get('port_label') or '').strip() or None
+        rec.section = (request.form.get('section') or rec.section or '').strip() or None
 
-    # Ao salvar pelo mapa, consideramos um "lançamento" para o splicer.
-    default_splicer = getattr(current_user, "splicer_name", None) or current_user.username
-    if not rec.splicer:
-        rec.splicer = default_splicer
+    # Salvar pelo editor do mapa NÃO deve transformar o dispositivo em lançamento
+    # nem alterar o splicer para ADMIN. Só recalculamos preços quando o registro
+    # já era um lançamento real (splices/valores existentes).
+    already_launched = bool((rec.splices or 0) > 0 or (rec.total_usd or 0) > 0 or (rec.price_device_usd or 0) > 0 or (rec.price_splices_usd or 0) > 0)
 
-    if rec.created_date is None:
-        today = date.today()
-        rec.created_date = datetime(today.year, today.month, today.day)
+    if already_launched:
+        company = rec.company
+        project_id = rec.project_id
+        device_for_price = rec.type or rec.device
 
-    # Recalcula preços usando a mesma regra da tela de lançamento
-    company = rec.company
-    project_id = rec.project_id
-    device_for_price = rec.type or rec.device
+        included_override = None
+        included_applied = None
+        included_override, included_applied, map_cfg = resolve_included_override(
+            company,
+            project_id,
+            None,
+            rec.map,
+            rec.map_role,
+        )
 
-    
-    included_override = None
-    included_applied = None
-
-    included_override, included_applied, map_cfg = resolve_included_override(
-        company,
-        project_id,
-        None,
-        rec.map,
-        rec.map_role,
-    )
-
-    price_splices, price_device, total = compute_prices(
-        int(rec.splices or 0),
-        device_for_price or "",
-        company,
-        project_id,
-        included_override=included_override,
-    )
-    rec.price_splices_usd = price_splices
-    rec.price_device_usd = price_device
-    rec.total_usd = total
-    rec.included_splices_applied = included_applied
+        price_splices, price_device, total = compute_prices(
+            int(rec.splices or 0),
+            device_for_price or "",
+            company,
+            project_id,
+            included_override=included_override,
+        )
+        rec.price_splices_usd = price_splices
+        rec.price_device_usd = price_device
+        rec.total_usd = total
+        rec.included_splices_applied = included_applied
+    else:
+        # Limpa qualquer resíduo financeiro/splicer em dispositivos de mapa sem produção
+        rec.splicer = None
+        rec.created_date = None
+        rec.price_splices_usd = 0.0
+        rec.price_device_usd = 0.0
+        rec.total_usd = 0.0
+        rec.included_splices_applied = None
 
     # Fotos opcionais
     files = request.files.getlist("photos")
