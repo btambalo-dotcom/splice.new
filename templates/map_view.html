@@ -50,12 +50,12 @@
 <div class="d-flex justify-content-between align-items-center mb-3">
   <div>
     <h3 class="mb-0">Mapa – {{ map_obj.company }} · {{ map_obj.name }}</h3>
-    <small class="text-muted" data-i18n="map_admin">Administração do mapa interativo para este projeto.</small>
+    <small class="text-muted">Administração do mapa interativo para este projeto.</small>
   </div>
   {% if map_obj.project_id %}
   <a href="{{ url_for('settings_project_detail', pid=map_obj.project_id) }}"
      class="btn btn-outline-light btn-sm">
-    <span data-i18n="back_project">← Voltar para o projeto</span>
+    ← Voltar para o projeto
   </a>
   {% endif %}
 </div>
@@ -64,10 +64,10 @@
 <div class="row g-4">
   <div class="col-12">
         <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
-      <input id="deviceSearch" class="form-control form-control-sm" style="max-width: 340px" data-i18n-placeholder="search_device_placeholder" placeholder="Buscar device (ex: FT61, RN51E)..." />
-      <button id="deviceSearchBtn" class="btn btn-outline-light btn-sm" data-i18n="search">Buscar</button>
-      <button id="showAllBtn" class="btn btn-outline-secondary btn-sm" data-i18n="show_all">Mostrar tudo</button>
-      {% if current_user.is_admin %}<a href="{{ url_for('export_map_tests_report', map_id=map_obj.id) }}" class="btn btn-outline-success btn-sm" data-i18n="tests_report">Relatório testes</a>{% endif %}
+      <input id="deviceSearch" class="form-control form-control-sm" style="max-width: 340px" placeholder="Buscar device (ex: FT61, RN51E)..." />
+      <button id="deviceSearchBtn" class="btn btn-outline-light btn-sm">Buscar</button>
+      <button id="showAllBtn" class="btn btn-outline-secondary btn-sm">Mostrar tudo</button>
+      {% if current_user.is_admin %}<a href="{{ url_for('export_map_tests_report', map_id=map_obj.id) }}" class="btn btn-outline-success btn-sm">Relatório testes</a>{% endif %}
       <span id="deviceSearchHint" class="small text-muted"></span>
     </div>
     <div id="map"></div>
@@ -79,7 +79,7 @@
     <div class="card bg-black border-secondary h-100">
       <div class="card-body">
         {% if current_user.is_admin or current_user.is_company_owner %}
-<h5 class="card-title mb-3" data-i18n="import_devices_kmz">Importar dispositivos via KMZ</h5>
+<h5 class="card-title mb-3">Importar dispositivos via KMZ</h5>
         <form id="kmz-form" class="mb-2" enctype="multipart/form-data">
           <div class="mb-2">
             <input type="file" name="kmz_file" accept=".kmz" class="form-control form-control-sm bg-dark text-light border-secondary" required>
@@ -89,50 +89,45 @@
           </button>
         </form>
         <small class="text-muted d-block mb-3">
-          <span data-i18n="kmz_help">O sistema vai criar ou atualizar os dispositivos deste mapa com base nos pontos do arquivo KMZ.</span>
+          O sistema vai criar ou atualizar os dispositivos deste mapa com base nos pontos do arquivo KMZ.
         </small>
-        {% if current_user.is_admin %}
-        <button type="button" class="btn btn-outline-warning btn-sm w-100 mb-3" id="auto-network-btn">
-          Montar rede automática
-        </button>
-        {% endif %}
 
         <hr class="border-secondary">
 
-        <h5 class="card-title mb-2" data-i18n="pon_colors">Cores dos PONs</h5>
+        <h5 class="card-title mb-2">Cores das seções</h5>
         <p class="small text-muted">
-          <span data-i18n="pon_colors_help">Os dispositivos agora usam cor por PON. Cada PON recebe uma cor automática para facilitar a leitura da rede no mapa.</span>
+          Cada seção do mapa pode ter uma cor própria. Essas cores afetam apenas a visualização aqui no módulo de mapa.
         </p>
         <div id="section-colors-panel" class="d-flex flex-column gap-2 small mb-2"></div>
         {% if current_user.is_admin or current_user.is_company_owner %}
         <button type="button" class="btn btn-outline-light btn-sm w-100 mb-3" id="save-section-colors-btn">
-          Atualizar lista de PONs
+          Salvar cores das seções
         </button>
         {% else %}
-        <p class="small text-muted">Apenas o admin ou dono da empresa pode atualizar a lista.</p>
+        <p class="small text-muted">Apenas o admin ou dono da empresa pode alterar as cores.</p>
         {% endif %}
 
         <hr class="border-secondary">
 
-        <h5 class="card-title mb-2" data-i18n="manual_add">Adicionar dispositivo manualmente</h5>
+        <h5 class="card-title mb-2">Adicionar dispositivo manualmente</h5>
         <form id="manual-device-form" class="row g-2">
           <div class="col-12">
-            <label class="form-label" data-i18n="device_name">Nome do dispositivo</label>
+            <label class="form-label">Nome do dispositivo</label>
             <input type="text" class="form-control form-control-sm bg-dark text-light border-secondary"
                    id="manual-device-name" placeholder="Ex.: FDH-01, DP-10, DROP-23" required>
           </div>
           <div class="col-6">
-            <label class="form-label" data-i18n="latitude">Latitude</label>
+            <label class="form-label">Latitude</label>
             <input type="text" class="form-control form-control-sm bg-dark text-light border-secondary"
                    id="manual-device-lat" placeholder="Ex.: 33.123456" required>
           </div>
           <div class="col-6">
-            <label class="form-label" data-i18n="longitude">Longitude</label>
+            <label class="form-label">Longitude</label>
             <input type="text" class="form-control form-control-sm bg-dark text-light border-secondary"
                    id="manual-device-lng" placeholder="Ex.: -93.123456" required>
           </div>
           <div class="col-12">
-            <label class="form-label" data-i18n="device_info">Informações do dispositivo</label>
+            <label class="form-label">Informações do dispositivo</label>
             <input type="text" class="form-control form-control-sm bg-dark text-light border-secondary"
                    id="manual-device-info"
                    placeholder="Ex.: Fibra 73, porta 1x8, casa 12">
@@ -170,10 +165,10 @@
 
   <div class="col-lg-8">
         <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
-      <input id="deviceSearch" class="form-control form-control-sm" style="max-width: 340px" data-i18n-placeholder="search_device_placeholder" placeholder="Buscar device (ex: FT61, RN51E)..." />
-      <button id="deviceSearchBtn" class="btn btn-outline-light btn-sm" data-i18n="search">Buscar</button>
-      <button id="showAllBtn" class="btn btn-outline-secondary btn-sm" data-i18n="show_all">Mostrar tudo</button>
-      {% if current_user.is_admin %}<a href="{{ url_for('export_map_tests_report', map_id=map_obj.id) }}" class="btn btn-outline-success btn-sm" data-i18n="tests_report">Relatório testes</a>{% endif %}
+      <input id="deviceSearch" class="form-control form-control-sm" style="max-width: 340px" placeholder="Buscar device (ex: FT61, RN51E)..." />
+      <button id="deviceSearchBtn" class="btn btn-outline-light btn-sm">Buscar</button>
+      <button id="showAllBtn" class="btn btn-outline-secondary btn-sm">Mostrar tudo</button>
+      {% if current_user.is_admin %}<a href="{{ url_for('export_map_tests_report', map_id=map_obj.id) }}" class="btn btn-outline-success btn-sm">Relatório testes</a>{% endif %}
       <span id="deviceSearchHint" class="small text-muted"></span>
     </div>
     <div id="map"></div>
@@ -194,7 +189,7 @@
         <input type="hidden" id="device-record-id">
 
         <div class="mb-3">
-          <label class="form-label" data-i18n="device_name">Nome do dispositivo</label>
+          <label class="form-label">Nome do dispositivo</label>
           <input type="text" class="form-control bg-secondary text-light" id="device-name" readonly>
         </div>
 
@@ -204,62 +199,13 @@
         </div>
 
         <div class="mb-3">
-          <label class="form-label" data-i18n="device_info">Informações do dispositivo</label>
+          <label class="form-label">Informações do dispositivo</label>
           <input type="text" class="form-control bg-dark text-light border-secondary" id="device-info"
                  placeholder="Ex.: Fibra 73 indo para casa 12, porta 3 do splitter"
                  {% if not current_user.is_admin and not current_user.is_company_owner %}readonly{% endif %}>
         </div>
 
-        <div class="row g-2">
-          <div class="col-md-6">
-            <label class="form-label">Tipo do dispositivo</label>
-            <select class="form-select bg-dark text-light border-secondary" id="device-type">
-              <option>OTE</option>
-              <option>Splitter</option>
-              <option>D</option>
-              <option>BS</option>
-              <option>Butt Splicer</option>
-              <option>Outro</option>
-            </select>
-          </div>
-          <div class="col-md-6">
-            <label class="form-label">Port label</label>
-            <input type="text" class="form-control bg-dark text-light border-secondary" id="device-port-label" placeholder="Ex.: P2">
-          </div>
-          <div class="col-12">
-            <label class="form-label">Endereço</label>
-            <div class="input-group">
-              <input type="text" class="form-control bg-dark text-light border-secondary" id="device-address" placeholder="Endereço do dispositivo">
-              <button class="btn btn-outline-info" type="button" id="refresh-address-btn">Buscar de novo</button>
-            </div>
-          </div>
-          <div class="col-md-6">
-            <label class="form-label">PON</label>
-            <input type="text" class="form-control bg-dark text-light border-secondary" id="device-pon-name" placeholder="Ex.: PON 2">
-          </div>
-          <div class="col-md-6">
-            <label class="form-label">Splitter</label>
-            <input type="text" class="form-control bg-dark text-light border-secondary" id="device-splitter-name" placeholder="Nome do splitter">
-          </div>
-          <div class="col-md-6">
-            <label class="form-label">FROM</label>
-            <input type="text" class="form-control bg-dark text-light border-secondary" id="device-source-from" placeholder="Dispositivo anterior">
-          </div>
-          <div class="col-md-6">
-            <label class="form-label">OUT</label>
-            <input type="text" class="form-control bg-dark text-light border-secondary" id="device-source-out" placeholder="Próximo dispositivo">
-          </div>
-          <div class="col-md-6">
-            <label class="form-label">OTE / fibras</label>
-            <input type="text" class="form-control bg-dark text-light border-secondary" id="device-ote-label" placeholder="Ex.: 13-14">
-          </div>
-          <div class="col-md-6">
-            <label class="form-label">Seção / camada</label>
-            <input type="text" class="form-control bg-dark text-light border-secondary" id="device-section" placeholder="Ex.: PON azul">
-          </div>
-        </div>
-
-        <div class="mb-3 mt-3">
+        <div class="mb-3">
           <label class="form-label">Fotos do dispositivo (até 5)</label>
           <input type="file" class="form-control bg-dark text-light border-secondary"
                  id="device-photos" name="photos" accept="image/*" multiple>
@@ -326,7 +272,6 @@
           crossorigin=""></script>
   <script>
     const recordsUrl = "{{ url_for('api_map_records', map_id=map_obj.id) }}";
-    const autoNetworkUrl = "{{ url_for('api_auto_network', map_id=map_obj.id) }}";
     const importKmzUrl = "{{ url_for('api_import_kmz', map_id=map_obj.id) }}";
     const addRecordUrl = "{{ url_for('api_add_record_to_map', map_id=map_obj.id) }}";
     const sectionColorsUrl = "{{ url_for('map_section_colors', map_id=map_obj.id) }}";
@@ -337,7 +282,7 @@ const IS_ADMIN = {{ "true" if current_user.is_admin else "false" }};
     const testsReportUrl = "{{ url_for('export_map_tests_report', map_id=map_obj.id) }}";
 
 
-    // Cores automáticas por PON
+    // Cores personalizadas das seções (carregadas via API)
     let SECTION_COLORS = {};
 
     let leafletMap;
@@ -465,76 +410,16 @@ const IS_ADMIN = {{ "true" if current_user.is_admin else "false" }};
       return "hsl(" + hue + ", 70%, 45%)";
     }
 
-    // Cor final por PON
-    const DEFAULT_PON_COLORS = {
-      "1": "#2196F3",
-      "2": "#4CAF50",
-      "3": "#FF9800",
-      "4": "#9C27B0",
-      "5": "#F44336",
-      "6": "#00BCD4",
-      "7": "#FFC107",
-      "8": "#795548",
-      "9": "#E91E63",
-      "10": "#3F51B5",
-      "11": "#009688",
-      "12": "#8BC34A"
-    };
-
-    function normalizePon(raw) {
-      const v = String(raw || "").trim().toUpperCase();
-      if (!v) return "";
-      let m = v.match(/PON\s*[-:]?\s*(\d+)/i);
-      if (m) return m[1];
-      m = v.match(/^P\s*(\d+)$/i);
-      if (m) return m[1];
-      m = v.match(/^(\d+)$/);
-      if (m) return m[1];
-      return v;
-    }
-
-
-    function expandPolygon(points, factor = 1.14) {
-      if (!points || points.length < 3) return points || [];
-      let cx = 0, cy = 0;
-      points.forEach(([x, y]) => { cx += x; cy += y; });
-      cx /= points.length;
-      cy /= points.length;
-      return points.map(([x, y]) => [
-        cx + (x - cx) * factor,
-        cy + (y - cy) * factor
-      ]);
-    }
-
-    function colorForPon(rawPon) {
-      const pon = normalizePon(rawPon);
-      if (!pon) return "#666666";
-
-      // Primeiro tenta a cor salva/customizada do painel lateral.
-      // Aceita chaves como "1", "PON 1", "P1".
-      const candidates = [
-        pon,
-        'PON ' + pon,
-        'P' + pon,
-        String(rawPon || '').trim()
-      ].filter(Boolean);
-
-      for (const key of candidates) {
-        if (SECTION_COLORS && SECTION_COLORS[key]) {
-          return SECTION_COLORS[key];
-        }
-      }
-
-      if (DEFAULT_PON_COLORS[pon]) return DEFAULT_PON_COLORS[pon];
-      return autoColorForSection("PON-" + pon);
-    }
-
-    // Mantido por compatibilidade com versões anteriores do template
+    // Cor final usada para uma seção (prioriza configurações salvas)
     function colorForSection(name) {
-      return colorForPon(name);
+      if (!name) return "#666666";
+      if (SECTION_COLORS && Object.prototype.hasOwnProperty.call(SECTION_COLORS, name)) {
+        return SECTION_COLORS[name];
+      }
+      return autoColorForSection(name);
     }
 
-    // Atualiza o painel lateral com os PONs encontrados
+    // Atualiza o painel lateral com inputs de cor por seção
     function updateSectionColorsPanel(sections) {
       const panel = document.getElementById('section-colors-panel');
       if (!panel) return;
@@ -543,12 +428,12 @@ const IS_ADMIN = {{ "true" if current_user.is_admin else "false" }};
       panel.innerHTML = "";
 
       if (!names.length) {
-        panel.innerHTML = '<span class="text-muted">Nenhum PON encontrado neste mapa ainda.</span>';
+        panel.innerHTML = '<span class="text-muted">Nenhuma seção encontrada neste mapa ainda.</span>';
         return;
       }
 
       names.forEach(name => {
-        const current = colorForPon(name);
+        const current = colorForSection(name);
         const row = document.createElement('div');
         row.className = 'd-flex align-items-center justify-content-between gap-2';
 
@@ -642,14 +527,7 @@ function openRecordFromMap(recordId) {
 }
 // ===== Busca e foco de dispositivo no mapa (FT61, RN51E, ID etc.) =====
 function _norm(s){
-  return String(s || "")
-    .normalize('NFD').replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '');
-}
-
-function _normLoose(s){
-  return _norm(s).replace(/[^a-z0-9]+/g, '');
+  return String(s || "").trim().toLowerCase();
 }
 
 function _setSearchHint(msg){
@@ -657,43 +535,23 @@ function _setSearchHint(msg){
   if (el) el.textContent = msg || "";
 }
 
-function _recordSearchHaystack(r){
-  return [
-    r.id,
-    r.device,
-    r.info,
-    r.section,
-    r.type,
-    r.pon_name,
-    r.port_label,
-    r.splitter_name,
-    r.source_from,
-    r.source_out,
-    r.address
-  ].map(v => String(v || '')).join(' | ');
-}
-
 function _findRecordByQuery(q){
   const query = _norm(q);
-  const queryLoose = _normLoose(q);
   const list = window._mapRecords || [];
   if (!query) return null;
 
+  // Se for número, tentar por ID exato
   if (/^\d+$/.test(query)){
     const id = Number(query);
     return list.find(r => r.id === id) || null;
   }
 
+  // Match exato por device
   let rec = list.find(r => _norm(r.device) === query);
   if (rec) return rec;
 
-  rec = list.find(r => _normLoose(r.device) === queryLoose);
-  if (rec) return rec;
-
-  rec = list.find(r => {
-    const hay = _recordSearchHaystack(r);
-    return _norm(hay).includes(query) || _normLoose(hay).includes(queryLoose);
-  });
+  // Match parcial por device / info / section
+  rec = list.find(r => _norm(r.device).includes(query) || _norm(r.info).includes(query) || _norm(r.section).includes(query));
   return rec || null;
 }
 
@@ -817,70 +675,23 @@ function _isCanType(rec) {
   return t.startsWith('CAN');
 }
 
-function deviceBaseColor(rec) {
-  const hasLaunch = (Number(rec && rec.splices || 0) > 0) || Number(rec && rec.has_photos || 0) > 0;
-  return hasLaunch ? '#03c04a' : '#0d6efd';
-}
-
-function devicePonRingColor(rec) {
-  const ponColor = colorForPon((rec && rec.pon_name) || '');
-  return ponColor || '#ffffff';
-}
-
-function deviceTypeLabel(rec) {
-  const t = String((rec && rec.type) || 'OTE').trim().toUpperCase();
-  if (t === 'SPLITTER') return 'S';
-  if (t === 'D') return 'D';
-  if (t === 'BS') return 'BS';
-  return '';
-}
-
-function createTypeMarker(rec) {
-  const label = deviceTypeLabel(rec);
-  const fillColor = deviceBaseColor(rec);
-  const ringColor = devicePonRingColor(rec);
-
-  if (label) {
-    const icon = L.divIcon({
-      className: 'device-type-icon',
-      html: '<div style="width:28px;height:28px;border-radius:50%;background:'+fillColor+';border:5px solid '+ringColor+';box-shadow:0 1px 4px rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;">'+label+'</div>',
-      iconSize: [28, 28],
-      iconAnchor: [14, 14],
-      popupAnchor: [0, -10]
-    });
-    return L.marker([rec.lat, rec.lng], { icon });
-  }
-
-  return L.circleMarker([rec.lat, rec.lng], {
-    radius: 10,
-    color: ringColor,
-    fillColor: fillColor,
-    fillOpacity: 0.95,
-    weight: 5
-  });
-}
-
-function createTestedDeviceMarker(rec) {
-  const label = deviceTypeLabel(rec);
-  const ringColor = devicePonRingColor(rec);
-  const fontSize = label === 'BS' ? 8 : 11;
+function createTestedDeviceMarker(rec, strokeColor) {
   const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" aria-hidden="true">
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
       <defs>
-        <clipPath id="clip-left-${rec.id}"><rect x="0" y="0" width="12" height="24" /></clipPath>
-        <clipPath id="clip-right-${rec.id}"><rect x="12" y="0" width="12" height="24" /></clipPath>
+        <clipPath id="clip-left-${rec.id}"><rect x="0" y="0" width="10" height="20" /></clipPath>
+        <clipPath id="clip-right-${rec.id}"><rect x="10" y="0" width="10" height="20" /></clipPath>
       </defs>
-      <circle cx="12" cy="12" r="8" fill="#03c04a" clip-path="url(#clip-left-${rec.id})"></circle>
-      <circle cx="12" cy="12" r="8" fill="#dc3545" clip-path="url(#clip-right-${rec.id})"></circle>
-      <circle cx="12" cy="12" r="8" fill="none" stroke="${ringColor}" stroke-width="5"></circle>
-      ${label ? `<text x="12" y="15" text-anchor="middle" font-size="${fontSize}" font-weight="700" fill="#fff" font-family="Arial, sans-serif">${label}</text>` : ''}
+      <circle cx="10" cy="10" r="7" fill="#03c04a" clip-path="url(#clip-left-${rec.id})"></circle>
+      <circle cx="10" cy="10" r="7" fill="#dc3545" clip-path="url(#clip-right-${rec.id})"></circle>
+      <circle cx="10" cy="10" r="7" fill="none" stroke="${strokeColor}" stroke-width="2"></circle>
     </svg>`;
 
   const icon = L.divIcon({
     className: 'tested-device-icon',
     html: svg,
-    iconSize: [28, 28],
-    iconAnchor: [14, 14],
+    iconSize: [20, 20],
+    iconAnchor: [10, 10],
     popupAnchor: [0, -10]
   });
 
@@ -959,78 +770,70 @@ async function loadMarkers() {
       let focusLatLng = null;
       window._mapRecords = records;
 
-            // Agrupa pontos por PON para desenhar polígonos coloridos
+            // Agrupa pontos por seção para desenhar polígonos coloridos
             const sections = {};
             records.forEach(rec => {
-              const ponKey = normalizePon(rec.pon_name || '');
-              if (!ponKey) return;
-              const groupName = 'PON ' + ponKey;
-              if (!sections[groupName]) {
-                sections[groupName] = [];
+              if (!rec.section) return;
+              if (!sections[rec.section]) {
+                sections[rec.section] = [];
               }
-              sections[groupName].push([rec.lat, rec.lng]);
+              sections[rec.section].push([rec.lat, rec.lng]);
             });
 
-            // Atualiza painel lateral com os PONs encontrados
+            // Atualiza painel lateral com as seções encontradas
             updateSectionColorsPanel(sections);
 
-            // Desenha um polígono suave (convex hull simples) para cada PON
+            // Desenha um polígono suave (convex hull simples) para cada seção
             Object.keys(sections).forEach(secName => {
               const pts = sections[secName];
               if (pts.length < 3) return;
 
               const hull = computeConvexHull(pts);
-              const expandedHull = expandPolygon(hull, 1.16);
-              const secColor = colorForPon(secName);
+              const secColor = colorForSection(secName);
 
-              // Estilo tipo Twelve: contorno mais forte e área leve para leitura rápida
-              L.polygon(expandedHull, {
+              L.polygon(hull, {
                 color: secColor,
                 fillColor: secColor,
-                fillOpacity: 0.10,
-                weight: 6,
-                opacity: 0.95,
-                lineJoin: 'round'
-              }).addTo(markersLayer);
-
-              // Linha interna extra para destacar o limite do PON
-              L.polyline([...expandedHull, expandedHull[0]], {
-                color: secColor,
+                fillOpacity: 0.15,
                 weight: 2,
-                opacity: 1.0,
-                lineJoin: 'round'
               }).addTo(markersLayer);
             });
 
             records.forEach(rec => {
+              const hasSpliceData = (rec.splices && rec.splices > 0) ||
+                                    rec.has_photos;
+
+              let color = "#0d6efd"; // azul padrão (pendente)
+              if (hasSpliceData) {
+                color = "#03c04a"; // verde = lançado
+              }
+
+              // Se tiver seção, usa a cor da seção como contorno
+              if (rec.section) {
+                const secColor = colorForSection(rec.section);
+                var strokeColor = secColor;
+              } else {
+                var strokeColor = color;
+              }
+
               const marker = rec.test_done
-                ? createTestedDeviceMarker(rec)
-                : createTypeMarker(rec);
+                ? createTestedDeviceMarker(rec, strokeColor)
+                : L.circleMarker([rec.lat, rec.lng], {
+                    radius: 8,
+                    color: strokeColor,
+                    fillColor: color,
+                    fillOpacity: 0.9,
+                    weight: 2
+                  });
 
 
               const popupParts = [];
 popupParts.push('<div class="device-popup">');
-popupParts.push('<div class="fw-bold mb-1">' + (rec.device || t("no_name")) + '</div>');
-popupParts.push('<div class="small text-info"><strong>' + t("type") + ':</strong> ' + ((rec.type || 'OTE')) + '</div>');
-if (rec.address) {
-  popupParts.push('<div class="small text-muted">' + t("address") + ': ' + rec.address + '</div>');
-}
-if (rec.pon_name) {
-  popupParts.push('<div class="small text-warning"><strong>' + t("pon") + ':</strong> ' + rec.pon_name + '</div>');
-}
+popupParts.push('<div class="fw-bold mb-1">' + (rec.device || "Sem nome") + '</div>');
 if (rec.section) {
-  popupParts.push('<div class="small text-muted">' + t("section") + ': ' + rec.section + '</div>');
+  popupParts.push('<div class="small text-muted">Seção: ' + rec.section + '</div>');
 }
-if (rec.splitter_name) {
-  popupParts.push('<div class="small text-muted">' + t("splitter") + ': ' + rec.splitter_name + '</div>');
-}
-if (rec.source_from) {
-  popupParts.push('<div class="small text-muted">' + t("from") + ': ' + rec.source_from + '</div>');
-}
-if (rec.source_out) {
-  popupParts.push('<div class="small text-muted">' + t("out") + ': ' + rec.source_out + '</div>');
-}
-if (rec.splicer && !(String(rec.splicer).toUpperCase() === 'ADMIN' && Number(rec.splices || 0) === 0 && Number(rec.has_photos || 0) === 0)) {
+if (rec.splicer) {
   popupParts.push('<div class="small text-muted">Splicer: ' + rec.splicer + '</div>');
 }
 if (rec.info) {
@@ -1102,9 +905,6 @@ if (!IS_OWNER_READONLY) {
 
   if (IS_ADMIN) {
     popupParts.push(
-      '<button class="btn btn-outline-light btn-sm" onclick="openDeviceModalById(' + rec.id + ')">Editar no mapa</button>'
-    );
-    popupParts.push(
       '<button class="btn btn-secondary btn-sm" onclick="enableMoveRecord(' + rec.id + ')">Mover</button>'
     );
   }
@@ -1112,7 +912,7 @@ if (!IS_OWNER_READONLY) {
 popupParts.push(
   '<a class="btn btn-outline-info btn-sm" href="https://www.google.com/maps?q=' +
     rec.lat + ',' + rec.lng +
-    '" target="_blank">' + t("google_maps") + '</a>'
+    '" target="_blank">Google Maps</a>'
 );
 popupParts.push('</div>');
 popupParts.push('</div>');
@@ -1216,15 +1016,6 @@ function openDeviceModalById(id) {
       document.getElementById('device-splices').value = rec.splices || 0;
       document.getElementById('device-photos').value = '';
       document.getElementById('device-info').value = rec.info || '';
-      document.getElementById('device-type').value = rec.type || 'OTE';
-      document.getElementById('device-address').value = rec.address || '';
-      document.getElementById('device-pon-name').value = rec.pon_name || '';
-      document.getElementById('device-splitter-name').value = rec.splitter_name || '';
-      document.getElementById('device-source-from').value = rec.source_from || '';
-      document.getElementById('device-source-out').value = rec.source_out || '';
-      document.getElementById('device-ote-label').value = rec.ote_label || '';
-      document.getElementById('device-port-label').value = rec.port_label || '';
-      document.getElementById('device-section').value = rec.section || '';
 
       const gmapsLink = document.getElementById('device-gmaps-link');
       if (gmapsLink && rec.lat && rec.lng) {
@@ -1261,29 +1052,11 @@ function openDeviceModalById(id) {
       const recId = document.getElementById('device-record-id').value;
       const splices = document.getElementById('device-splices').value;
       const info = document.getElementById('device-info').value;
-      const deviceType = document.getElementById('device-type').value;
-      const deviceAddress = document.getElementById('device-address').value;
-      const ponName = document.getElementById('device-pon-name').value;
-      const splitterName = document.getElementById('device-splitter-name').value;
-      const sourceFrom = document.getElementById('device-source-from').value;
-      const sourceOut = document.getElementById('device-source-out').value;
-      const oteLabel = document.getElementById('device-ote-label').value;
-      const portLabel = document.getElementById('device-port-label').value;
-      const section = document.getElementById('device-section').value;
       const photosInput = document.getElementById('device-photos');
 
       const formData = new FormData();
       formData.append('splices', splices);
       formData.append('device_info', info);
-      formData.append('device_type', deviceType);
-      formData.append('geo_address', deviceAddress);
-      formData.append('pon_name', ponName);
-      formData.append('splitter_name', splitterName);
-      formData.append('source_from', sourceFrom);
-      formData.append('source_out', sourceOut);
-      formData.append('ote_label', oteLabel);
-      formData.append('port_label', portLabel);
-      formData.append('section', section);
       for (let i = 0; i < photosInput.files.length; i++) {
         formData.append('photos', photosInput.files[i]);
       }
@@ -1300,42 +1073,6 @@ function openDeviceModalById(id) {
         loadMarkers();
       } else {
         alert('Erro ao salvar dispositivo.');
-      }
-    });
-
-
-    const refreshAddressBtn = document.getElementById('refresh-address-btn');
-    if (refreshAddressBtn) refreshAddressBtn.addEventListener('click', async () => {
-      const recId = document.getElementById('device-record-id').value;
-      if (!recId) return;
-      refreshAddressBtn.disabled = true;
-      try {
-        const resp = await fetch('/api/records/' + recId + '/refresh-address', { method: 'POST' });
-        const data = await resp.json();
-        if (data.ok) {
-          document.getElementById('device-address').value = data.address || '';
-        } else {
-          alert(data.error || 'Não foi possível buscar endereço.');
-        }
-      } finally {
-        refreshAddressBtn.disabled = false;
-      }
-    });
-
-    const autoNetworkBtn = document.getElementById('auto-network-btn');
-    if (autoNetworkBtn) autoNetworkBtn.addEventListener('click', async () => {
-      autoNetworkBtn.disabled = true;
-      try {
-        const resp = await fetch(autoNetworkUrl, { method: 'POST' });
-        const data = await resp.json();
-        if (data.ok) {
-          alert('Rede atualizada. Campos FROM/OUT alterados: ' + (data.updated || 0));
-          loadMarkers();
-        } else {
-          alert(data.error || 'Falha ao montar rede automática.');
-        }
-      } finally {
-        autoNetworkBtn.disabled = false;
       }
     });
 
@@ -1443,7 +1180,7 @@ function openDeviceModalById(id) {
               Object.keys(payload.colors).forEach(k => {
                 SECTION_COLORS[k] = payload.colors[k];
               });
-              alert('Cores dos PONs salvas com sucesso!');
+              alert('Cores das seções salvas com sucesso!');
               // Recarrega marcadores para aplicar as novas cores
               loadMarkers();
             } else {
