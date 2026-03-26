@@ -1,3 +1,4 @@
+
 window.I18N = window.I18N || {};
 (function(){
   const dict = {
@@ -28,151 +29,14 @@ window.I18N = window.I18N || {};
       admin_language: "Language", portuguese: "Portuguese", english: "English"
     }
   };
-
-  const textMap = {
-    en: {
-      "SPLICER · Produção": "SPLICER · Production",
-      "Registros no banco": "Records in database",
-      "Valor total acumulado (USD)": "Total accumulated value (USD)",
-      "Formato aceito": "Accepted format",
-      "Filtros": "Filters",
-      "Empresa": "Company",
-      "Todas": "All",
-      "Todos": "All",
-      "Splicer / Usuário": "Splicer / User",
-      "Map": "Map",
-      "Buscar por dispositivo": "Search by device",
-      "Data início": "Start date",
-      "Data fim": "End date",
-      "Aplicar filtros": "Apply filters",
-      "PDF com valores": "PDF with values",
-      "PDF sem valores": "PDF without values",
-      "Lançamento manual": "Manual entry",
-      "Novo lançamento": "New entry",
-      "Editar lançamento": "Edit entry",
-      "Selecione a empresa": "Select company",
-      "Selecione a empresa primeiro": "Select company first",
-      "Tipo / Dispositivo": "Type / Device",
-      "Nome do dispositivo": "Device name",
-      "Splices": "Splices",
-      "Data": "Date",
-      "Fotos do dispositivo (opcional)": "Device photos (optional)",
-      "Como funciona": "How it works",
-      "Despesas": "Expenses",
-      "Lançar despesa": "Add expense",
-      "Descrição *": "Description *",
-      "Categoria": "Category",
-      "Valor (USD) *": "Amount (USD) *",
-      "Salvar despesa": "Save expense",
-      "Início": "Start",
-      "Fim": "End",
-      "Filtrar": "Filter",
-      "Despesas lançadas": "Recorded expenses",
-      "Nenhuma despesa encontrada.": "No expenses found.",
-      "Zerar filtros": "Clear filters",
-      "Mostrar pagas": "Show paid",
-      "Mostrar abertas": "Show open",
-      "Meus mapas": "My Maps",
-      "Selecione o mapa do projeto em que você vai trabalhar.": "Select the project map you will work on.",
-      "Clique em": "Click",
-      "Abrir mapa": "Open map",
-      "Nenhum mapa encontrado para a sua empresa": "No maps found for your company",
-      "Projeto": "Project",
-      "Ações": "Actions",
-      "Sem projeto vinculado": "No linked project",
-      "Configurações": "Settings",
-      "Backup do banco de dados": "Database backup",
-      "Baixar backup (.db)": "Download backup (.db)",
-      "Importante": "Important",
-      "Empresas & fusões inclusas": "Companies & included splices",
-      "Fusões inclusas por lançamento": "Included splices per entry",
-      "Endereço para invoice (nome + endereço completos)": "Invoice address (full name + address)",
-      "Salvar empresa": "Save company",
-      "Empresas cadastradas": "Registered companies",
-      "Fusões inclusas": "Included splices",
-      "Nome da sua empresa": "Your company name",
-      "Endereço completo": "Full address",
-      "CNPJ / Tax ID (opcional)": "CNPJ / Tax ID (optional)",
-      "Telefone": "Phone",
-      "E-mail": "Email",
-      "Chave da API do Geoapify": "Geoapify API key",
-      "Cabeçalho padrão da lousa": "Default board header",
-      "Salvar dados da minha empresa": "Save my company data",
-      "Produção": "Production",
-      "Lançar": "Entry",
-      "Lançar (foto)": "Photo Entry",
-      "Usuários": "Users",
-      "Idioma": "Language",
-      "Português": "Portuguese",
-      "Sair": "Logout",
-      "Escolha a empresa. O campo de map só mostra mapas cadastrados para ela.": "Choose the company. The map field only shows maps registered for it.",
-      "As regras de fusões inclusas e preços vêm da tela de Configurações.": "Included splice and pricing rules come from Settings.",
-      "Esse formulário lança apenas uma linha por vez, igual a uma linha da planilha.": "This form records one line at a time, like one spreadsheet row.",
-      "Todos os lançamentos aparecem depois na tela principal de Produção.": "All entries appear later on the main Production screen.",
-      "Se você for usuário normal, só vê e lança os seus próprios registros. O admin vê tudo.": "If you are a regular user, you only see and enter your own records. The admin sees everything.",
-    },
-    pt: {}
-  };
-
-  function translateString(str, lang) {
-    if (!str) return str;
-    const map = textMap[lang] || {};
-    return map[str.trim()] || str;
+  function getLang(){ return localStorage.getItem('ui_lang') || 'pt'; }
+  function setLang(lang){ localStorage.setItem('ui_lang', lang); applyTranslations(); document.documentElement.lang = lang === 'en' ? 'en' : 'pt-br'; }
+  function t(key){ const lang=getLang(); return (dict[lang] && dict[lang][key]) || dict.pt[key] || key; }
+  function applyTranslations(){
+    document.querySelectorAll('[data-i18n]').forEach(el=>{ const key=el.getAttribute('data-i18n'); el.textContent=t(key);});
+    document.querySelectorAll('[data-i18n-placeholder]').forEach(el=>{ const key=el.getAttribute('data-i18n-placeholder'); el.setAttribute('placeholder', t(key));});
+    const sel=document.getElementById('lang-switcher'); if(sel) sel.value=getLang();
   }
-
-  function translateTextNodes(lang) {
-    if (lang !== 'en') return;
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
-    const toChange = [];
-    let node;
-    while ((node = walker.nextNode())) {
-      const parent = node.parentElement;
-      if (!parent) continue;
-      if (["SCRIPT","STYLE","CODE"].includes(parent.tagName)) continue;
-      const raw = node.nodeValue;
-      if (!raw || !raw.trim()) continue;
-      const trimmed = raw.trim();
-      if ((textMap.en[trimmed] || "").length) {
-        toChange.push([node, raw.replace(trimmed, textMap.en[trimmed])]);
-      }
-    }
-    toChange.forEach(([n,v]) => n.nodeValue = v);
-  }
-
-  function translateAttributes(lang) {
-    document.querySelectorAll('input[placeholder], textarea[placeholder]').forEach(el => {
-      const ph = el.getAttribute('placeholder') || '';
-      const newPh = translateString(ph, lang);
-      if (newPh !== ph) el.setAttribute('placeholder', newPh);
-    });
-    const title = document.title || '';
-    const newTitle = translateString(title, lang);
-    if (newTitle !== title) document.title = newTitle;
-    document.documentElement.lang = lang === 'en' ? 'en' : 'pt-br';
-  }
-
-  function applyTranslations() {
-    const lang = localStorage.getItem("lang") || "pt";
-    const current = dict[lang] || dict.pt;
-    document.querySelectorAll("[data-i18n]").forEach(el => {
-      const key = el.getAttribute("data-i18n");
-      if (current[key]) el.textContent = current[key];
-    });
-    document.querySelectorAll("[data-i18n-placeholder]").forEach(el => {
-      const key = el.getAttribute("data-i18n-placeholder");
-      if (current[key]) el.setAttribute("placeholder", current[key]);
-    });
-    translateTextNodes(lang);
-    translateAttributes(lang);
-    const sel = document.getElementById("lang-switcher");
-    if (sel) sel.value = lang;
-  }
-
-  window.setUILanguage = function(lang){
-    localStorage.setItem("lang", lang || "pt");
-    applyTranslations();
-    document.dispatchEvent(new CustomEvent("ui-language-changed", {detail:{lang}}));
-  };
-
-  document.addEventListener("DOMContentLoaded", applyTranslations);
+  document.addEventListener('DOMContentLoaded', applyTranslations);
+  window.t = t; window.setUILanguage = setLang;
 })();
