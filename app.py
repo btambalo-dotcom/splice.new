@@ -2882,11 +2882,11 @@ def record_upload_photos(record_id):
 
 def my_maps():
     """
-    Tela para o Splicer escolher em qual mapa quer trabalhar.
+    Tela para o usuário escolher em qual mapa quer trabalhar.
 
     Regras de visibilidade:
     - Admin: vê todos os mapas;
-    - Dono da empresa (is_company_owner): também vê todos os mapas;
+    - Dono da empresa (is_company_owner): vê SOMENTE os mapas da própria empresa;
     - Splicer comum:
         * Se o mapa não tiver nenhum splicer configurado (allowed_splicers vazio),
           o mapa aparece e pode ser usado;
@@ -2894,11 +2894,19 @@ def my_maps():
           usuário estiver nessa lista.
     """
     query = CompanyMap.query
+    user_company = None
 
-    # Usuário não admin: aplica regras de allowed_splicers
     if not current_user.is_admin:
-        # Dono de empresa vê todos os mapas
-        if not getattr(current_user, "is_company_owner", False):
+        if getattr(current_user, "is_company_owner", False):
+            # Dono da empresa só vê mapas da própria empresa
+            user_company = (getattr(current_user, "company_name", None) or "").strip()
+            if user_company:
+                query = query.filter(CompanyMap.company == user_company)
+            else:
+                # Se não houver empresa vinculada, não mostra nenhum mapa
+                query = query.filter(db.text("1=0"))
+        else:
+            # Splicer comum: aplica regras de allowed_splicers
             query = query.filter(
                 or_(
                     ~CompanyMap.allowed_splicers.any(),
@@ -2911,7 +2919,7 @@ def my_maps():
     return render_template(
         "my_maps.html",
         maps=maps,
-        user_company=None,
+        user_company=user_company,
     )
 
 
