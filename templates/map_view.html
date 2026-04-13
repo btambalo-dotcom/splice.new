@@ -708,6 +708,7 @@ const IS_ADMIN = {{ "true" if current_user.is_admin else "false" }};
 
     // Atualiza o painel lateral com os PONs encontrados
     function updateSectionColorsPanel(sections) {
+      const panel = document.getElementById('section-colors-panel');
       if (!panel) return;
 
       const names = Object.keys(sections || {}).sort();

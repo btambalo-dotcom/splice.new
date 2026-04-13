@@ -1,1 +1,1 @@
-SPLICER v118 - fix CDN leaflet jsdelivr
+SPLICER v118 - fix panel ReferenceError
