@@ -4,9 +4,8 @@
 {% block extra_head %}
   {{ super() }}
   <link rel="stylesheet"
-        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-        crossorigin="" />
+        href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"
+        crossorigin=""/>
   <style>
     #map {
       width: 100%;
@@ -425,9 +424,13 @@
 
 {% block extra_js %}
   {{ super() }}
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-          crossorigin=""></script>
+  <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script>
+    // Fallback: se Leaflet não carregou, tenta unpkg
+    if (typeof L === 'undefined') {
+      document.write('<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>');
+    }
+  </script>
   <script>
     const recordsUrl = "{{ url_for('api_map_records', map_id=map_obj.id) }}";
     const autoNetworkUrl = "{{ url_for('api_auto_network', map_id=map_obj.id) }}";
@@ -439,6 +442,10 @@
 const IS_ADMIN = {{ "true" if current_user.is_admin else "false" }};
     const MAP_NAME = "{{ map_obj.name }}";
     const testsReportUrl = "{{ url_for('export_map_tests_report', map_id=map_obj.id) }}";
+
+    // Diagnóstico de inicialização
+    console.log('[SPLICER] Leaflet disponível:', typeof L !== 'undefined');
+    console.log('[SPLICER] recordsUrl:', recordsUrl);
 
 
     // Cores automáticas por PON

@@ -1,1 +1,1 @@
-SPLICER v118 - marker debug + safe fallback
+SPLICER v118 - fix CDN leaflet jsdelivr
