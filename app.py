@@ -852,6 +852,11 @@ class Record(db.Model):
     ote_label = db.Column(db.String(120), nullable=True)
     port_label = db.Column(db.String(120), nullable=True)
 
+    # Subida (placed): marcado quando o dispositivo físico foi instalado no campo
+    is_placed = db.Column(db.Boolean, default=False)
+    placed_by = db.Column(db.String(120), nullable=True)   # nome de quem subiu
+    placed_at = db.Column(db.DateTime, nullable=True)       # quando foi subido
+
     price_splices_usd = db.Column(db.Float, default=0.0)
     price_device_usd = db.Column(db.Float, default=0.0)
     total_usd = db.Column(db.Float, default=0.0)
@@ -978,6 +983,9 @@ with app.app_context():
     ensure("record", "source_out", "VARCHAR(120)")
     ensure("record", "ote_label", "VARCHAR(120)")
     ensure("record", "port_label", "VARCHAR(120)")
+    ensure("record", "is_placed", "BOOLEAN")
+    ensure("record", "placed_by", "VARCHAR(120)")
+    ensure("record", "placed_at", "TIMESTAMP")
     ensure("device_type", "project_id", "INTEGER")
     ensure("splice_tier", "project_id", "INTEGER")
     ensure("company_map", "project_id", "INTEGER")
@@ -4354,8 +4362,9 @@ def api_map_records(map_id):
     data = []
     for r in query.order_by(Record.id.asc()).all():
         # Separamos miniaturas de lançamento e de teste para mostrar no popup do mapa
-        device_photos = [p for p in r.photos if not getattr(p, "is_test", False)][:4]
-        test_photos = [p for p in r.photos if getattr(p, "is_test", False)][:4]
+        device_photos = [p for p in r.photos if not getattr(p, "is_test", False) and not (p.filename or "").startswith("placed__")][:4]
+        test_photos   = [p for p in r.photos if getattr(p, "is_test", False)][:4]
+        placed_photos = [p for p in r.photos if not getattr(p, "is_test", False) and (p.filename or "").startswith("placed__")][:4]
         device_type = (r.type or "OTE").strip() or "OTE"
 
         data.append({
@@ -4369,6 +4378,7 @@ def api_map_records(map_id):
             "photo_ids": [p.id for p in device_photos],
             "has_test_photos": len(test_photos),
             "test_photo_ids": [p.id for p in test_photos],
+            "placed_photo_ids": [p.id for p in placed_photos],
             "splicer": r.splicer or "",
             "splices": int(r.splices or 0),
             "type": device_type,
@@ -4384,6 +4394,9 @@ def api_map_records(map_id):
             "source_out": getattr(r, 'source_out', None) or '',
             "ote_label": getattr(r, 'ote_label', None) or '',
             "port_label": getattr(r, 'port_label', None) or '',
+            "is_placed": bool(getattr(r, 'is_placed', False)),
+            "placed_by": getattr(r, 'placed_by', None) or '',
+            "placed_at": r.placed_at.isoformat() if getattr(r, 'placed_at', None) else None,
         })
     return jsonify({"records": data})
 
@@ -4609,6 +4622,95 @@ def api_save_record_test(record_id):
         "record_id": int(rec.id),
         "test_done": bool(rec.test_done),
         "saved_test_photos": int(saved_test_photos),
+    })
+
+
+@app.route("/api/records/<int:record_id>/set-placed", methods=["POST"])
+@login_required
+def api_set_record_placed(record_id):
+    """Marca um dispositivo como 'subido' (placed) e opcionalmente salva uma foto de instalação.
+    Grava quem fez a subida (placed_by/placed_at) mas NUNCA altera o splicer original."""
+    rec = Record.query.get_or_404(record_id)
+
+    # Permissão: admin, owner ou splicer do mesmo mapa
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_owner = bool(getattr(current_user, "is_company_owner", False))
+
+    if not (is_admin or is_owner):
+        mp = None
+        if rec.map:
+            mp = CompanyMap.query.filter_by(name=rec.map, company=rec.company).first()
+        if mp is not None:
+            ensure_map_access(mp)
+        else:
+            if _current_user_company_name() != rec.company:
+                current_splicer = (getattr(current_user, "splicer_name", None) or current_user.username)
+                if (rec.splicer or "") != current_splicer:
+                    abort(403)
+
+    # Quem está realizando a subida
+    actor_name = (
+        getattr(current_user, "splicer_name", None)
+        or current_user.username
+        or "Desconhecido"
+    )
+
+    # Salvar foto de subida (marcada com tag especial via is_test=False mas com photo_tag)
+    # Usamos is_test=False e um flag de 'placed' via filename prefix para distinguir.
+    files = request.files.getlist("photos")
+    saved_placed_photos = 0
+    if files:
+        for f in files[:5]:
+            if not f or not getattr(f, "filename", None):
+                continue
+            filename, content_type, data, thumb_data, thumb_ct = process_uploaded_photo(f)
+            if not data:
+                continue
+            # Prefixamos o filename para identificar como foto de subida
+            safe_fn = ("placed__" + (filename or "foto.jpg"))[:255]
+            photo = RecordPhoto(
+                record_id=rec.id,
+                filename=safe_fn,
+                content_type=content_type,
+                data=data,
+                thumb_data=thumb_data,
+                thumb_content_type=thumb_ct,
+                size_bytes=int(len(data)),
+                is_test=False,
+            )
+            db.session.add(photo)
+            # Enfileira upload para R2 se habilitado
+            if r2_enabled():
+                db.session.flush()
+                r2_key = r2_key_for_record_photo(photo.id, safe_fn)
+                photo.r2_key = r2_key
+                if thumb_data:
+                    thumb_key = r2_key.replace("/full/", "/thumb/")
+                    photo.r2_thumb_key = thumb_key
+                else:
+                    thumb_key = None
+                enqueue_r2_upload(photo.id, r2_key, data, content_type or "image/jpeg",
+                                  thumb_key=thumb_key, thumb_bytes=thumb_data,
+                                  thumb_content_type=thumb_ct)
+            saved_placed_photos += 1
+
+    # Marca como subido — preserva placed_by original se já havia sido subido antes
+    # (só sobrescreve se for a primeira vez ou se admin forçar)
+    force = request.form.get("force") == "1"
+    if not rec.is_placed or force:
+        rec.is_placed = True
+        rec.placed_by = actor_name
+        rec.placed_at = datetime.utcnow()
+
+    db.session.commit()
+
+    return jsonify({
+        "ok": True,
+        "record_id": int(rec.id),
+        "is_placed": bool(rec.is_placed),
+        "placed_by": rec.placed_by or "",
+        "placed_at": rec.placed_at.isoformat() if rec.placed_at else None,
+        "saved_photos": saved_placed_photos,
     })
 
 

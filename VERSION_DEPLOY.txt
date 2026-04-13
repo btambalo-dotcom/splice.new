@@ -1,1 +1,1 @@
-SPLICER v117 - full package photo entry FTs fix
+SPLICER v118 - progress panel + Twelve icons

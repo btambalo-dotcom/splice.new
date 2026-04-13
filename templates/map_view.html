@@ -43,6 +43,22 @@
       display: block;
       overflow: visible;
     }
+    .placed-device-icon {
+      background: transparent;
+      border: 0;
+    }
+    .placed-device-icon svg {
+      display: block;
+      overflow: visible;
+    }
+    .splicer-pin-icon {
+      background: transparent !important;
+      border: 0 !important;
+      overflow: visible !important;
+    }
+    .splicer-pin-icon div {
+      overflow: visible !important;
+    }
   </style>
 {% endblock %}
 
@@ -59,6 +75,45 @@
   </a>
   {% endif %}
 </div>
+
+{% if current_user.is_admin %}
+<div id="map-progress-panel" class="row g-3 mb-3" style="display:none!important;">
+  <div class="col-md-6">
+    <div class="card bg-black border-secondary p-3">
+      <div class="d-flex justify-content-between align-items-center mb-1">
+        <span class="fw-bold text-light" style="font-size:13px;">📡 Testes (OTEs)</span>
+        <span id="prog-test-label" class="small text-muted"></span>
+      </div>
+      <div class="progress" style="height:10px;background:#333;">
+        <div id="prog-test-bar" class="progress-bar" role="progressbar"
+             style="width:0%;background:linear-gradient(90deg,#e53935,#ff7043);"
+             aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+      </div>
+      <div class="d-flex justify-content-between mt-1">
+        <small id="prog-test-done" class="text-success"></small>
+        <small id="prog-test-missing" class="text-danger"></small>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="card bg-black border-secondary p-3">
+      <div class="d-flex justify-content-between align-items-center mb-1">
+        <span class="fw-bold text-light" style="font-size:13px;">⬆ Subidas (todos)</span>
+        <span id="prog-placed-label" class="small text-muted"></span>
+      </div>
+      <div class="progress" style="height:10px;background:#333;">
+        <div id="prog-placed-bar" class="progress-bar" role="progressbar"
+             style="width:0%;background:linear-gradient(90deg,#2ecc40,#00b894);"
+             aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+      </div>
+      <div class="d-flex justify-content-between mt-1">
+        <small id="prog-placed-done" class="text-success"></small>
+        <small id="prog-placed-missing" class="text-warning"></small>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
 
 {% if current_user.is_company_owner and not current_user.is_admin %}
 <div class="row g-4">
@@ -158,8 +213,10 @@
 {% endif %}
 
         <p class="small text-muted mb-0">
-          • Marcadores <span class="text-primary">azuis</span> = ainda não atualizados<br>
-          • Marcadores <span style="color:#03c04a;">verdes</span> = já lançados (fusões/fotos/info).
+          • Pin <span class="text-primary">azul</span> = sem lançamento<br>
+          • Pin <span style="color:#2ecc40;">verde ✓</span> = lançado<br>
+          • 📡 Anteninha vermelha = teste lançado<br>
+          • ↑ Seta verde = dispositivo subido (placed)
         </p>
         <p class="small text-muted mb-0 mt-2">
           Para editar um dispositivo existente, clique no ponto correspondente no mapa ao lado.
@@ -275,6 +332,53 @@
         </a>
         <button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Fechar</button>
         <button type="submit" class="btn btn-primary">Salvar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal: Subir dispositivo (placed) -->
+<div class="modal fade" id="placedModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <form class="modal-content bg-dark text-light" id="placed-form">
+      <div class="modal-header">
+        <h5 class="modal-title">⬆ Subir dispositivo</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Fechar"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="placed-record-id">
+
+        <div class="mb-2">
+          <small class="text-muted" id="placed-device-name-label"></small><br>
+          <small class="text-muted" id="placed-splicer-label"></small>
+        </div>
+
+        <div id="placed-already-box" class="alert alert-success py-2 px-3 mb-3" style="display:none;">
+          <strong>✔ Subido por:</strong> <span id="placed-already-name"></span><br>
+          <small class="text-muted" id="placed-already-date"></small>
+        </div>
+
+        <hr class="border-secondary">
+
+        <div class="mb-3">
+          <label class="form-label">Foto da subida (opcional, até 5)</label>
+          <input type="file" class="form-control bg-dark text-light border-secondary"
+                 id="placed-photos" name="photos" accept="image/*" multiple>
+          <div class="form-text text-muted">Tire uma foto do dispositivo instalado no campo.</div>
+        </div>
+
+        <div id="placed-already-box-force" class="mt-2" style="display:none;">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="placed-force-check">
+            <label class="form-check-label text-warning" for="placed-force-check">
+              Atualizar responsável (sobrescrever quem subiu)
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Fechar</button>
+        <button type="submit" class="btn btn-success"><span>⬆ Confirmar subida</span></button>
       </div>
     </form>
   </div>
@@ -534,9 +638,69 @@ const IS_ADMIN = {{ "true" if current_user.is_admin else "false" }};
       return colorForPon(name);
     }
 
+    // Atualiza o painel de progresso de testes e subidas (só para admin)
+    function updateProgressPanel(records) {
+      const panel = document.getElementById('map-progress-panel');
+      if (!panel) return;
+
+      const OTE_TYPES = ['OTE', '']; // tipos que precisam de teste
+      const SKIP_TEST = ['S', 'SPLITTER', 'D', 'BS', 'CAN']; // não precisam de teste
+
+      // Filtra OTEs (para teste)
+      const testable = (records || []).filter(r => {
+        const t = String(r.type || '').trim().toUpperCase();
+        return !SKIP_TEST.some(skip => t === skip || t.startsWith('CAN'));
+      });
+
+      const testDone    = testable.filter(r => r.test_done).length;
+      const testTotal   = testable.length;
+      const testMissing = testTotal - testDone;
+      const testPct     = testTotal > 0 ? Math.round((testDone / testTotal) * 100) : 0;
+
+      // Todos os dispositivos (para subida)
+      const allRecs      = records || [];
+      const placedDone   = allRecs.filter(r => r.is_placed).length;
+      const placedTotal  = allRecs.length;
+      const placedMissing = placedTotal - placedDone;
+      const placedPct    = placedTotal > 0 ? Math.round((placedDone / placedTotal) * 100) : 0;
+
+      // Atualiza barras
+      const testBar = document.getElementById('prog-test-bar');
+      if (testBar) {
+        testBar.style.width = testPct + '%';
+        testBar.setAttribute('aria-valuenow', testPct);
+        // Verde quando completo, laranja/vermelho quando faltam
+        testBar.style.background = testPct === 100
+          ? 'linear-gradient(90deg,#2ecc40,#00b894)'
+          : 'linear-gradient(90deg,#e53935,#ff7043)';
+      }
+      const placedBar = document.getElementById('prog-placed-bar');
+      if (placedBar) {
+        placedBar.style.width = placedPct + '%';
+        placedBar.setAttribute('aria-valuenow', placedPct);
+        placedBar.style.background = placedPct === 100
+          ? 'linear-gradient(90deg,#2ecc40,#00b894)'
+          : 'linear-gradient(90deg,#2196f3,#00bcd4)';
+      }
+
+      // Labels
+      const setEl = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+      setEl('prog-test-label',   testPct + '%');
+      setEl('prog-test-done',    '✓ ' + testDone + ' testados');
+      setEl('prog-test-missing', testMissing > 0 ? ('✗ ' + testMissing + ' faltam') : '✓ Todos testados!');
+      setEl('prog-placed-label',   placedPct + '%');
+      setEl('prog-placed-done',    '✓ ' + placedDone + ' subidos');
+      setEl('prog-placed-missing', placedMissing > 0 ? ('⬆ ' + placedMissing + ' faltam') : '✓ Todos subidos!');
+
+      // Mostra o painel
+      panel.style.setProperty('display', 'flex', 'important');
+      panel.style.removeProperty('display'); // força reflow
+      panel.removeAttribute('style');
+      panel.style.display = 'flex';
+    }
+
     // Atualiza o painel lateral com os PONs encontrados
     function updateSectionColorsPanel(sections) {
-      const panel = document.getElementById('section-colors-panel');
       if (!panel) return;
 
       const names = Object.keys(sections || {}).sort();
@@ -835,56 +999,84 @@ function deviceTypeLabel(rec) {
   return '';
 }
 
-function createTypeMarker(rec) {
-  const label = deviceTypeLabel(rec);
-  const fillColor = deviceBaseColor(rec);
-  const ringColor = devicePonRingColor(rec);
+/* ─────────────────────────────────────────────────
+   buildDeviceIcon — estilo Twelve Fiber
+   Pin SVG verde com ✓ branco interno
+   + badge anteninha vermelha (canto superior direito) quando testado
+   + badge seta branca (canto inferior direito) quando subido (placed)
+   + badge de tipo (S / D / BS) no canto inferior esquerdo
+   ───────────────────────────────────────────────── */
+function buildDeviceIcon(rec) {
+  const hasLaunch = (Number(rec.splices || 0) > 0) || Number(rec.has_photos || 0) > 0;
+  const tested    = rec.test_done;
+  const placed    = rec.is_placed;
+  const typeLabel = deviceTypeLabel(rec);
 
-  if (label) {
-    const icon = L.divIcon({
-      className: 'device-type-icon',
-      html: '<div style="width:28px;height:28px;border-radius:50%;background:'+fillColor+';border:5px solid '+ringColor+';box-shadow:0 1px 4px rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff;">'+label+'</div>',
-      iconSize: [28, 28],
-      iconAnchor: [14, 14],
-      popupAnchor: [0, -10]
-    });
-    return L.marker([rec.lat, rec.lng], { icon });
-  }
+  // Cor do pin: verde se lançado, azul se ainda não lançado
+  const pinColor = hasLaunch ? '#2ecc40' : '#1a73e8';
+  const pinDark  = hasLaunch ? '#1a7a25' : '#0d4fa8';
 
-  return L.circleMarker([rec.lat, rec.lng], {
-    radius: 10,
-    color: ringColor,
-    fillColor: fillColor,
-    fillOpacity: 0.95,
-    weight: 5
+  // SVG do pin gota (estilo Twelve) com ✓ interno
+  const pinSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="42" viewBox="0 0 32 42">
+    <defs>
+      <filter id="shadow-${rec.id}" x="-30%" y="-10%" width="160%" height="160%">
+        <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="rgba(0,0,0,0.45)"/>
+      </filter>
+    </defs>
+    <!-- corpo do pin -->
+    <path d="M16 2 C8.268 2 2 8.268 2 16 C2 24.418 16 40 16 40 C16 40 30 24.418 30 16 C30 8.268 23.732 2 16 2 Z"
+          fill="${pinColor}" stroke="${pinDark}" stroke-width="1.5" filter="url(#shadow-${rec.id})"/>
+    <!-- círculo interno branco -->
+    <circle cx="16" cy="16" r="9" fill="white" opacity="0.25"/>
+    <!-- ✓ interno -->
+    <polyline points="10,16 14,20 22,11"
+              fill="none" stroke="white" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+    ${typeLabel ? `<!-- badge tipo -->
+    <rect x="1" y="27" width="${typeLabel.length > 1 ? 18 : 14}" height="11" rx="3" fill="#222" opacity="0.85"/>
+    <text x="${typeLabel.length > 1 ? 10 : 8}" y="36" text-anchor="middle" font-size="7.5" font-weight="700" fill="white" font-family="Arial,sans-serif">${typeLabel}</text>` : ''}
+  </svg>`;
+
+  // Badge anteninha vermelha (testado)
+  const antennaSvg = tested ? `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18" style="position:absolute;top:-6px;right:-6px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))">
+    <circle cx="9" cy="9" r="9" fill="#e53935"/>
+    <!-- antena: haste vertical -->
+    <line x1="9" y1="13" x2="9" y2="7" stroke="white" stroke-width="1.8" stroke-linecap="round"/>
+    <!-- ondas -->
+    <path d="M6 6 Q9 3.5 12 6"   fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+    <path d="M4.5 4.5 Q9 1 13.5 4.5" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+    <!-- base da antena -->
+    <circle cx="9" cy="13.5" r="1.3" fill="white"/>
+  </svg>` : '';
+
+  // Badge seta branca (subido/placed)
+  const placedSvg = placed ? `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" style="position:absolute;bottom:4px;right:-6px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.5))">
+    <circle cx="8" cy="8" r="8" fill="#2ecc40" stroke="white" stroke-width="1.5"/>
+    <!-- seta para cima -->
+    <polyline points="5,10 8,5 11,10" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <line x1="8" y1="5" x2="8" y2="12" stroke="white" stroke-width="2" stroke-linecap="round"/>
+  </svg>` : '';
+
+  const html = `<div style="position:relative;width:32px;height:42px;">
+    ${pinSvg}
+    ${antennaSvg}
+    ${placedSvg}
+  </div>`;
+
+  return L.divIcon({
+    className: 'splicer-pin-icon',
+    html: html,
+    iconSize:    [32, 42],
+    iconAnchor:  [16, 42],
+    popupAnchor: [0, -44]
   });
 }
 
+function createTypeMarker(rec) {
+  return L.marker([rec.lat, rec.lng], { icon: buildDeviceIcon(rec) });
+}
+
 function createTestedDeviceMarker(rec) {
-  const label = deviceTypeLabel(rec);
-  const ringColor = devicePonRingColor(rec);
-  const fontSize = label === 'BS' ? 8 : 11;
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" aria-hidden="true">
-      <defs>
-        <clipPath id="clip-left-${rec.id}"><rect x="0" y="0" width="12" height="24" /></clipPath>
-        <clipPath id="clip-right-${rec.id}"><rect x="12" y="0" width="12" height="24" /></clipPath>
-      </defs>
-      <circle cx="12" cy="12" r="8" fill="#03c04a" clip-path="url(#clip-left-${rec.id})"></circle>
-      <circle cx="12" cy="12" r="8" fill="#dc3545" clip-path="url(#clip-right-${rec.id})"></circle>
-      <circle cx="12" cy="12" r="8" fill="none" stroke="${ringColor}" stroke-width="5"></circle>
-      ${label ? `<text x="12" y="15" text-anchor="middle" font-size="${fontSize}" font-weight="700" fill="#fff" font-family="Arial, sans-serif">${label}</text>` : ''}
-    </svg>`;
-
-  const icon = L.divIcon({
-    className: 'tested-device-icon',
-    html: svg,
-    iconSize: [28, 28],
-    iconAnchor: [14, 14],
-    popupAnchor: [0, -10]
-  });
-
-  return L.marker([rec.lat, rec.lng], { icon });
+  return L.marker([rec.lat, rec.lng], { icon: buildDeviceIcon(rec) });
 }
 
 function copyDeviceInfoFromRecord(recordId) {
@@ -951,6 +1143,7 @@ async function loadMarkers() {
       if (!records.length) {
         window._mapRecords = [];
         updateSectionColorsPanel({});
+        if (IS_ADMIN) updateProgressPanel([]);
         return;
       }
 
@@ -958,6 +1151,7 @@ async function loadMarkers() {
     const invalidRecs = [];
       let focusLatLng = null;
       window._mapRecords = records;
+      if (IS_ADMIN) updateProgressPanel(records);
 
             // Agrupa pontos por PON para desenhar polígonos coloridos
             const sections = {};
@@ -1085,6 +1279,22 @@ if (rec.test_photo_ids && rec.test_photo_ids.length > 0) {
   popupParts.push('</div>');
 }
 
+// Fotos da subida (placed)
+if (rec.placed_photo_ids && rec.placed_photo_ids.length > 0) {
+  popupParts.push('<div class="small mt-2"><strong>⬆ Fotos da subida:</strong></div>');
+  popupParts.push('<div class="mt-1 popup-photos">');
+  rec.placed_photo_ids.forEach(function(pid) {
+    const thumbUrl = '/photo/' + pid + '?size=thumb';
+    const fullUrl = '/photo/' + pid;
+    popupParts.push(
+      '<a href="' + fullUrl + '" target="_blank" class="me-1 mb-1 d-inline-block">' +
+        '<img src="' + thumbUrl + '" class="popup-thumb" alt="Foto da subida">' +
+      '</a>'
+    );
+  });
+  popupParts.push('</div>');
+}
+
 popupParts.push('<div class="mt-2 d-flex flex-wrap gap-1">');
 if (!IS_OWNER_READONLY) {
   popupParts.push(
@@ -1100,6 +1310,17 @@ if (!IS_OWNER_READONLY) {
     );
   }
 
+  // Botão Subir dispositivo (always shown, shows status)
+  const placedLabel = rec.is_placed
+    ? '↑ Subido'
+    : '↑ Subir';
+  const placedBtnClass = rec.is_placed
+    ? 'btn btn-outline-success btn-sm'
+    : 'btn btn-outline-warning btn-sm';
+  popupParts.push(
+    '<button class="' + placedBtnClass + '" onclick="openPlacedModalById(' + rec.id + ')">' + placedLabel + '</button>'
+  );
+
   if (IS_ADMIN) {
     popupParts.push(
       '<button class="btn btn-outline-light btn-sm" onclick="openDeviceModalById(' + rec.id + ')">Editar no mapa</button>'
@@ -1108,6 +1329,15 @@ if (!IS_OWNER_READONLY) {
       '<button class="btn btn-secondary btn-sm" onclick="enableMoveRecord(' + rec.id + ')">Mover</button>'
     );
   }
+}
+
+// Placed info line in popup
+if (rec.is_placed) {
+  const placedDateStr = rec.placed_at ? String(rec.placed_at).slice(0, 10) : '';
+  popupParts.push(
+    '<div class="small text-success mt-1">⬆ Subido por: <strong>' + (rec.placed_by || '?') + '</strong>' +
+    (placedDateStr ? ' em ' + placedDateStr : '') + '</div>'
+  );
 }
 popupParts.push(
   '<a class="btn btn-outline-info btn-sm" href="https://www.google.com/maps?q=' +
@@ -1147,6 +1377,46 @@ function openDeviceModalById(id) {
         openDeviceModal(rec);
       }
     }
+
+    window.openPlacedModalById = function(id) {
+      const list = window._mapRecords || [];
+      const rec = list.find(r => r.id === id);
+      if (rec) openPlacedModal(rec);
+    };
+
+    window.openPlacedModal = function(rec) {
+      const modalEl = document.getElementById('placedModal');
+      const modal = new bootstrap.Modal(modalEl);
+
+      document.getElementById('placed-record-id').value = rec.id || '';
+      document.getElementById('placed-device-name-label').textContent =
+        'Dispositivo: ' + (rec.device || 'Sem nome');
+      document.getElementById('placed-splicer-label').textContent =
+        rec.splicer ? ('Splicer original: ' + rec.splicer) : '';
+
+      const alreadyBox = document.getElementById('placed-already-box');
+      const forceBox = document.getElementById('placed-already-box-force');
+      const forceCheck = document.getElementById('placed-force-check');
+
+      if (rec.is_placed) {
+        alreadyBox.style.display = '';
+        document.getElementById('placed-already-name').textContent = rec.placed_by || '?';
+        const dateStr = rec.placed_at ? String(rec.placed_at).slice(0, 10) : '';
+        document.getElementById('placed-already-date').textContent = dateStr ? 'Data: ' + dateStr : '';
+        forceBox.style.display = '';
+        if (forceCheck) forceCheck.checked = false;
+      } else {
+        alreadyBox.style.display = 'none';
+        forceBox.style.display = 'none';
+        if (forceCheck) forceCheck.checked = false;
+      }
+
+      // Reset fotos
+      const photosInput = document.getElementById('placed-photos');
+      if (photosInput) photosInput.value = '';
+
+      modal.show();
+    };
 
     window.openTestModalById = function(id) {
       const list = window._mapRecords || [];
@@ -1408,6 +1678,58 @@ function openDeviceModalById(id) {
         loadMarkers();
       } else {
         alert(data.error || 'Erro ao salvar teste.');
+      }
+    });
+
+    // Handler: Subir dispositivo (placed)
+    const placedForm = document.getElementById('placed-form');
+    if (placedForm) placedForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+
+      const recId = document.getElementById('placed-record-id').value;
+      if (!recId) return;
+
+      const forceCheck = document.getElementById('placed-force-check');
+      const force = (forceCheck && forceCheck.checked) ? '1' : '0';
+
+      const formData = new FormData();
+      formData.append('force', force);
+
+      const photosInput = document.getElementById('placed-photos');
+      if (photosInput && photosInput.files) {
+        Array.from(photosInput.files).slice(0, 5).forEach(f => {
+          formData.append('photos', f);
+        });
+      }
+
+      const submitBtn = placedForm.querySelector('[type=submit]');
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Salvando...';
+      }
+
+      try {
+        const resp = await fetch('/api/records/' + recId + '/set-placed', {
+          method: 'POST',
+          body: formData
+        });
+        const data = await resp.json();
+
+        if (data.ok) {
+          const modalEl = document.getElementById('placedModal');
+          const modal = bootstrap.Modal.getInstance(modalEl);
+          if (modal) modal.hide();
+          loadMarkers();
+        } else {
+          alert(data.error || 'Erro ao registrar subida.');
+        }
+      } catch (e) {
+        alert('Erro de conexão ao registrar subida.');
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '⬆ Confirmar subida';
+        }
       }
     });
 
