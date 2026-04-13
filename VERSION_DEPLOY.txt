@@ -1,1 +1,1 @@
-SPLICER v118 - progress panel + Twelve icons
+SPLICER v118 - robust pin icons no nested templates
