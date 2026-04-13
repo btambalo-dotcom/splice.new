@@ -1,1 +1,1 @@
-SPLICER v118 - robust pin icons no nested templates
+SPLICER v118 - marker debug + safe fallback

@@ -1155,6 +1155,7 @@ async function loadMarkers() {
     const invalidRecs = [];
       let focusLatLng = null;
       window._mapRecords = records;
+      console.log('[SPLICER] Records carregados:', records.length, '| Exemplo:', records[0] || 'nenhum');
       if (IS_ADMIN) updateProgressPanel(records);
 
             // Agrupa pontos por PON para desenhar polígonos coloridos
@@ -1201,9 +1202,22 @@ async function loadMarkers() {
             });
 
             records.forEach(rec => {
-              const marker = rec.test_done
-                ? createTestedDeviceMarker(rec)
-                : createTypeMarker(rec);
+              var marker;
+              try {
+                marker = rec.test_done
+                  ? createTestedDeviceMarker(rec)
+                  : createTypeMarker(rec);
+              } catch(e) {
+                console.error('Erro ao criar ícone para rec.id=' + rec.id, e);
+                // fallback: círculo simples
+                marker = L.circleMarker([rec.lat, rec.lng], {
+                  radius: 8,
+                  color: '#fff',
+                  fillColor: rec.test_done ? '#2ecc40' : '#1a73e8',
+                  fillOpacity: 0.95,
+                  weight: 2
+                });
+              }
 
 
               const popupParts = [];
@@ -1351,10 +1365,10 @@ popupParts.push(
 popupParts.push('</div>');
 popupParts.push('</div>');
 const popupHtml = popupParts.join('');
-marker.bindPopup(popupHtml);
-              marker.on('click', function () { this.openPopup(); });
+              try { marker.bindPopup(popupHtml); } catch(e) {}
+              marker.on('click', function () { try { this.openPopup(); } catch(e) {} });
               try { window._recordMarkers.set(rec.id, marker); } catch(e) {}
-              marker.addTo(markersLayer);
+              try { marker.addTo(markersLayer); } catch(e) { console.error('Erro addTo marker rec.id=' + rec.id, e); }
               if (currentFocusRecordId && rec.id === currentFocusRecordId) {
                 focusLatLng = [rec.lat, rec.lng];
                 marker.openPopup();
