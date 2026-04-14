@@ -42,6 +42,14 @@ def ensure_columns(db_path):
         add_col_user("splicer_name", "VARCHAR(120)")
         add_col_user("is_company_owner", "INTEGER DEFAULT 0")
         add_col_user("company_name", "VARCHAR(120)")
+        add_col_user("is_active", "INTEGER DEFAULT 1")
+        add_col_user("can_access_expenses", "INTEGER DEFAULT 0")
+        add_col_user("can_view_values", "INTEGER DEFAULT 1")
+
+        # garante valores padrão para usuários já existentes
+        cur.execute('UPDATE "user" SET is_active = 1 WHERE is_active IS NULL')
+        cur.execute('UPDATE "user" SET can_access_expenses = 0 WHERE can_access_expenses IS NULL')
+        cur.execute('UPDATE "user" SET can_view_values = 1 WHERE can_view_values IS NULL')
 
         # ---- NOVO: Tabela record (para mapa interativo) ----
         cur.execute("PRAGMA table_info('record')")
@@ -83,6 +91,41 @@ def ensure_columns(db_path):
                 cur.execute(sql)
 
             add_col_company_map("section_colors_json", "TEXT")
+
+        # ---- project.payment_days ----
+        cur.execute("PRAGMA table_info('project')")
+        proj_rows = cur.fetchall()
+        if proj_rows:
+            proj_cols = [r[1] for r in proj_rows]
+            if "payment_days" not in proj_cols:
+                cur.execute('ALTER TABLE "project" ADD COLUMN payment_days INTEGER DEFAULT 30;')
+                print("  ➕ Adicionando coluna project.payment_days")
+
+        # ---- Tabela payroll (nova) ----
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='payroll'")
+        if not cur.fetchone():
+            print("  ➕ Criando tabela payroll")
+            cur.execute("""
+                CREATE TABLE payroll (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL REFERENCES "user"(id),
+                    start_date DATE NOT NULL,
+                    end_date DATE NOT NULL,
+                    project_id INTEGER REFERENCES project(id),
+                    company VARCHAR(120),
+                    total_records INTEGER DEFAULT 0,
+                    total_splices INTEGER DEFAULT 0,
+                    total_amount_usd FLOAT DEFAULT 0.0,
+                    payment_days INTEGER DEFAULT 30,
+                    due_date DATE,
+                    status VARCHAR(20) DEFAULT 'pending',
+                    paid_at TIMESTAMP,
+                    paid_by INTEGER REFERENCES "user"(id),
+                    created_by INTEGER REFERENCES "user"(id),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    notes TEXT
+                )
+            """)
 
         conn.commit()
         print("  ✅ Atualização concluída neste banco.")

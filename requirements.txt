@@ -10,3 +10,4 @@ psycopg2-binary
 Pillow
 boto3==1.34.162
 requests
+reportlab

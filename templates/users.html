@@ -1,116 +1,307 @@
 {% extends 'base.html' %}
 {% block title %}Usuários · SPLICER{% endblock %}
+
 {% block content %}
-<h3 class="mb-3">Usuários</h3>
+<style>
+  .user-form-card { background: #1e1e2e; border: 1px solid #2a2a3e; border-radius: 12px; }
+  .section-title { font-size: .7rem; text-transform: uppercase; letter-spacing: .1em; color: #6c757d; font-weight: 600; margin-bottom: .75rem; }
+  .perm-block { background: #12121c; border: 1px solid #2a2a3e; border-radius: 8px; padding: 1rem; }
+  .perm-row { display: flex; align-items: center; justify-content: space-between; padding: .5rem 0; border-bottom: 1px solid #1e1e2e; }
+  .perm-row:last-child { border-bottom: none; }
+  .perm-label { font-size: .875rem; color: #ccc; }
+  .perm-sub  { font-size: .75rem; color: #555; }
+  .toggle-wrap { position: relative; display: inline-block; width: 42px; height: 22px; flex-shrink: 0; }
+  .toggle-wrap input { opacity: 0; width: 0; height: 0; }
+  .toggle-slider { position: absolute; inset: 0; background: #2a2a3e; border-radius: 22px; cursor: pointer; transition: .2s; }
+  .toggle-slider:before { content: ''; position: absolute; height: 16px; width: 16px; left: 3px; bottom: 3px; background: #888; border-radius: 50%; transition: .2s; }
+  .toggle-wrap input:checked + .toggle-slider { background: #1a4fa0; }
+  .toggle-wrap input:checked + .toggle-slider:before { transform: translateX(20px); background: #4f8ef7; }
+  .role-pills { display: flex; gap: .5rem; flex-wrap: wrap; }
+  .role-pill { display: none; }
+  .role-pill + label { cursor: pointer; padding: .35rem .85rem; border-radius: 20px; border: 1px solid #3a3a4e; font-size: .8rem; color: #888; transition: all .15s; white-space: nowrap; user-select: none; }
+  .role-pill:checked + label { border-color: #4f8ef7; color: #4f8ef7; background: rgba(79,142,247,.1); }
+  .badge-role { font-size: .7rem; padding: .3em .65em; border-radius: 20px; font-weight: 500; display: inline-block; }
+  .badge-admin  { background: rgba(255,193,7,.12); color: #ffc107; border: 1px solid rgba(255,193,7,.25); }
+  .badge-owner  { background: rgba(13,202,240,.12); color: #0dcaf0; border: 1px solid rgba(13,202,240,.25); }
+  .badge-splice { background: rgba(138,43,226,.12); color: #a78bfa; border: 1px solid rgba(138,43,226,.25); }
+  .badge-active   { background: rgba(25,135,84,.12); color: #20c997; border: 1px solid rgba(25,135,84,.25); }
+  .badge-inactive { background: rgba(220,53,69,.1); color: #e05c6b; border: 1px solid rgba(220,53,69,.2); }
+  .perm-icon { width: 20px; height: 20px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; font-size: .65rem; font-weight: 700; margin: 0 1px; vertical-align: middle; }
+  .perm-on  { background: rgba(25,135,84,.18); color: #20c997; }
+  .perm-off { background: rgba(40,40,60,.5); color: #444; }
+  .user-row { border-color: #2a2a3e !important; transition: background .1s; background: transparent !important; }
+  .user-row:hover { background: rgba(79,142,247,.04); }
+  .form-control, .form-select { background: #12121c !important; border-color: #2a2a3e !important; color: #ddd !important; }
+  .form-control:focus, .form-select:focus { border-color: #4f8ef7 !important; box-shadow: 0 0 0 2px rgba(79,142,247,.18) !important; }
+  .form-control::placeholder { color: #444 !important; }
+  .btn-save { background: #2563eb; border: none; color: #fff; font-weight: 500; letter-spacing: .02em; border-radius: 8px; padding: .55rem 1rem; }
+  .btn-save:hover { background: #1d4ed8; color: #fff; }
+  hr.divider { border-color: #2a2a3e; margin: 1.1rem 0; }
+</style>
+
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <div>
+    <h4 class="mb-0 fw-semibold">Usuários</h4>
+    <p class="text-secondary mb-0" style="font-size:.82rem;">Gerencie acessos e permissões do sistema</p>
+  </div>
+  <span class="badge bg-secondary py-2 px-3">{{ users|length }} usuário{{ 's' if users|length != 1 else '' }}</span>
+</div>
 
 <div class="row g-4">
-  <div class="col-lg-5">
-    <div class="card p-4">
-      <h5 class="mb-3">Novo / editar usuário</h5>
+
+  <!-- ═══ FORMULÁRIO ═══ -->
+  <div class="col-xl-5 col-lg-6">
+    <div class="user-form-card p-4">
+      <p class="section-title">Novo / editar usuário</p>
+
       <form method="post">
-        <div class="mb-3">
-          <label class="form-label">Usuário (login)</label>
-          <input class="form-control" name="username" required placeholder="Ex.: bruno">
-          <div class="form-text">Se o usuário já existir, os dados serão atualizados.</div>
-        </div>
-        <div class="mb-3">
-          <label class="form-label">Senha</label>
-          <input class="form-control" type="password" name="password" required>
-        </div>
-        <div class="mb-3">
-          <label class="form-label">Nome do splicer</label>
-          <input class="form-control" name="splicer_name" placeholder="Ex.: BRUNO TAMBALO">
-          <div class="form-text">
-            Esse nome aparece nos lançamentos como campo Splicer. Se vazio, será usado o login.
+        <div class="row g-2 mb-3">
+          <div class="col-6">
+            <label class="form-label small text-secondary mb-1">Login</label>
+            <input class="form-control form-control-sm" name="username" required placeholder="ex.: joao">
+          </div>
+          <div class="col-6">
+            <label class="form-label small text-secondary mb-1">Senha</label>
+            <input class="form-control form-control-sm" type="password" name="password" required placeholder="••••••••">
           </div>
         </div>
+
         <div class="mb-3">
-          <label class="form-label">Empresa (para dono de empresa)</label>
-          <select class="form-control" name="company_name">
-            <option value="">Selecione a empresa</option>
+          <label class="form-label small text-secondary mb-1">
+            Nome do splicer
+            <span class="text-muted" style="font-weight:400;">(aparece nos lançamentos)</span>
+          </label>
+          <input class="form-control form-control-sm" name="splicer_name" placeholder="ex.: JOÃO SILVA">
+        </div>
+
+        <hr class="divider">
+
+        <!-- Tipo de usuário -->
+        <p class="section-title">Tipo de usuário</p>
+        <div class="role-pills mb-3">
+          <input class="role-pill" type="radio" name="_role" id="role_splicer" value="splicer" checked onchange="syncRole()">
+          <label for="role_splicer">⚡ Splicer</label>
+
+          <input class="role-pill" type="radio" name="_role" id="role_owner" value="owner" onchange="syncRole()">
+          <label for="role_owner">🏢 Dono de Empresa</label>
+
+          <input class="role-pill" type="radio" name="_role" id="role_admin" value="admin" onchange="syncRole()">
+          <label for="role_admin">👑 Administrador</label>
+        </div>
+
+        <div id="company_block" class="mb-3" style="display:none;">
+          <label class="form-label small text-secondary mb-1">Empresa vinculada</label>
+          <select class="form-select form-select-sm" name="company_name" id="company_select">
+            <option value="">— Selecione a empresa —</option>
             {% for c in companies %}
             <option value="{{ c.name }}">{{ c.name }}</option>
             {% endfor %}
           </select>
-          <div class="form-text">
-            Selecione uma das empresas cadastradas em Configurações &gt; Empresas.
+          <div class="form-text" style="color:#555; font-size:.73rem;">
+            O dono de empresa vê apenas os lançamentos da empresa vinculada.
           </div>
         </div>
-        <div class="form-check mb-2">
-          <input class="form-check-input" type="checkbox" value="1" id="is_company_owner" name="is_company_owner">
-          <label class="form-check-label" for="is_company_owner">
-            Dono de empresa (vê apenas os lançamentos da própria empresa)
-          </label>
+
+        <input type="hidden" name="is_admin" id="h_is_admin" value="">
+        <input type="hidden" name="is_company_owner" id="h_is_owner" value="">
+
+        <hr class="divider">
+
+        <!-- Permissões -->
+        <p class="section-title">Permissões de acesso</p>
+        <div class="perm-block" id="perm_section">
+
+          <div class="perm-row">
+            <div>
+              <div class="perm-label">Usuário ativo</div>
+              <div class="perm-sub">Pode fazer login no sistema</div>
+            </div>
+            <label class="toggle-wrap">
+              <input type="checkbox" name="is_active" id="perm_active" value="1" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          <div class="perm-row" id="row_expenses">
+            <div>
+              <div class="perm-label">Acesso a Despesas</div>
+              <div class="perm-sub">Pode visualizar e lançar despesas</div>
+            </div>
+            <label class="toggle-wrap">
+              <input type="checkbox" name="can_access_expenses" id="perm_expenses" value="1">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          <div class="perm-row" id="row_values">
+            <div>
+              <div class="perm-label">Visualizar valores ($)</div>
+              <div class="perm-sub">Ver valores financeiros nos lançamentos</div>
+            </div>
+            <label class="toggle-wrap">
+              <input type="checkbox" name="can_view_values" id="perm_values" value="1" checked>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
         </div>
-        <div class="form-check mb-3">
-          <input class="form-check-input" type="checkbox" value="1" id="is_admin" name="is_admin">
-          <label class="form-check-label" for="is_admin">
-            Administrador (vê todos os registros, configura empresas e cria usuários)
-          </label>
+
+        <div class="mt-4">
+          <button class="btn btn-save w-100">Salvar usuário</button>
         </div>
-        <button class="btn btn-primary w-100">Salvar usuário</button>
       </form>
     </div>
   </div>
 
-  <div class="col-lg-7">
-    <div class="card p-4">
-      <h5 class="mb-3">Lista de usuários</h5>
+  <!-- ═══ TABELA ═══ -->
+  <div class="col-xl-7 col-lg-6">
+    <div class="user-form-card p-4">
+      <p class="section-title">Usuários cadastrados</p>
+
+      {% if users %}
       <div class="table-responsive">
-        <table class="table table-sm table-dark align-middle mb-0">
+        <table class="table table-sm table-dark align-middle mb-0" style="font-size:.85rem; --bs-table-bg: #1e1e2e; --bs-table-striped-bg: #1e1e2e; --bs-table-hover-bg: rgba(79,142,247,.06); --bs-table-border-color: #2a2a3e; --bs-table-color: #bbb;">
           <thead>
-            <tr>
-              <th>ID</th>
-              <th>Usuário</th>
-              <th>Splicer</th>
-              <th>Dono empresa?</th>
-              <th>Empresa</th>
-              <th>Admin?</th>
-              <th></th>
+            <tr style="font-size:.7rem; text-transform:uppercase; letter-spacing:.06em; color:#444;">
+              <th style="border-color:#2a2a3e;">Usuário</th>
+              <th style="border-color:#2a2a3e;">Splicer</th>
+              <th style="border-color:#2a2a3e;">Tipo</th>
+              <th style="border-color:#2a2a3e;">Empresa</th>
+              <th style="border-color:#2a2a3e; text-align:center;">Permissões</th>
+              <th style="border-color:#2a2a3e; text-align:center;">Status</th>
+              <th style="border-color:#2a2a3e;"></th>
             </tr>
           </thead>
           <tbody>
             {% for u in users %}
-            <tr>
-              <td>{{ u.id }}</td>
-              <td>{{ u.username }}</td>
-              <td>{{ u.splicer_name or '-' }}</td>
-              <td>
-                {% if u.is_company_owner %}
-                  <span class="badge bg-info text-dark">SIM</span>
-                {% else %}
-                  <span class="badge bg-secondary">Não</span>
-                {% endif %}
-              </td>
-              <td>{{ u.company_name or '-' }}</td>
+            <tr class="user-row">
+              <td style="font-weight:500; color:#e0e0e0;">{{ u.username }}</td>
+
+              <td style="color:#777;">{{ u.splicer_name or '—' }}</td>
+
               <td>
                 {% if u.is_admin %}
-                  <span class="badge bg-warning text-dark">ADMIN</span>
+                  <span class="badge-role badge-admin">👑 Admin</span>
+                {% elif u.is_company_owner %}
+                  <span class="badge-role badge-owner">🏢 Empresa</span>
                 {% else %}
-                  <span class="badge bg-secondary">Normal</span>
+                  <span class="badge-role badge-splice">⚡ Splicer</span>
                 {% endif %}
               </td>
+
+              <td style="color:#666; font-size:.8rem;">{{ u.company_name or '—' }}</td>
+
+              <td style="text-align:center;">
+                {% if u.is_admin %}
+                  <span style="font-size:.72rem; color:#ffc107; font-weight:500;">Acesso total</span>
+                {% else %}
+                  <span class="perm-icon {% if u.can_access_expenses %}perm-on{% else %}perm-off{% endif %}"
+                        title="{% if u.can_access_expenses %}Despesas: habilitado{% else %}Despesas: bloqueado{% endif %}">💰</span>
+                  <span class="perm-icon {% if u.can_view_values or u.can_view_values is none %}perm-on{% else %}perm-off{% endif %}"
+                        title="{% if u.can_view_values or u.can_view_values is none %}Valores: visíveis{% else %}Valores: ocultos{% endif %}">$</span>
+                {% endif %}
+              </td>
+
+              <td style="text-align:center;">
+                {% if u.username == 'admin' or u.is_active or u.is_active is none %}
+                  <span class="badge-role badge-active">Ativo</span>
+                {% else %}
+                  <span class="badge-role badge-inactive">Inativo</span>
+                {% endif %}
+              </td>
+
               <td class="text-end">
-                {% if u.username != 'admin' %}
-                  <a href="{{ url_for('user_delete', uid=u.id) }}"
-                     class="btn btn-sm btn-outline-danger"
-                     onclick="return confirm('Remover este usuário?');">
-                    ✕
-                  </a>
-                {% endif %}
-              </td>
-            </tr>
-            {% else %}
-            <tr>
-              <td colspan="7" class="text-center text-secondary">
-                Nenhum usuário cadastrado além do admin.
+                <div class="d-flex gap-1 justify-content-end">
+                  {% if u.username != 'admin' %}
+                    <form method="post" action="{{ url_for('user_toggle_active', uid=u.id) }}" style="display:inline;">
+                      {% if u.is_active or u.is_active is none %}
+                        <button type="submit" class="btn btn-sm btn-outline-warning"
+                                style="font-size:.68rem; padding:.18rem .45rem; line-height:1.4;"
+                                title="Desativar usuário"
+                                onclick="return confirm('Desativar o usuário {{ u.username }}?');">⏸</button>
+                      {% else %}
+                        <button type="submit" class="btn btn-sm btn-outline-success"
+                                style="font-size:.68rem; padding:.18rem .45rem; line-height:1.4;"
+                                title="Ativar usuário"
+                                onclick="return confirm('Ativar o usuário {{ u.username }}?');">▶</button>
+                      {% endif %}
+                    </form>
+                    <a href="{{ url_for('user_delete', uid=u.id) }}"
+                       class="btn btn-sm btn-outline-danger"
+                       style="font-size:.68rem; padding:.18rem .45rem; line-height:1.4;"
+                       title="Remover usuário"
+                       onclick="return confirm('Remover o usuário {{ u.username }}? Esta ação não pode ser desfeita.');">✕</a>
+                  {% else %}
+                    <span style="font-size:.7rem; color:#333;">—</span>
+                  {% endif %}
+                </div>
               </td>
             </tr>
             {% endfor %}
           </tbody>
         </table>
       </div>
+
+      <!-- Legenda -->
+      <div class="mt-3 pt-3 d-flex flex-wrap gap-3" style="border-top:1px solid #1e1e2e; font-size:.73rem; color:#555;">
+        <span><span class="perm-icon perm-on" style="display:inline-flex;">💰</span> Despesas on</span>
+        <span><span class="perm-icon perm-off" style="display:inline-flex;">💰</span> Despesas off</span>
+        <span><span class="perm-icon perm-on" style="display:inline-flex;">$</span> Valores visíveis</span>
+        <span><span class="perm-icon perm-off" style="display:inline-flex;">$</span> Valores ocultos</span>
+      </div>
+
+      {% else %}
+      <div class="text-center py-5" style="color:#444; font-size:.875rem;">
+        <div style="font-size:2.5rem; margin-bottom:.75rem; opacity:.4;">👤</div>
+        Nenhum usuário cadastrado além do admin.
+      </div>
+      {% endif %}
     </div>
   </div>
+
 </div>
+
+<script>
+function syncRole() {
+  const role = document.querySelector('input[name="_role"]:checked').value;
+  const isAdmin = role === 'admin';
+  const isOwner = role === 'owner';
+
+  document.getElementById('h_is_admin').value = isAdmin ? '1' : '';
+  document.getElementById('h_is_owner').value = isOwner ? '1' : '';
+
+  // Empresa: visível apenas para dono
+  document.getElementById('company_block').style.display = isOwner ? '' : 'none';
+  if (!isOwner) document.getElementById('company_select').value = '';
+
+  const rowExp = document.getElementById('row_expenses');
+  const rowVal = document.getElementById('row_values');
+
+  if (isAdmin) {
+    // Admin: bloqueia todo o bloco de permissões (tem tudo)
+    document.getElementById('perm_section').style.opacity = '.35';
+    document.getElementById('perm_section').style.pointerEvents = 'none';
+    document.getElementById('perm_active').checked = true;
+    document.getElementById('perm_expenses').checked = true;
+    document.getElementById('perm_values').checked = true;
+  } else if (isOwner) {
+    // Dono de empresa: pode ativar/desativar mas despesas e valores não se aplicam
+    document.getElementById('perm_section').style.opacity = '1';
+    document.getElementById('perm_section').style.pointerEvents = '';
+    rowExp.style.opacity = '.3';
+    rowExp.style.pointerEvents = 'none';
+    rowVal.style.opacity = '.3';
+    rowVal.style.pointerEvents = 'none';
+  } else {
+    // Splicer: permissões totalmente configuráveis
+    document.getElementById('perm_section').style.opacity = '1';
+    document.getElementById('perm_section').style.pointerEvents = '';
+    rowExp.style.opacity = '1';
+    rowExp.style.pointerEvents = '';
+    rowVal.style.opacity = '1';
+    rowVal.style.pointerEvents = '';
+  }
+}
+syncRole();
+</script>
 {% endblock %}

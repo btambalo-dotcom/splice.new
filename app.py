@@ -706,6 +706,10 @@ class User(UserMixin, db.Model):
     splicer_name = db.Column(db.String(120), nullable=True)  # nome que aparece como Splicer nos lançamentos
     is_company_owner = db.Column(db.Boolean, default=False, nullable=False)  # dono de empresa: vê registros da própria empresa
     company_name = db.Column(db.String(120), nullable=True)  # nome da empresa a que o usuário pertence
+    # Permissões granulares
+    is_active = db.Column(db.Boolean, default=True, nullable=False)  # se False, login bloqueado
+    can_access_expenses = db.Column(db.Boolean, default=False, nullable=False)  # pode acessar módulo de despesas
+    can_view_values = db.Column(db.Boolean, default=True, nullable=False)  # pode ver valores financeiros nos lançamentos
 
     # Mapas interativos aos quais o usuário (splicer) tem acesso explícito.
     maps_with_access = db.relationship(
@@ -730,6 +734,8 @@ class Project(db.Model):
     name = db.Column(db.String(200), nullable=False)
     # Se None, usa o valor da empresa (CompanyConfig.included_splices)
     included_splices = db.Column(db.Integer, nullable=True)
+    # Prazo de pagamento em dias após a criação do payroll
+    payment_days = db.Column(db.Integer, nullable=True, default=30)
 
     __table_args__ = (
         db.UniqueConstraint('company', 'name', name='uq_project_company_name'),
@@ -903,6 +909,40 @@ class Expense(db.Model):
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
 
+
+
+class Payroll(db.Model):
+    """Folha de pagamento gerada pelo admin para um splicer em um período."""
+    id = db.Column(db.Integer, primary_key=True)
+    # Splicer que vai receber
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    user = db.relationship("User", foreign_keys=[user_id], backref=db.backref("payrolls", lazy=True))
+    # Período coberto
+    start_date = db.Column(db.Date, nullable=False)
+    end_date = db.Column(db.Date, nullable=False)
+    # Projeto (opcional — pode ser global ou por projeto)
+    project_id = db.Column(db.Integer, db.ForeignKey("project.id"), nullable=True)
+    project = db.relationship("Project", backref=db.backref("payrolls", lazy=True))
+    company = db.Column(db.String(120), nullable=True)
+    # Totais calculados no momento da geração
+    total_records = db.Column(db.Integer, default=0)
+    total_splices = db.Column(db.Integer, default=0)
+    total_amount_usd = db.Column(db.Float, default=0.0)
+    # Prazo de pagamento em dias (copiado do projeto no momento da criação)
+    payment_days = db.Column(db.Integer, default=30)
+    # Data limite para pagamento
+    due_date = db.Column(db.Date, nullable=True)
+    # Status
+    status = db.Column(db.String(20), default="pending")  # pending | paid | cancelled
+    paid_at = db.Column(db.DateTime, nullable=True)
+    paid_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    paid_by_user = db.relationship("User", foreign_keys=[paid_by], backref=db.backref("payrolls_paid", lazy=True))
+    # Quem criou
+    created_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    created_by_user = db.relationship("User", foreign_keys=[created_by], backref=db.backref("payrolls_created", lazy=True))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    notes = db.Column(db.Text, nullable=True)
+
 # --------- User loader ---------
 @login_manager.user_loader
 def load_user(user_id: str):
@@ -1005,6 +1045,10 @@ with app.app_context():
     ensure("user", "is_admin", "BOOLEAN")
     ensure("user", "splicer_name", "VARCHAR(120)")
     ensure("user", "is_company_owner", "BOOLEAN")
+    ensure("user", "is_active", "BOOLEAN")
+    ensure("user", "can_access_expenses", "BOOLEAN")
+    ensure("user", "can_view_values", "BOOLEAN")
+    ensure("project", "payment_days", "INTEGER")
     ensure("expense", "paid", "BOOLEAN")
     ensure("expense", "paid_at", "TIMESTAMP")
     ensure("expense", "paid_by", "INTEGER")
@@ -1016,6 +1060,15 @@ with app.app_context():
     # garante valor padrão para despesas antigas
     try:
         db.session.execute(text('UPDATE "expense" SET paid = 0 WHERE paid IS NULL'))
+        db.session.commit()
+    except Exception:
+        pass
+
+    # garante valores padrão para novas colunas de permissão de usuários
+    try:
+        db.session.execute(text('UPDATE "user" SET is_active = 1 WHERE is_active IS NULL'))
+        db.session.execute(text('UPDATE "user" SET can_access_expenses = 0 WHERE can_access_expenses IS NULL'))
+        db.session.execute(text('UPDATE "user" SET can_view_values = 1 WHERE can_view_values IS NULL'))
         db.session.commit()
     except Exception:
         pass
@@ -1032,6 +1085,9 @@ def login():
 
         user = User.query.filter_by(username=username).first()
         if user and user.password == password:
+            if not getattr(user, 'is_active', True):
+                flash("Usuário desativado. Contate o administrador.", "danger")
+                return render_template("login.html")
             login_user(user)
             flash("Login realizado com sucesso.", "success")
             next_page = request.args.get("next")
@@ -1519,6 +1575,7 @@ def index():
         start=start_raw or "",
         end=end_raw or "",
         editable_maps=editable_maps,
+        can_view_values=is_admin or getattr(current_user, 'can_view_values', True),
     )
 
 def build_filtered_record_query_from_request():
@@ -2496,13 +2553,13 @@ def photo_entry():
 @login_required
 def entry_focus_redirect(rid: int):
     """
-    Redireciona para a tela de edição de um lançamento específico.
-
-    Usado pelo botão "Abrir dispositivo" no mapa. Assim evitamos hardcode
-    de URLs diretas de /record/<id>/edit no JavaScript e mantemos as regras
-    de permissão centralizadas na view de edição.
+    Redireciona para a tela correta conforme o tipo de usuário:
+    - Admin: tela de edição completa (/record/<id>/edit)
+    - Splicer / Dono de empresa: tela de visualização (/record/<id>/view)
     """
-    return redirect(url_for("record_edit", rid=rid))
+    if bool(getattr(current_user, "is_admin", False)):
+        return redirect(url_for("record_edit", rid=rid))
+    return redirect(url_for("record_view", rid=rid))
 
 
 @app.route("/record/<int:rid>/edit", methods=["GET", "POST"])
@@ -2512,25 +2569,13 @@ def record_edit(rid):
     rec = Record.query.get_or_404(rid)
 
     # Permissões de edição:
-    # - Admin pode editar qualquer lançamento.
-    # - Dono de empresa (company_owner) apenas visualiza; não pode editar.
-    # - Splicer comum só pode editar se tiver acesso ao mapa deste lançamento.
+    # - Apenas Admin pode editar lançamentos de dispositivos já criados.
+    # - Dono de empresa e splicer comum não podem editar.
     is_admin = bool(getattr(current_user, "is_admin", False))
     is_owner = bool(getattr(current_user, "is_company_owner", False))
 
-    allowed = False
-    if is_admin:
-        allowed = True
-    elif not is_owner:
-        # usuário splicer normal: precisa ter o mapa nas permissões explícitas
-        try:
-            allowed_map_names = {m.name for m in getattr(current_user, "maps_with_access", [])}
-        except Exception:
-            allowed_map_names = set()
-        if rec.map and rec.map in allowed_map_names:
-            allowed = True
-
-    if not allowed:
+    if not is_admin:
+        flash("Apenas administradores podem editar lançamentos de dispositivos.", "danger")
         abort(403)
 
     companies = [c.name for c in CompanyConfig.query.order_by(CompanyConfig.name).all()]
@@ -3156,6 +3201,8 @@ def settings_project_detail(pid: int):
         if request.form.get("action") == "update_project":
             inc_raw = (request.form.get("included_splices") or "").strip()
             project.included_splices = int(inc_raw) if inc_raw != "" else None
+            pay_raw = (request.form.get("payment_days") or "").strip()
+            project.payment_days = int(pay_raw) if pay_raw.isdigit() else 30
             db.session.commit()
             flash("Projeto atualizado.", "success")
             return redirect(url_for("settings_project_detail", pid=project.id))
@@ -3348,6 +3395,9 @@ def manage_users():
         company_name = (request.form.get("company_name") or "").strip() or None
         is_company_owner = bool(request.form.get("is_company_owner"))
         is_admin = bool(request.form.get("is_admin"))
+        is_active = bool(request.form.get("is_active"))
+        can_access_expenses = bool(request.form.get("can_access_expenses"))
+        can_view_values = bool(request.form.get("can_view_values"))
 
         if not username or not password:
             flash("Usuário e senha são obrigatórios.", "danger")
@@ -3360,6 +3410,9 @@ def manage_users():
             user.company_name = company_name
             user.is_company_owner = is_company_owner
             user.is_admin = is_admin
+            user.is_active = is_active
+            user.can_access_expenses = can_access_expenses
+            user.can_view_values = can_view_values
         else:
             user = User(
                 username=username,
@@ -3368,6 +3421,9 @@ def manage_users():
                 company_name=company_name,
                 is_company_owner=is_company_owner,
                 is_admin=is_admin,
+                is_active=is_active,
+                can_access_expenses=can_access_expenses,
+                can_view_values=can_view_values,
             )
             db.session.add(user)
         db.session.commit()
@@ -3393,6 +3449,22 @@ def user_delete(uid: int):
     db.session.commit()
     flash("Usuário removido.", "success")
     return redirect(url_for("manage_users"))
+
+
+@app.route("/users/<int:uid>/toggle_active", methods=["POST"])
+@admin_required
+def user_toggle_active(uid: int):
+    user = User.query.get_or_404(uid)
+    if user.username == "admin":
+        flash("Não é possível desativar o usuário admin.", "danger")
+        return redirect(url_for("manage_users"))
+    user.is_active = not getattr(user, 'is_active', True)
+    db.session.commit()
+    status = "ativado" if user.is_active else "desativado"
+    flash(f"Usuário {user.username} {status}.", "success")
+    return redirect(url_for("manage_users"))
+
+
 
 @app.route("/export/pdf")
 @login_required
@@ -3803,6 +3875,360 @@ def export_invoice():
     )
 
 
+# ═══════════════════════════════════════════════════════
+# PAYROLL — Folhas de pagamento
+# ═══════════════════════════════════════════════════════
+
+@app.route("/payroll")
+@admin_required
+def payroll_list():
+    """Lista todas as folhas de pagamento."""
+    status_filter = request.args.get("status") or None
+    user_filter_raw = request.args.get("user_id") or None
+    user_filter = int(user_filter_raw) if user_filter_raw and user_filter_raw.isdigit() else None
+
+    q = Payroll.query
+    if status_filter:
+        q = q.filter(Payroll.status == status_filter)
+    if user_filter:
+        q = q.filter(Payroll.user_id == user_filter)
+
+    payrolls = q.order_by(Payroll.created_at.desc()).all()
+    splicers = User.query.filter_by(is_admin=False, is_company_owner=False).order_by(User.username).all()
+    return render_template("payroll.html",
+                           payrolls=payrolls,
+                           splicers=splicers,
+                           status_filter=status_filter or "",
+                           user_filter=user_filter or "")
+
+
+@app.route("/payroll/new", methods=["GET", "POST"])
+@admin_required
+def payroll_new():
+    """Cria uma nova folha de pagamento para um splicer."""
+    splicers = User.query.filter_by(is_admin=False, is_company_owner=False).order_by(User.username).all()
+    projects = Project.query.order_by(Project.company, Project.name).all()
+
+    if request.method == "POST":
+        user_id_raw = (request.form.get("user_id") or "").strip()
+        start_raw = (request.form.get("start_date") or "").strip()
+        end_raw = (request.form.get("end_date") or "").strip()
+        project_id_raw = (request.form.get("project_id") or "").strip()
+        notes = (request.form.get("notes") or "").strip() or None
+
+        if not user_id_raw or not start_raw or not end_raw:
+            flash("Splicer, data início e data fim são obrigatórios.", "danger")
+            return render_template("payroll_new.html", splicers=splicers, projects=projects)
+
+        try:
+            splicer_user = User.query.get(int(user_id_raw))
+            start_date = date.fromisoformat(start_raw)
+            end_date = date.fromisoformat(end_raw)
+        except Exception:
+            flash("Dados inválidos.", "danger")
+            return render_template("payroll_new.html", splicers=splicers, projects=projects)
+
+        if end_date < start_date:
+            flash("Data fim deve ser maior que data início.", "danger")
+            return render_template("payroll_new.html", splicers=splicers, projects=projects)
+
+        project_id = int(project_id_raw) if project_id_raw.isdigit() else None
+        project = Project.query.get(project_id) if project_id else None
+        company = project.company if project else None
+
+        # Calcular totais dos lançamentos do splicer no período
+        splicer_name = splicer_user.splicer_name or splicer_user.username
+        q = Record.query.filter(
+            Record.splicer == splicer_name,
+            Record.created_date >= datetime.combine(start_date, datetime.min.time()),
+            Record.created_date <= datetime.combine(end_date, datetime.max.time()),
+        )
+        if project_id:
+            q = q.filter(Record.project_id == project_id)
+        elif company:
+            q = q.filter(Record.company == company)
+
+        records = q.all()
+        total_records = len(records)
+        total_splices = sum(r.splices or 0 for r in records)
+        total_amount = sum(r.total_usd or 0.0 for r in records)
+
+        # Prazo de pagamento
+        payment_days = getattr(project, "payment_days", None) or 30
+        due_date = end_date + __import__("datetime").timedelta(days=payment_days)
+
+        payroll = Payroll(
+            user_id=splicer_user.id,
+            start_date=start_date,
+            end_date=end_date,
+            project_id=project_id,
+            company=company,
+            total_records=total_records,
+            total_splices=total_splices,
+            total_amount_usd=total_amount,
+            payment_days=payment_days,
+            due_date=due_date,
+            status="pending",
+            created_by=current_user.id,
+            notes=notes,
+        )
+        db.session.add(payroll)
+        db.session.commit()
+        flash(f"Payroll criado para {splicer_name}: {total_records} lançamentos, $ {total_amount:.2f}.", "success")
+        return redirect(url_for("payroll_list"))
+
+    return render_template("payroll_new.html", splicers=splicers, projects=projects)
+
+
+@app.route("/payroll/<int:pid>/pay", methods=["POST"])
+@admin_required
+def payroll_mark_paid(pid: int):
+    """Marca uma folha como paga."""
+    p = Payroll.query.get_or_404(pid)
+    if p.status == "paid":
+        flash("Este payroll já foi marcado como pago.", "warning")
+    else:
+        p.status = "paid"
+        p.paid_at = datetime.utcnow()
+        p.paid_by = current_user.id
+        db.session.commit()
+        flash("Payroll marcado como pago.", "success")
+    return redirect(url_for("payroll_list"))
+
+
+@app.route("/payroll/<int:pid>/cancel", methods=["POST"])
+@admin_required
+def payroll_cancel(pid: int):
+    """Cancela uma folha de pagamento."""
+    p = Payroll.query.get_or_404(pid)
+    if p.status == "paid":
+        flash("Não é possível cancelar um payroll já pago.", "danger")
+    else:
+        p.status = "cancelled"
+        db.session.commit()
+        flash("Payroll cancelado.", "warning")
+    return redirect(url_for("payroll_list"))
+
+
+@app.route("/payroll/<int:pid>/delete", methods=["POST"])
+@admin_required
+def payroll_delete(pid: int):
+    """Remove uma folha de pagamento."""
+    p = Payroll.query.get_or_404(pid)
+    db.session.delete(p)
+    db.session.commit()
+    flash("Payroll removido.", "success")
+    return redirect(url_for("payroll_list"))
+
+
+
+@app.route("/payroll/<int:pid>/pdf")
+@admin_required
+def payroll_pdf(pid: int):
+    """Gera PDF profissional do payroll para envio ao splicer."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors as rl_colors
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+    import io
+
+    p = Payroll.query.get_or_404(pid)
+    syscfg = SystemConfig.query.first()
+    splicer_name = p.user.splicer_name or p.user.username
+
+    q = Record.query.filter(
+        Record.splicer == splicer_name,
+        Record.created_date >= datetime.combine(p.start_date, datetime.min.time()),
+        Record.created_date <= datetime.combine(p.end_date, datetime.max.time()),
+    )
+    if p.project_id:
+        q = q.filter(Record.project_id == p.project_id)
+    elif p.company:
+        q = q.filter(Record.company == p.company)
+    records = q.order_by(Record.created_date).all()
+
+    C_DARK   = rl_colors.HexColor("#0f0f1a")
+    C_PURPLE = rl_colors.HexColor("#7c3aed")
+    C_GREY   = rl_colors.HexColor("#6b7280")
+    C_LIGHT  = rl_colors.HexColor("#f8f8fc")
+    C_WHITE  = rl_colors.white
+    C_GREEN  = rl_colors.HexColor("#059669")
+    C_ORANGE = rl_colors.HexColor("#d97706")
+    C_ROW_ALT= rl_colors.HexColor("#f3f4f6")
+    C_BORDER = rl_colors.HexColor("#e5e7eb")
+    BASE = getSampleStyleSheet()["Normal"]
+
+    def PS(name, **kw):
+        d = dict(fontName="Helvetica",fontSize=10,textColor=C_DARK,leading=14,parent=BASE)
+        d.update(kw)
+        return ParagraphStyle(name, **d)
+
+    S_TH  = PS("th2", fontName="Helvetica-Bold",fontSize=8, textColor=C_WHITE, leading=10,alignment=TA_CENTER)
+    S_TD  = PS("td2", fontName="Helvetica",     fontSize=8, textColor=C_DARK,  leading=10)
+    S_TDR = PS("tdr2",fontName="Helvetica",     fontSize=8, textColor=C_DARK,  leading=10,alignment=TA_RIGHT)
+    S_TDC = PS("tdc2",fontName="Helvetica",     fontSize=8, textColor=C_DARK,  leading=10,alignment=TA_CENTER)
+    S_TL  = PS("tl2", fontName="Helvetica-Bold",fontSize=9, textColor=C_WHITE, leading=12)
+    S_TR  = PS("tr2", fontName="Helvetica-Bold",fontSize=9, textColor=C_WHITE, leading=12,alignment=TA_RIGHT)
+    S_NOTE= PS("nt2", fontName="Helvetica",     fontSize=8, textColor=C_GREY,  leading=11)
+    S_LBL = PS("lb2", fontName="Helvetica-Bold",fontSize=8, textColor=C_GREY,  leading=11,spaceAfter=1)
+    S_VAL = PS("vl2", fontName="Helvetica",     fontSize=11,textColor=C_DARK,  leading=15)
+    S_VLB = PS("vb2", fontName="Helvetica-Bold",fontSize=13,textColor=C_DARK,  leading=18)
+
+    company_name  = (syscfg.my_company_name  if syscfg else None) or "SPLICER"
+    company_addr  = (syscfg.my_company_address if syscfg else None) or ""
+    company_email = (syscfg.my_company_email if syscfg else None) or ""
+    company_phone = (syscfg.my_company_phone if syscfg else None) or ""
+    sub_parts = [x for x in [company_addr, company_email, company_phone] if x]
+
+    status_map   = {"pending":"PENDENTE","paid":"PAGO","cancelled":"CANCELADO"}
+    status_text  = status_map.get(p.status, p.status.upper())
+    status_color = C_GREEN if p.status=="paid" else (C_ORANGE if p.status=="pending" else C_GREY)
+
+    period_str  = f"{p.start_date.strftime('%d/%m/%Y')} → {p.end_date.strftime('%d/%m/%Y')}"
+    due_str     = p.due_date.strftime('%d/%m/%Y') if p.due_date else "—"
+    project_str = p.project.name if p.project else (p.company or "Todos os projetos")
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+        leftMargin=20*mm, rightMargin=20*mm, topMargin=20*mm, bottomMargin=20*mm,
+        title=f"Payroll #{p.id:04d} — {splicer_name}")
+    W = A4[0] - 40*mm
+    story = []
+
+    # Header
+    hdr = Table([[
+        Paragraph(company_name, PS("cnx",fontName="Helvetica-Bold",fontSize=16,textColor=C_DARK,leading=20)),
+        Paragraph(f"PAYROLL  #{p.id:04d}", PS("pidx",fontName="Helvetica-Bold",fontSize=20,textColor=C_PURPLE,leading=24,alignment=TA_RIGHT)),
+    ]],colWidths=[W*0.55,W*0.45])
+    hdr.setStyle(TableStyle([("VALIGN",(0,0),(-1,-1),"MIDDLE"),("BOTTOMPADDING",(0,0),(-1,-1),4)]))
+    story.append(hdr)
+    if sub_parts:
+        story.append(Paragraph(" · ".join(sub_parts), PS("addrx",fontName="Helvetica",fontSize=9,textColor=C_GREY,leading=13)))
+    story.append(Spacer(1,4*mm))
+    story.append(HRFlowable(width="100%",thickness=2,color=C_PURPLE,spaceAfter=5*mm))
+
+    # Info cards
+    cw = W/3
+    def cell(lbl,val,vs=None):
+        return Table([[Paragraph(lbl,S_LBL)],[Paragraph(val,vs or S_VAL)]],colWidths=[cw-4*mm])
+    def cards(row):
+        t = Table([row],colWidths=[cw]*3)
+        t.setStyle(TableStyle([
+            ("BACKGROUND",(0,0),(-1,-1),C_LIGHT),
+            ("LEFTPADDING",(0,0),(-1,-1),5*mm),("RIGHTPADDING",(0,0),(-1,-1),3*mm),
+            ("TOPPADDING",(0,0),(-1,-1),3*mm),("BOTTOMPADDING",(0,0),(-1,-1),3*mm),
+            ("VALIGN",(0,0),(-1,-1),"TOP"),
+            ("LINEAFTER",(0,0),(1,0),0.5,C_BORDER),("BOX",(0,0),(-1,-1),0.5,C_BORDER),
+        ]))
+        return t
+    story.append(cards([cell("SPLICER",splicer_name,S_VLB),cell("PERÍODO",period_str),cell("PROJETO / EMPRESA",project_str)]))
+    story.append(Spacer(1,2*mm))
+    story.append(cards([
+        cell("VENCIMENTO",due_str),
+        cell("PRAZO DE PAGAMENTO",f"{p.payment_days} dias"),
+        cell("STATUS",status_text,PS("stx2",fontName="Helvetica-Bold",fontSize=11,textColor=status_color,leading=15)),
+    ]))
+    story.append(Spacer(1,6*mm))
+
+    # Totals
+    tw = W/3
+    tot_tbl = Table([
+        [Paragraph(str(p.total_records),PS("v1x",fontName="Helvetica-Bold",fontSize=26,textColor=C_PURPLE,leading=30,alignment=TA_CENTER)),
+         Paragraph(str(p.total_splices), PS("v2x",fontName="Helvetica-Bold",fontSize=26,textColor=C_PURPLE,leading=30,alignment=TA_CENTER)),
+         Paragraph(f"$ {p.total_amount_usd:,.2f}",PS("v3x",fontName="Helvetica-Bold",fontSize=20,textColor=C_GREEN,leading=24,alignment=TA_CENTER))],
+        [Paragraph("LANÇAMENTOS",PS("l1x",fontName="Helvetica",fontSize=8,textColor=rl_colors.HexColor("#9ca3af"),leading=10,alignment=TA_CENTER)),
+         Paragraph("FUSÕES",     PS("l2x",fontName="Helvetica",fontSize=8,textColor=rl_colors.HexColor("#9ca3af"),leading=10,alignment=TA_CENTER)),
+         Paragraph("VALOR TOTAL USD",PS("l3x",fontName="Helvetica",fontSize=8,textColor=rl_colors.HexColor("#9ca3af"),leading=10,alignment=TA_CENTER))],
+    ],colWidths=[tw]*3)
+    tot_tbl.setStyle(TableStyle([
+        ("BACKGROUND",(0,0),(-1,-1),C_DARK),
+        ("TOPPADDING",(0,0),(-1,0),5*mm),("BOTTOMPADDING",(0,0),(-1,0),2*mm),
+        ("TOPPADDING",(0,1),(-1,1),1*mm),("BOTTOMPADDING",(0,1),(-1,1),5*mm),
+        ("LEFTPADDING",(0,0),(-1,-1),4*mm),("RIGHTPADDING",(0,0),(-1,-1),4*mm),
+        ("LINEAFTER",(0,0),(1,-1),0.5,rl_colors.HexColor("#2d2d4e")),
+    ]))
+    story += [tot_tbl, Spacer(1,6*mm)]
+    story.append(Paragraph("DETALHAMENTO DOS LANÇAMENTOS",PS("secx",fontName="Helvetica-Bold",fontSize=9,textColor=C_PURPLE,leading=12,spaceAfter=3*mm)))
+
+    CW = [22*mm,32*mm,34*mm,22*mm,17*mm,18*mm,18*mm,20*mm]
+    rows = [[Paragraph(h,S_TH) for h in ["DATA","MAPA","DEVICE","TIPO","FUSÕES","$ FUSÕES","$ DEVICE","$ TOTAL"]]]
+    for r in records:
+        rows.append([
+            Paragraph(r.created_date.strftime("%d/%m/%Y") if r.created_date else "—",S_TDC),
+            Paragraph((r.map or "—")[:25],S_TD),
+            Paragraph((r.device or "—")[:28],S_TD),
+            Paragraph((r.type or "—")[:16],S_TDC),
+            Paragraph(str(r.splices or 0),S_TDC),
+            Paragraph(f"${r.price_splices_usd or 0:.2f}",S_TDR),
+            Paragraph(f"${r.price_device_usd or 0:.2f}",S_TDR),
+            Paragraph(f"${r.total_usd or 0:.2f}",S_TDR),
+        ])
+    nr = len(rows)
+    rows.append([
+        Paragraph("TOTAL GERAL",S_TL),Paragraph("",S_NOTE),Paragraph("",S_NOTE),Paragraph("",S_NOTE),
+        Paragraph(str(sum(r.splices or 0 for r in records)),S_TR),
+        Paragraph(f"${sum(r.price_splices_usd or 0 for r in records):.2f}",S_TR),
+        Paragraph(f"${sum(r.price_device_usd or 0 for r in records):.2f}",S_TR),
+        Paragraph(f"${sum(r.total_usd or 0 for r in records):.2f}",S_TR),
+    ])
+    if not records:
+        rows.append([Paragraph("Nenhum lançamento encontrado.",S_NOTE)]+[Paragraph("",S_NOTE)]*7)
+    rt = Table(rows,colWidths=CW,repeatRows=1)
+    ts2 = TableStyle([
+        ("BACKGROUND",(0,0),(-1,0),C_PURPLE),
+        ("TOPPADDING",(0,0),(-1,0),3*mm),("BOTTOMPADDING",(0,0),(-1,0),3*mm),
+        ("TOPPADDING",(0,1),(-1,-2),2*mm),("BOTTOMPADDING",(0,1),(-1,-2),2*mm),
+        ("LEFTPADDING",(0,0),(-1,-1),2*mm),("RIGHTPADDING",(0,0),(-1,-1),2*mm),
+        ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+        ("GRID",(0,0),(-1,-2),0.3,C_BORDER),
+        ("BACKGROUND",(0,nr),(-1,nr),C_DARK),
+        ("TOPPADDING",(0,nr),(-1,nr),3*mm),("BOTTOMPADDING",(0,nr),(-1,nr),3*mm),
+        ("SPAN",(0,nr),(3,nr)),
+    ])
+    for i in range(1,nr):
+        if i%2==0: ts2.add("BACKGROUND",(0,i),(-1,i),C_ROW_ALT)
+    rt.setStyle(ts2)
+    story += [rt, Spacer(1,8*mm)]
+
+    if p.notes:
+        story += [HRFlowable(width="100%",thickness=0.5,color=C_BORDER,spaceAfter=3*mm),
+                  Paragraph("OBSERVAÇÕES",PS("nhx",fontName="Helvetica-Bold",fontSize=8,textColor=C_GREY,leading=11,spaceAfter=2*mm)),
+                  Paragraph(p.notes,S_NOTE),Spacer(1,6*mm)]
+
+    story.append(HRFlowable(width="100%",thickness=0.5,color=C_BORDER,spaceAfter=3*mm))
+    ft = Table([[
+        Paragraph(f"Gerado em {datetime.utcnow().strftime('%d/%m/%Y %H:%M')} UTC  —  {company_name}", S_NOTE),
+        Paragraph(f"Payroll #{p.id:04d}",PS("frx",fontName="Helvetica",fontSize=8,textColor=C_GREY,leading=11,alignment=TA_RIGHT)),
+    ]],colWidths=[W*0.7,W*0.3])
+    ft.setStyle(TableStyle([("VALIGN",(0,0),(-1,-1),"MIDDLE")]))
+    story.append(ft)
+
+    doc.build(story)
+    buf.seek(0)
+    filename = f"payroll_{p.id:04d}_{splicer_name.replace(' ','_')}.pdf"
+    return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=filename)
+
+
+
+@app.route("/payroll/<int:pid>/detail")
+@admin_required
+def payroll_detail(pid: int):
+    """Detalhe de um payroll: lista os lançamentos do período."""
+    p = Payroll.query.get_or_404(pid)
+    splicer_name = p.user.splicer_name or p.user.username
+    q = Record.query.filter(
+        Record.splicer == splicer_name,
+        Record.created_date >= datetime.combine(p.start_date, datetime.min.time()),
+        Record.created_date <= datetime.combine(p.end_date, datetime.max.time()),
+    )
+    if p.project_id:
+        q = q.filter(Record.project_id == p.project_id)
+    elif p.company:
+        q = q.filter(Record.company == p.company)
+    records = q.order_by(Record.created_date).all()
+    return render_template("payroll_detail.html", payroll=p, records=records)
 
 
 
@@ -3978,9 +4404,9 @@ def expenses():
     is_admin = getattr(current_user, "is_admin", False)
     is_owner = getattr(current_user, "is_company_owner", False)
 
-    # Dono de empresa não tem acesso ao módulo de despesas (mantém sistema como estava)
-    if is_owner and not is_admin:
-        flash("Você não tem acesso a este módulo.", "danger")
+    # Apenas admin ou usuários com permissão explícita podem acessar despesas
+    if not is_admin and not getattr(current_user, 'can_access_expenses', False):
+        flash("Você não tem permissão para acessar o módulo de despesas.", "danger")
         return redirect(url_for("index"))
 
     if request.method == "POST":
@@ -4176,9 +4602,9 @@ def expenses_delete(expense_id):
     is_admin = getattr(current_user, "is_admin", False)
     is_owner = getattr(current_user, "is_company_owner", False)
 
-    # Dono de empresa não tem acesso ao módulo de despesas (mantém sistema como estava)
-    if is_owner and not is_admin:
-        flash("Você não tem acesso a este módulo.", "danger")
+    # Apenas admin ou usuários com permissão explícita podem acessar despesas
+    if not is_admin and not getattr(current_user, 'can_access_expenses', False):
+        flash("Você não tem permissão para acessar o módulo de despesas.", "danger")
         return redirect(url_for("index"))
 
     exp = Expense.query.get_or_404(expense_id)

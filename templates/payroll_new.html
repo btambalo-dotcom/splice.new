@@ -1,0 +1,128 @@
+{% extends 'base.html' %}
+{% block title %}Novo Payroll · SPLICER{% endblock %}
+{% block content %}
+<style>
+  .pay-card { background:#1e1e2e; border:1px solid #2a2a3e; border-radius:12px; }
+  .section-title { font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; color:#555; font-weight:600; margin-bottom:.75rem; }
+  .form-control, .form-select { background:#12121c !important; border-color:#2a2a3e !important; color:#ddd !important; }
+  .form-control:focus, .form-select:focus { border-color:#8b5cf6 !important; box-shadow:0 0 0 2px rgba(139,92,246,.18) !important; }
+  .form-control::placeholder { color:#444 !important; }
+  .btn-create { background:#8b5cf6; border:none; color:#fff; font-weight:500; border-radius:8px; }
+  .btn-create:hover { background:#7c3aed; color:#fff; }
+  .info-box { background:#12121c; border:1px solid #2a2a3e; border-radius:8px; padding:1rem; }
+  .info-row { display:flex; justify-content:space-between; padding:.3rem 0; border-bottom:1px solid #1e1e2e; font-size:.85rem; }
+  .info-row:last-child { border-bottom:none; }
+  .info-label { color:#666; }
+  .info-val { color:#e0e0e0; font-weight:500; }
+</style>
+
+<div class="d-flex align-items-center gap-3 mb-4">
+  <a href="{{ url_for('payroll_list') }}" class="btn btn-sm btn-outline-secondary">← Voltar</a>
+  <div>
+    <h4 class="mb-0 fw-semibold">Novo Payroll</h4>
+    <p class="text-secondary mb-0" style="font-size:.82rem;">Gerar folha de pagamento para um splicer</p>
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-6">
+    <div class="pay-card p-4">
+      <p class="section-title">Configuração da folha</p>
+      <form method="post" id="payrollForm">
+
+        <div class="mb-3">
+          <label class="form-label small text-secondary mb-1">Splicer</label>
+          <select class="form-select form-select-sm" name="user_id" id="sel_splicer" required onchange="updatePreview()">
+            <option value="">— Selecione o splicer —</option>
+            {% for s in splicers %}
+            <option value="{{ s.id }}">{{ s.splicer_name or s.username }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="row g-2 mb-3">
+          <div class="col-6">
+            <label class="form-label small text-secondary mb-1">Data início</label>
+            <input class="form-control form-control-sm" type="date" name="start_date" id="sel_start" required onchange="updatePreview()">
+          </div>
+          <div class="col-6">
+            <label class="form-label small text-secondary mb-1">Data fim</label>
+            <input class="form-control form-control-sm" type="date" name="end_date" id="sel_end" required onchange="updatePreview()">
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label small text-secondary mb-1">Projeto <span class="text-muted">(opcional)</span></label>
+          <select class="form-select form-select-sm" name="project_id" id="sel_project" onchange="updatePreview()">
+            <option value="">— Todos os projetos —</option>
+            {% for pr in projects %}
+            <option value="{{ pr.id }}" data-days="{{ pr.payment_days or 30 }}" data-company="{{ pr.company }}">
+              {{ pr.company }} · {{ pr.name }} ({{ pr.payment_days or 30 }}d prazo)
+            </option>
+            {% endfor %}
+          </select>
+          <div class="form-text" style="color:#555;font-size:.73rem;">Se vazio, inclui lançamentos de todos os projetos do splicer no período.</div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label small text-secondary mb-1">Observações <span class="text-muted">(opcional)</span></label>
+          <textarea class="form-control form-control-sm" name="notes" rows="2" placeholder="Ex.: Referente ao trabalho no projeto X, semana Y..."></textarea>
+        </div>
+
+        <div class="mt-4">
+          <button class="btn btn-create w-100">Gerar Payroll</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <div class="pay-card p-4">
+      <p class="section-title">Resumo estimado</p>
+      <div class="info-box" id="preview_box">
+        <div class="info-row"><span class="info-label">Splicer</span><span class="info-val" id="prev_splicer">—</span></div>
+        <div class="info-row"><span class="info-label">Período</span><span class="info-val" id="prev_period">—</span></div>
+        <div class="info-row"><span class="info-label">Projeto</span><span class="info-val" id="prev_project">Todos</span></div>
+        <div class="info-row"><span class="info-label">Prazo de pagamento</span><span class="info-val" id="prev_days">30 dias</span></div>
+        <div class="info-row"><span class="info-label">Vencimento estimado</span><span class="info-val" id="prev_due">—</span></div>
+      </div>
+      <div class="mt-3 p-3" style="background:#12121c;border:1px solid #2a2a3e;border-radius:8px;font-size:.8rem;color:#666;">
+        💡 Os totais de lançamentos, fusões e valor serão calculados automaticamente ao gerar o payroll com base nos registros do período.
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function updatePreview() {
+  const splicerEl = document.getElementById('sel_splicer');
+  const startEl   = document.getElementById('sel_start');
+  const endEl     = document.getElementById('sel_end');
+  const projEl    = document.getElementById('sel_project');
+
+  const splicerText = splicerEl.options[splicerEl.selectedIndex]?.text || '—';
+  document.getElementById('prev_splicer').textContent = splicerEl.value ? splicerText : '—';
+
+  const start = startEl.value;
+  const end   = endEl.value;
+  if (start && end) {
+    const s = new Date(start), e = new Date(end);
+    document.getElementById('prev_period').textContent =
+      s.toLocaleDateString('pt-BR') + ' → ' + e.toLocaleDateString('pt-BR');
+    const days = projEl.options[projEl.selectedIndex]?.dataset.days || 30;
+    document.getElementById('prev_days').textContent = days + ' dias';
+    const due = new Date(e);
+    due.setDate(due.getDate() + parseInt(days));
+    document.getElementById('prev_due').textContent = due.toLocaleDateString('pt-BR');
+  } else {
+    document.getElementById('prev_period').textContent = '—';
+    document.getElementById('prev_due').textContent = '—';
+  }
+
+  const projText = projEl.value
+    ? projEl.options[projEl.selectedIndex]?.text || 'Todos'
+    : 'Todos os projetos';
+  document.getElementById('prev_project').textContent = projText;
+}
+</script>
+{% endblock %}

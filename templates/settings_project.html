@@ -14,6 +14,11 @@
           <input class="form-control" name="included_splices" type="number" min="0" value="{{ project.included_splices if project.included_splices is not none else '' }}" placeholder="(vazio = usa o valor da empresa)">
           <div class="form-text">Se deixar vazio, o sistema usa as fusões inclusas configuradas na empresa.</div>
         </div>
+        <div class="col-12 mt-2">
+          <label class="form-label">Prazo de pagamento (dias) <span class="text-muted" style="font-weight:400;font-size:.85em;">após criação do payroll</span></label>
+          <input class="form-control" name="payment_days" type="number" min="1" max="365" value="{{ project.payment_days if project.payment_days is not none else 30 }}" placeholder="30">
+          <div class="form-text">Usado para calcular a data de vencimento no payroll.</div>
+        </div>
         <div class="col-12">
           <button class="btn btn-primary w-100" type="submit">Salvar</button>
         </div>

@@ -13,8 +13,9 @@
   </div>
   <div class="col-md-4">
     <div class="card p-3">
-      <span class="text-secondary">Valor total acumulado (USD)</span>
-      <h2 class="mb-0">$ {{ '%.2f'|format(total_amount or 0) }}</h2>
+      {% if can_view_values %}<span class="text-secondary">Valor total acumulado (USD)</span>
+      <h2 class="mb-0">$ {{ '%.2f'|format(total_amount or 0) }}</h2>{% else %}<span class="text-secondary">Valor total acumulado</span>
+      <h2 class="mb-0 text-secondary">—</h2>{% endif %}
     </div>
   </div>
   <div class="col-md-4">
@@ -134,9 +135,9 @@ mb-3">Registros</h5>
           <th>Device</th>
           <th>Splicer</th>
           <th>Splices</th>
-          <th>$ Fusões</th>
+          {% if can_view_values %}<th>$ Fusões</th>
           <th>$ Device</th>
-          <th>$ Total</th>
+          <th>$ Total</th>{% endif %}
           <th>Fotos</th>
           <th></th>
         </tr>
@@ -152,9 +153,9 @@ mb-3">Registros</h5>
             <td>{{ r.device }}</td>
             <td>{{ r.splicer }}</td>
             <td>{{ r.splices }}</td>
-            <td>$ {{ '%.2f'|format(r.price_splices_usd or 0) }}</td>
+            {% if can_view_values %}<td>$ {{ '%.2f'|format(r.price_splices_usd or 0) }}</td>
             <td>$ {{ '%.2f'|format(r.price_device_usd or 0) }}</td>
-            <td>$ {{ '%.2f'|format(r.total_usd or 0) }}</td>
+            <td>$ {{ '%.2f'|format(r.total_usd or 0) }}</td>{% endif %}
             <td>
               {% if r.photos|length > 0 %}
               <button type="button"
@@ -169,12 +170,7 @@ mb-3">Registros</h5>
               {% endif %}
             </td>
             <td class="text-end">
-              {% set can_edit = false %}
-              {% if current_user.is_admin %}
-                {% set can_edit = true %}
-              {% elif (not current_user.is_company_owner) and (editable_maps and (r.map in editable_maps)) %}
-                {% set can_edit = true %}
-              {% endif %}
+              {% set can_edit = current_user.is_admin %}
               {% if can_edit %}
               <a href="{{ url_for('record_edit', rid=r.id) }}" class="btn btn-sm btn-outline-primary me-1">Editar</a>
               {% endif %}

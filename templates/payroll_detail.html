@@ -1,0 +1,164 @@
+{% extends 'base.html' %}
+{% block title %}Payroll #{{ payroll.id }} · SPLICER{% endblock %}
+{% block content %}
+<style>
+  .pay-card { background:#1e1e2e; border:1px solid #2a2a3e; border-radius:12px; }
+  .section-title { font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; color:#555; font-weight:600; margin-bottom:.75rem; }
+  .info-row { display:flex; justify-content:space-between; align-items:center; padding:.5rem 0; border-bottom:1px solid #1e1e2e; font-size:.85rem; }
+  .info-row:last-child { border-bottom:none; }
+  .info-label { color:#666; }
+  .info-val { color:#e0e0e0; font-weight:500; }
+  .badge-pending   { background:rgba(251,191,36,.12); color:#fbbf24; border:1px solid rgba(251,191,36,.25); }
+  .badge-paid      { background:rgba(16,185,129,.12); color:#10b981; border:1px solid rgba(16,185,129,.25); }
+  .badge-cancelled { background:rgba(107,114,128,.1); color:#6b7280; border:1px solid rgba(107,114,128,.2); }
+  .badge-pay { font-size:.75rem; padding:.3em .75em; border-radius:20px; font-weight:500; }
+  .stat-box { background:#12121c; border:1px solid #2a2a3e; border-radius:8px; padding:1rem; text-align:center; }
+</style>
+
+<div class="d-flex align-items-center gap-3 mb-4 flex-wrap">
+  <a href="{{ url_for('payroll_list') }}" class="btn btn-sm btn-outline-secondary">← Voltar</a>
+  <div>
+    <h4 class="mb-0 fw-semibold">Payroll #{{ payroll.id }}</h4>
+    <p class="text-secondary mb-0" style="font-size:.82rem;">
+      {{ payroll.user.splicer_name or payroll.user.username }} ·
+      {{ payroll.start_date.strftime('%d/%m/%Y') }} → {{ payroll.end_date.strftime('%d/%m/%Y') }}
+    </p>
+  </div>
+  <div class="ms-auto d-flex gap-2 align-items-center">
+    <a href="{{ url_for('payroll_pdf', pid=payroll.id) }}" class="btn btn-sm btn-outline-info">📄 Baixar PDF</a>
+  </div>
+  <div>
+    {% if payroll.status == 'pending' %}
+      <span class="badge-pay badge-pending">⏳ Pendente</span>
+    {% elif payroll.status == 'paid' %}
+      <span class="badge-pay badge-paid">✅ Pago</span>
+    {% else %}
+      <span class="badge-pay badge-cancelled">✕ Cancelado</span>
+    {% endif %}
+  </div>
+  </div>
+</div>
+
+<div class="row g-4 mb-4">
+  <!-- Info do payroll -->
+  <div class="col-lg-4">
+    <div class="pay-card p-4 h-100">
+      <p class="section-title">Dados da folha</p>
+      <div class="info-row"><span class="info-label">Splicer</span><span class="info-val">{{ payroll.user.splicer_name or payroll.user.username }}</span></div>
+      <div class="info-row"><span class="info-label">Período início</span><span class="info-val">{{ payroll.start_date.strftime('%d/%m/%Y') }}</span></div>
+      <div class="info-row"><span class="info-label">Período fim</span><span class="info-val">{{ payroll.end_date.strftime('%d/%m/%Y') }}</span></div>
+      <div class="info-row"><span class="info-label">Projeto</span><span class="info-val">{{ payroll.project.name if payroll.project else '—' }}</span></div>
+      <div class="info-row"><span class="info-label">Empresa</span><span class="info-val">{{ payroll.company or '—' }}</span></div>
+      <div class="info-row"><span class="info-label">Prazo pagamento</span><span class="info-val">{{ payroll.payment_days }} dias</span></div>
+      <div class="info-row"><span class="info-label">Vencimento</span>
+        <span class="info-val">{{ payroll.due_date.strftime('%d/%m/%Y') if payroll.due_date else '—' }}</span>
+      </div>
+      {% if payroll.paid_at %}
+      <div class="info-row"><span class="info-label">Pago em</span><span class="info-val" style="color:#10b981;">{{ payroll.paid_at.strftime('%d/%m/%Y') }}</span></div>
+      {% endif %}
+      {% if payroll.notes %}
+      <div class="mt-3 p-2 rounded" style="background:#12121c;font-size:.8rem;color:#aaa;">
+        📝 {{ payroll.notes }}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Totais -->
+  <div class="col-lg-8">
+    <div class="row g-3 mb-3">
+      <div class="col-4">
+        <div class="stat-box">
+          <div class="text-secondary" style="font-size:.72rem;">Lançamentos</div>
+          <div class="fw-bold fs-3" style="color:#a78bfa;">{{ payroll.total_records }}</div>
+        </div>
+      </div>
+      <div class="col-4">
+        <div class="stat-box">
+          <div class="text-secondary" style="font-size:.72rem;">Fusões</div>
+          <div class="fw-bold fs-3" style="color:#60a5fa;">{{ payroll.total_splices }}</div>
+        </div>
+      </div>
+      <div class="col-4">
+        <div class="stat-box">
+          <div class="text-secondary" style="font-size:.72rem;">Valor Total (USD)</div>
+          <div class="fw-bold fs-4" style="color:#10b981;">$ {{ '%.2f'|format(payroll.total_amount_usd or 0) }}</div>
+        </div>
+      </div>
+    </div>
+
+    {% if payroll.status == 'pending' %}
+    <div class="pay-card p-3">
+      <p class="section-title">Ações</p>
+      <div class="d-flex gap-2 flex-wrap">
+        <form method="post" action="{{ url_for('payroll_mark_paid', pid=payroll.id) }}">
+          <button type="submit" class="btn btn-sm btn-success"
+                  onclick="return confirm('Confirmar pagamento deste payroll?');">✅ Marcar como Pago</button>
+        </form>
+        <form method="post" action="{{ url_for('payroll_cancel', pid=payroll.id) }}">
+          <button type="submit" class="btn btn-sm btn-outline-warning"
+                  onclick="return confirm('Cancelar este payroll?');">⏸ Cancelar</button>
+        </form>
+        <form method="post" action="{{ url_for('payroll_delete', pid=payroll.id) }}">
+          <button type="submit" class="btn btn-sm btn-outline-danger"
+                  onclick="return confirm('Remover permanentemente?');">✕ Remover</button>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Lançamentos do período -->
+<div class="pay-card p-4">
+  <p class="section-title">Lançamentos do período ({{ records|length }})</p>
+  {% if records %}
+  <div class="table-responsive">
+    <table class="table table-sm table-dark align-middle mb-0"
+           style="font-size:.82rem;--bs-table-bg:#1e1e2e;--bs-table-border-color:#2a2a3e;--bs-table-color:#ccc;">
+      <thead>
+        <tr style="font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;color:#444;">
+          <th>Data</th>
+          <th>Empresa</th>
+          <th>Mapa</th>
+          <th>Device</th>
+          <th>Tipo</th>
+          <th style="text-align:center;">Fusões</th>
+          <th style="text-align:right;">$ Fusões</th>
+          <th style="text-align:right;">$ Device</th>
+          <th style="text-align:right;">$ Total</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in records %}
+        <tr style="border-color:#1e1e2e;">
+          <td style="color:#888;white-space:nowrap;">{{ r.created_date.strftime('%d/%m/%y') if r.created_date else '—' }}</td>
+          <td style="color:#777;">{{ r.company or '—' }}</td>
+          <td style="color:#aaa;">{{ r.map or '—' }}</td>
+          <td style="color:#e0e0e0;font-weight:500;">{{ r.device or '—' }}</td>
+          <td style="color:#888;">{{ r.type or '—' }}</td>
+          <td style="text-align:center;">{{ r.splices or 0 }}</td>
+          <td style="text-align:right;color:#a78bfa;">$ {{ '%.2f'|format(r.price_splices_usd or 0) }}</td>
+          <td style="text-align:right;color:#60a5fa;">$ {{ '%.2f'|format(r.price_device_usd or 0) }}</td>
+          <td style="text-align:right;color:#10b981;font-weight:500;">$ {{ '%.2f'|format(r.total_usd or 0) }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr style="border-top:2px solid #2a2a3e;font-weight:600;">
+          <td colspan="5" style="color:#666;font-size:.72rem;text-transform:uppercase;">Total</td>
+          <td style="text-align:center;color:#ccc;">{{ records|sum(attribute='splices') }}</td>
+          <td style="text-align:right;color:#a78bfa;">$ {{ '%.2f'|format(records|sum(attribute='price_splices_usd')) }}</td>
+          <td style="text-align:right;color:#60a5fa;">$ {{ '%.2f'|format(records|sum(attribute='price_device_usd')) }}</td>
+          <td style="text-align:right;color:#10b981;">$ {{ '%.2f'|format(records|sum(attribute='total_usd')) }}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  {% else %}
+  <div class="text-center py-4" style="color:#444;font-size:.85rem;">
+    Nenhum lançamento encontrado para este período.
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
