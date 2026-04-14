@@ -1022,6 +1022,28 @@ with app.app_context():
     db.create_all()
     ensure_db_schema()
 
+    # ── Migração crítica das colunas novas do user ──
+    # DEVE rodar ANTES de qualquer User.query para evitar
+    # "column does not exist" no PostgreSQL (Render/Gunicorn)
+    try:
+        _insp = inspect(db.engine)
+        _existing_user_cols = [c["name"] for c in _insp.get_columns("user")]
+
+        def _ensure_user_col(col, typ, default_sql):
+            if col not in _existing_user_cols:
+                try:
+                    db.session.execute(text(f'ALTER TABLE "user" ADD COLUMN {col} {typ}'))
+                    db.session.execute(text(f'UPDATE "user" SET {col} = {default_sql} WHERE {col} IS NULL'))
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
+
+        _ensure_user_col("is_active",          "BOOLEAN", "TRUE")
+        _ensure_user_col("can_access_expenses", "BOOLEAN", "FALSE")
+        _ensure_user_col("can_view_values",     "BOOLEAN", "TRUE")
+    except Exception:
+        pass
+
     # garante usuário padrão
     if not User.query.filter_by(username="admin").first():
         db.session.add(User(username="admin", password="admin", is_admin=True, splicer_name="ADMIN"))
