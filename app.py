@@ -951,6 +951,44 @@ def load_user(user_id: str):
     except Exception:
         return None
 
+# Garante migração antes da primeira requisição (necessário no Render/Gunicorn)
+_migration_done = False
+
+@app.before_request
+def run_migration_once():
+    global _migration_done
+    if _migration_done:
+        return
+    _migration_done = True
+    try:
+        from sqlalchemy import inspect as sa_inspect, text as sa_text
+        insp = sa_inspect(db.engine)
+
+        def _ensure(table, col, typ):
+            try:
+                existing = [c["name"] for c in insp.get_columns(table)]
+                if col not in existing:
+                    db.session.execute(sa_text(f'ALTER TABLE "{table}" ADD COLUMN {col} {typ}'))
+                    db.session.commit()
+            except Exception:
+                db.session.rollback()
+
+        _ensure("user", "is_active",           "BOOLEAN DEFAULT TRUE")
+        _ensure("user", "can_access_expenses",  "BOOLEAN DEFAULT FALSE")
+        _ensure("user", "can_view_values",      "BOOLEAN DEFAULT TRUE")
+        _ensure("project", "payment_days",      "INTEGER DEFAULT 30")
+
+        # Preenche valores padrão para registros existentes (Postgres)
+        try:
+            db.session.execute(sa_text('UPDATE "user" SET is_active = TRUE WHERE is_active IS NULL'))
+            db.session.execute(sa_text('UPDATE "user" SET can_access_expenses = FALSE WHERE can_access_expenses IS NULL'))
+            db.session.execute(sa_text('UPDATE "user" SET can_view_values = TRUE WHERE can_view_values IS NULL'))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+    except Exception:
+        pass
+
 def ensure_db_schema():
     """Best-effort schema updates (no destructive changes)."""
     try:
