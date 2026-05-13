@@ -2,7 +2,44 @@
 {% extends 'base.html' %}
 {% block title %}Empresa {{ company.name }} · SPLICER{% endblock %}
 {% block content %}
-<h3 class="mb-3">Empresa: {{ company.name }}</h3>
+
+<div class="d-flex align-items-center gap-3 mb-4 flex-wrap">
+  <h3 class="mb-0">Empresa: {{ company.name }}</h3>
+  <div class="ms-auto d-flex gap-2">
+    <button class="btn btn-outline-warning btn-sm"
+            onclick="document.getElementById('rename-panel').classList.toggle('d-none')">
+      ✏️ Renomear
+    </button>
+    {% set confirm_delete = request.args.get('confirm_delete') %}
+    {% if confirm_delete %}
+      <form method="post" onsubmit="return confirm('ATENÇÃO: isso apagará TODOS os dados desta empresa. Confirma?')">
+        <input type="hidden" name="action" value="delete">
+        <input type="hidden" name="force" value="1">
+        <button class="btn btn-danger btn-sm">⚠️ Confirmar exclusão total</button>
+      </form>
+    {% else %}
+      <form method="post">
+        <input type="hidden" name="action" value="delete">
+        <button class="btn btn-outline-danger btn-sm" type="submit">🗑 Excluir empresa</button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Painel de renomear (toggle) -->
+<div id="rename-panel" class="card p-3 mb-4 d-none border-warning" style="border-width:1px!important;">
+  <form method="post" class="row g-2 align-items-end">
+    <input type="hidden" name="action" value="rename">
+    <div class="col-md-8">
+      <label class="form-label form-label-sm text-warning">Novo nome da empresa</label>
+      <input class="form-control form-control-sm" name="new_name" value="{{ company.name }}" required>
+      <div class="form-text">Isso atualizará o nome em todos os projetos, registros, invoices e payrolls vinculados.</div>
+    </div>
+    <div class="col-md-4">
+      <button class="btn btn-warning btn-sm w-100" type="submit">Salvar novo nome</button>
+    </div>
+  </form>
+</div>
 
 <div class="card p-4 mb-4">
   <h5 class="mb-3">Projetos ({{ company.name }})</h5>

@@ -3261,7 +3261,6 @@ def settings_company_rename(cid: int):
         (SpliceTier, SpliceTier.company),
         (CompanyMap, CompanyMap.company),
         (Record,     Record.company),
-        (Expense,    Expense.company),
         (Payroll,    Payroll.company),
     ]:
         try:
@@ -3270,6 +3269,14 @@ def settings_company_rename(cid: int):
             )
         except Exception:
             pass
+
+    # Atualiza também usuários company_owner vinculados a esta empresa
+    try:
+        User.query.filter(User.company_name == old_name).update(
+            {"company_name": new_name}, synchronize_session="fetch"
+        )
+    except Exception:
+        pass
 
     company.name = new_name
     db.session.commit()
@@ -3307,7 +3314,6 @@ def settings_company_delete(cid: int):
         try:
             Payroll.query.filter_by(company=name).delete()
             Invoice.query.filter_by(company=name).delete()
-            Expense.query.filter_by(company=name).delete()
             # Records e fotos
             rids = [r.id for r in Record.query.filter_by(company=name).all()]
             if rids:
@@ -3350,6 +3356,88 @@ def settings_company_detail(cid: int):
 
     # inclusão de mapa via POST
     if request.method == "POST":
+        action = (request.form.get("action") or "").strip()
+
+        # ── Renomear empresa ──
+        if action == "rename":
+            new_name = (request.form.get("new_name") or "").strip()
+            if not new_name:
+                flash("Nome não pode ser vazio.", "danger")
+                return redirect(url_for("settings_company_detail", cid=cid))
+            if new_name == company.name:
+                return redirect(url_for("settings_company_detail", cid=cid))
+            if CompanyConfig.query.filter_by(name=new_name).first():
+                flash(f"Já existe uma empresa com o nome '{new_name}'.", "danger")
+                return redirect(url_for("settings_company_detail", cid=cid))
+            old_name = company.name
+            for model_cls, col_attr in [
+                (Project,    Project.company),
+                (Invoice,    Invoice.company),
+                (DeviceType, DeviceType.company),
+                (SpliceTier, SpliceTier.company),
+                (CompanyMap, CompanyMap.company),
+                (Record,     Record.company),
+                (Payroll,    Payroll.company),
+            ]:
+                try:
+                    model_cls.query.filter(col_attr == old_name).update(
+                        {col_attr.key: new_name}, synchronize_session="fetch"
+                    )
+                except Exception:
+                    pass
+            try:
+                User.query.filter(User.company_name == old_name).update(
+                    {"company_name": new_name}, synchronize_session="fetch"
+                )
+            except Exception:
+                pass
+            company.name = new_name
+            db.session.commit()
+            flash(f"Empresa renomeada para '{new_name}'.", "success")
+            return redirect(url_for("settings_company_detail", cid=cid))
+
+        # ── Excluir empresa ──
+        if action == "delete":
+            name = company.name
+            force = request.form.get("force") == "1"
+            n_records  = Record.query.filter_by(company=name).count()
+            n_projects = Project.query.filter_by(company=name).count()
+            n_invoices = Invoice.query.filter_by(company=name).count()
+            n_payrolls = Payroll.query.filter_by(company=name).count()
+            total = n_records + n_projects + n_invoices + n_payrolls
+            if total > 0 and not force:
+                flash(
+                    f"A empresa possui {n_records} lançamento(s), "
+                    f"{n_projects} projeto(s), {n_invoices} invoice(s) e "
+                    f"{n_payrolls} payroll(s). Confirme a exclusão abaixo.",
+                    "warning"
+                )
+                return redirect(url_for("settings_company_detail", cid=cid, confirm_delete=1))
+            if force or total == 0:
+                try:
+                    Payroll.query.filter_by(company=name).delete()
+                    Invoice.query.filter_by(company=name).delete()
+                    rids = [r.id for r in Record.query.filter_by(company=name).all()]
+                    if rids:
+                        RecordPhoto.query.filter(RecordPhoto.record_id.in_(rids)).delete(synchronize_session=False)
+                        Record.query.filter_by(company=name).delete()
+                    CompanyMap.query.filter_by(company=name).delete()
+                    DeviceType.query.filter_by(company=name).delete()
+                    SpliceTier.query.filter_by(company=name).delete()
+                    for p in Project.query.filter_by(company=name).all():
+                        for sp in SplicerPricing.query.filter_by(project_id=p.id).all():
+                            db.session.delete(sp)
+                        db.session.delete(p)
+                    db.session.delete(company)
+                    db.session.commit()
+                    flash(f"Empresa '{name}' excluída.", "success")
+                    return redirect(url_for("settings"))
+                except Exception as e:
+                    db.session.rollback()
+                    flash(f"Erro ao excluir: {e}", "danger")
+                    return redirect(url_for("settings_company_detail", cid=cid))
+
+        # ── Adicionar mapa ──
         new_map = (request.form.get("new_map") or "").strip()
         if new_map:
             exists = CompanyMap.query.filter_by(company=company.name, name=new_map).first()
