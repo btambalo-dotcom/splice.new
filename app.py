@@ -3232,6 +3232,107 @@ def settings_company_add():
     return redirect(url_for("settings"))
 
 
+@app.route("/settings/company/<int:cid>/rename", methods=["POST"])
+@admin_required
+def settings_company_rename(cid: int):
+    """Renomeia uma empresa e atualiza todas as tabelas que referenciam o nome."""
+    company = CompanyConfig.query.get_or_404(cid)
+    new_name = (request.form.get("new_name") or "").strip()
+
+    if not new_name:
+        flash("Nome não pode ser vazio.", "danger")
+        return redirect(url_for("settings"))
+
+    if new_name == company.name:
+        return redirect(url_for("settings"))
+
+    # Verifica conflito
+    if CompanyConfig.query.filter_by(name=new_name).first():
+        flash(f"Já existe uma empresa com o nome '{new_name}'.", "danger")
+        return redirect(url_for("settings"))
+
+    old_name = company.name
+
+    # Atualiza em cascata todas as tabelas que usam company como string
+    for model_cls, col_attr in [
+        (Project,    Project.company),
+        (Invoice,    Invoice.company),
+        (DeviceType, DeviceType.company),
+        (SpliceTier, SpliceTier.company),
+        (CompanyMap, CompanyMap.company),
+        (Record,     Record.company),
+        (Expense,    Expense.company),
+        (Payroll,    Payroll.company),
+    ]:
+        try:
+            model_cls.query.filter(col_attr == old_name).update(
+                {col_attr.key: new_name}, synchronize_session="fetch"
+            )
+        except Exception:
+            pass
+
+    company.name = new_name
+    db.session.commit()
+    flash(f"Empresa renomeada de '{old_name}' para '{new_name}'.", "success")
+    return redirect(url_for("settings"))
+
+
+@app.route("/settings/company/<int:cid>/delete", methods=["POST"])
+@admin_required
+def settings_company_delete(cid: int):
+    """Exclui uma empresa se não houver registros vinculados."""
+    company = CompanyConfig.query.get_or_404(cid)
+    name = company.name
+    force = request.form.get("force") == "1"
+
+    # Conta vínculos
+    n_records  = Record.query.filter_by(company=name).count()
+    n_projects = Project.query.filter_by(company=name).count()
+    n_invoices = Invoice.query.filter_by(company=name).count()
+    n_payrolls = Payroll.query.filter_by(company=name).count()
+    total = n_records + n_projects + n_invoices + n_payrolls
+
+    if total > 0 and not force:
+        flash(
+            f"A empresa '{name}' possui {n_records} lançamento(s), "
+            f"{n_projects} projeto(s), {n_invoices} invoice(s) e "
+            f"{n_payrolls} payroll(s) vinculados. "
+            f"Confirme a exclusão marcando a opção abaixo.",
+            "warning"
+        )
+        return redirect(url_for("settings", confirm_delete=cid))
+
+    # Exclui registros dependentes em cascata
+    if force:
+        try:
+            Payroll.query.filter_by(company=name).delete()
+            Invoice.query.filter_by(company=name).delete()
+            Expense.query.filter_by(company=name).delete()
+            # Records e fotos
+            rids = [r.id for r in Record.query.filter_by(company=name).all()]
+            if rids:
+                RecordPhoto.query.filter(RecordPhoto.record_id.in_(rids)).delete(synchronize_session=False)
+                Record.query.filter_by(company=name).delete()
+            # Mapa, devices, tiers, projetos
+            CompanyMap.query.filter_by(company=name).delete()
+            DeviceType.query.filter_by(company=name).delete()
+            SpliceTier.query.filter_by(company=name).delete()
+            # Projetos e suas tabelas de splicer
+            for p in Project.query.filter_by(company=name).all():
+                for sp in SplicerPricing.query.filter_by(project_id=p.id).all():
+                    db.session.delete(sp)
+                db.session.delete(p)
+        except Exception as e:
+            db.session.rollback()
+            flash(f"Erro ao excluir dados vinculados: {e}", "danger")
+            return redirect(url_for("settings"))
+
+    db.session.delete(company)
+    db.session.commit()
+    flash(f"Empresa '{name}' excluída com sucesso.", "success")
+    return redirect(url_for("settings"))
+
+
 @app.route("/settings/company/<int:cid>", methods=["GET", "POST"])
 @admin_required
 def settings_company_detail(cid: int):

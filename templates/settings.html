@@ -67,6 +67,7 @@
           </tr>
         </thead>
         <tbody>
+          {% set confirm_delete = request.args.get('confirm_delete')|int %}
           {% for c in companies %}
             <tr>
               <td>
@@ -77,7 +78,20 @@
               </td>
               <td class="text-center">{{ c.included_splices }}</td>
               <td class="text-end">
-                <a class="btn btn-sm btn-outline-info" href="{{ url_for('settings_company_detail', cid=c.id) }}">Configurar</a>
+                <div class="d-flex gap-1 justify-content-end flex-wrap">
+                  <a class="btn btn-sm btn-outline-info" href="{{ url_for('settings_company_detail', cid=c.id) }}">Configurar</a>
+                  <button class="btn btn-sm btn-outline-warning" onclick="openRename({{ c.id }}, '{{ c.name|e }}')">✏️ Renomear</button>
+                  {% if confirm_delete == c.id %}
+                    <form method="post" action="{{ url_for('settings_company_delete', cid=c.id) }}" onsubmit="return confirm('ATENÇÃO: isso apagará TODOS os registros, projetos, invoices e payrolls desta empresa. Confirma?')">
+                      <input type="hidden" name="force" value="1">
+                      <button class="btn btn-sm btn-danger">⚠️ Confirmar exclusão</button>
+                    </form>
+                  {% else %}
+                    <form method="post" action="{{ url_for('settings_company_delete', cid=c.id) }}">
+                      <button class="btn btn-sm btn-outline-danger" type="submit">🗑 Excluir</button>
+                    </form>
+                  {% endif %}
+                </div>
               </td>
             </tr>
           {% else %}
@@ -87,6 +101,39 @@
           {% endfor %}
         </tbody>
       </table>
+
+      <!-- Modal renomear -->
+      <div class="modal fade" id="renameModal" tabindex="-1">
+        <div class="modal-dialog modal-sm">
+          <div class="modal-content bg-dark border-secondary">
+            <div class="modal-header border-secondary">
+              <h6 class="modal-title">Renomear empresa</h6>
+              <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="post" id="rename-form">
+              <div class="modal-body">
+                <p class="text-secondary small mb-2" id="rename-desc"></p>
+                <label class="form-label form-label-sm">Novo nome</label>
+                <input class="form-control form-control-sm" name="new_name" id="rename-input" required>
+              </div>
+              <div class="modal-footer border-secondary">
+                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+                <button type="submit" class="btn btn-warning btn-sm">Renomear</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <script>
+      function openRename(cid, currentName) {
+        document.getElementById('rename-desc').textContent = 'Empresa atual: ' + currentName;
+        document.getElementById('rename-input').value = currentName;
+        document.getElementById('rename-form').action = '/settings/company/' + cid + '/rename';
+        new bootstrap.Modal(document.getElementById('renameModal')).show();
+        setTimeout(() => document.getElementById('rename-input').select(), 300);
+      }
+      </script>
     </div>
   </div>
 
