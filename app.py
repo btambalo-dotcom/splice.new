@@ -942,6 +942,91 @@ class Payroll(db.Model):
     created_by_user = db.relationship("User", foreign_keys=[created_by], backref=db.backref("payrolls_created", lazy=True))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     notes = db.Column(db.Text, nullable=True)
+    # Custo real pago ao splicer (calculado com a modalidade dele)
+    splicer_cost_usd = db.Column(db.Float, nullable=True)
+    # Modalidade de pagamento usada no fechamento
+    pricing_id = db.Column(db.Integer, db.ForeignKey("splicer_pricing.id"), nullable=True)
+    pricing = db.relationship("SplicerPricing", foreign_keys=[pricing_id])
+    plan_name = db.Column(db.String(120), nullable=True)  # snapshot do label da tabela
+
+class SplicerPricing(db.Model):
+    """Tabela de preços compartilhada por um ou mais splicers dentro de um projeto.
+
+    Vários splicers podem ser atribuídos à mesma tabela via SplicerPricingAssignment.
+    Cada splicer só pode ter uma tabela por projeto (enforced no assignment).
+    """
+    __tablename__ = "splicer_pricing"
+    id = db.Column(db.Integer, primary_key=True)
+    project_id = db.Column(db.Integer, db.ForeignKey("project.id"), nullable=False, index=True)
+    project = db.relationship("Project", backref=db.backref("splicer_pricings", lazy=True))
+    # Nome/rótulo da tabela (ex: "Padrão", "Sênior", "João Silva")
+    label = db.Column(db.String(120), nullable=False)
+    # Fusões inclusas por lançamento (sem cobrança)
+    included_splices = db.Column(db.Integer, nullable=False, default=0)
+    # Preços por dispositivo: {"OTE": 5.00, "CAN": 8.00, ...}
+    device_prices_json = db.Column(db.Text, nullable=True)
+    # Faixas de fusão: [{"min": 1, "max": null, "price": 2.50}, ...]
+    tiers_json = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # Splicers atribuídos a esta tabela
+    assignments = db.relationship("SplicerPricingAssignment", backref="pricing", lazy=True,
+                                  cascade="all, delete-orphan")
+
+    def get_tiers(self):
+        try:
+            return json.loads(self.tiers_json or "[]") or []
+        except Exception:
+            return []
+
+    def get_device_prices(self) -> dict:
+        try:
+            return json.loads(self.device_prices_json or "{}") or {}
+        except Exception:
+            return {}
+
+    def device_price_for(self, device_name: str) -> float:
+        if not device_name:
+            return 0.0
+        prices = self.get_device_prices()
+        key = device_name.strip().upper()
+        for k, v in prices.items():
+            if k.strip().upper() == key:
+                return float(v or 0)
+        return 0.0
+
+    def price_for_splices(self, total_splices: int) -> float:
+        included = int(self.included_splices or 0)
+        charge = max(int(total_splices or 0) - included, 0)
+        if charge == 0:
+            return 0.0
+        tiers = self.get_tiers()
+        price_per = 0.0
+        for t in sorted(tiers, key=lambda x: x.get("min", 0)):
+            t_min = int(t.get("min", 0))
+            t_max = t.get("max")
+            if total_splices >= t_min and (t_max is None or total_splices <= int(t_max)):
+                price_per = float(t.get("price", 0))
+                break
+        return charge * price_per
+
+    def total_for_record(self, splices: int, device_name: str = "") -> float:
+        return self.price_for_splices(splices) + self.device_price_for(device_name or "")
+
+
+class SplicerPricingAssignment(db.Model):
+    """Associa um splicer a uma tabela de preços dentro de um projeto.
+    Um splicer só pode estar em UMA tabela por projeto.
+    """
+    __tablename__ = "splicer_pricing_assignment"
+    id = db.Column(db.Integer, primary_key=True)
+    pricing_id = db.Column(db.Integer, db.ForeignKey("splicer_pricing.id"), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
+    user = db.relationship("User", backref=db.backref("pricing_assignments", lazy=True))
+    project_id = db.Column(db.Integer, db.ForeignKey("project.id"), nullable=False, index=True)
+
+    __table_args__ = (
+        db.UniqueConstraint("user_id", "project_id", name="uq_spa_user_project"),
+    )
 
 # --------- User loader ---------
 @login_manager.user_loader
@@ -1116,6 +1201,27 @@ with app.app_context():
     ensure("invoice", "pdf_filename", "VARCHAR(255)")
     ensure("invoice", "pdf_content_type", "VARCHAR(100)")
     ensure("invoice", "pdf_data", "BYTEA" if 'postgres' in db.engine.name else "BLOB")
+
+    # ── Tabelas de preços de splicers ──
+    try:
+        _insp2 = inspect(db.engine)
+        _tables_now = _insp2.get_table_names()
+        # Garante coluna pricing_id no payroll (troca de plan_id antigo)
+        if "payroll" in _tables_now:
+            _pr_cols = {c["name"] for c in _insp2.get_columns("payroll")}
+            for _col, _typ in [
+                ("splicer_cost_usd", "DOUBLE PRECISION"),
+                ("pricing_id", "INTEGER"),
+                ("plan_name", "VARCHAR(120)"),
+            ]:
+                if _col not in _pr_cols:
+                    try:
+                        db.session.execute(text(f'ALTER TABLE "payroll" ADD COLUMN {_col} {_typ}'))
+                        db.session.commit()
+                    except Exception:
+                        db.session.rollback()
+    except Exception:
+        pass
 
     # garante valor padrão para despesas antigas
     try:
@@ -3492,7 +3598,37 @@ def manage_users():
 
     companies = CompanyConfig.query.order_by(CompanyConfig.name).all()
     users = User.query.order_by(User.username).all()
-    return render_template("users.html", users=users, companies=companies)
+    # Mapa user_id -> lista de SplicerPricing via assignments
+    assignments = SplicerPricingAssignment.query.all()
+    user_pricings = {}
+    for a in assignments:
+        user_pricings.setdefault(a.user_id, []).append(a.pricing)
+    return render_template("users.html", users=users, companies=companies,
+                           user_pricings=user_pricings)
+
+
+@app.route("/users/<int:uid>/pricings")
+@admin_required
+def user_pricing_summary(uid: int):
+    """Retorna as tabelas de preços de um splicer em todos os projetos."""
+    user = User.query.get_or_404(uid)
+    assignments = SplicerPricingAssignment.query.filter_by(user_id=uid).all()
+    result = []
+    for a in assignments:
+        sp = a.pricing
+        result.append({
+            "pricing_id": sp.id,
+            "project_id": sp.project_id,
+            "project_name": sp.project.name if sp.project else "",
+            "company": sp.project.company if sp.project else "",
+            "label": sp.label,
+            "included_splices": sp.included_splices,
+            "device_prices": sp.get_device_prices(),
+            "tiers": sp.get_tiers(),
+        })
+    return jsonify({"user": user.splicer_name or user.username, "pricings": result})
+
+
 
 
 @app.route("/users/<int:uid>/delete")
@@ -3938,8 +4074,262 @@ def export_invoice():
 # ═══════════════════════════════════════════════════════
 # PAYROLL — Folhas de pagamento
 # ═══════════════════════════════════════════════════════
+# ── TABELAS DE PREÇOS DE SPLICERS POR PROJETO ───────────
+# ═══════════════════════════════════════════════════════
+
+def _get_splicer_pricing(user_id: int, project_id: int):
+    """Retorna a tabela de preços de um splicer num projeto via assignment, ou None."""
+    if not user_id or not project_id:
+        return None
+    assignment = SplicerPricingAssignment.query.filter_by(
+        user_id=user_id, project_id=project_id
+    ).first()
+    return assignment.pricing if assignment else None
+
+
+def _calc_splicer_cost(records, pricing):
+    """Calcula custo total do splicer para uma lista de records usando sua tabela."""
+    if not pricing:
+        return None
+    total = 0.0
+    for r in records:
+        total += pricing.total_for_record(int(r.splices or 0), r.type or r.device or "")
+    return total
+
+
+@app.route("/settings/project/<int:pid>/splicer-pricing", methods=["GET", "POST"])
+@admin_required
+def project_splicer_pricing(pid: int):
+    """Gerencia tabelas de preços de splicers num projeto (many-to-many)."""
+    project = Project.query.get_or_404(pid)
+    comp_cfg = CompanyConfig.query.filter_by(name=project.company).first()
+    company_id = comp_cfg.id if comp_cfg else 0
+
+    if request.method == "POST":
+        action = (request.form.get("action") or "").strip()
+
+        # ── Criar ou editar tabela de valores ──
+        if action in ("add", "edit"):
+            pricing_id = request.form.get("pricing_id")
+            label = (request.form.get("label") or "").strip()
+            included = int(request.form.get("included_splices") or 0)
+
+            # Preços por dispositivo
+            device_prices = {}
+            i = 0
+            while True:
+                dev_name = request.form.get(f"dev_name_{i}")
+                if dev_name is None:
+                    break
+                dev_name = dev_name.strip()
+                try:
+                    dev_price = float(request.form.get(f"dev_price_{i}") or 0)
+                    if dev_name:
+                        device_prices[dev_name] = dev_price
+                except (ValueError, TypeError):
+                    pass
+                i += 1
+
+            # Tiers de fusão
+            tiers = []
+            i = 0
+            while True:
+                min_raw = request.form.get(f"tier_min_{i}")
+                if min_raw is None:
+                    break
+                try:
+                    t_min = int(min_raw)
+                    t_max_raw = (request.form.get(f"tier_max_{i}") or "").strip()
+                    t_max = int(t_max_raw) if t_max_raw else None
+                    t_price = float(request.form.get(f"tier_price_{i}") or 0)
+                    tiers.append({"min": t_min, "max": t_max, "price": t_price})
+                except (ValueError, TypeError):
+                    pass
+                i += 1
+
+            if action == "edit" and pricing_id:
+                sp = SplicerPricing.query.get(int(pricing_id))
+                if sp and sp.project_id == pid:
+                    sp.label = label or sp.label
+                    sp.included_splices = included
+                    sp.device_prices_json = json.dumps(device_prices)
+                    sp.tiers_json = json.dumps(tiers)
+                    db.session.commit()
+                    flash(f"Tabela '{sp.label}' atualizada.", "success")
+            else:
+                sp = SplicerPricing(
+                    project_id=pid,
+                    label=label or "Nova tabela",
+                    included_splices=included,
+                    device_prices_json=json.dumps(device_prices),
+                    tiers_json=json.dumps(tiers),
+                )
+                db.session.add(sp)
+                db.session.commit()
+                flash(f"Tabela '{sp.label}' criada.", "success")
+            return redirect(url_for("project_splicer_pricing", pid=pid))
+
+        # ── Remover tabela (cascata remove assignments) ──
+        if action == "delete":
+            pricing_id = int(request.form.get("pricing_id") or 0)
+            sp = SplicerPricing.query.get(pricing_id)
+            if sp and sp.project_id == pid:
+                db.session.delete(sp)
+                db.session.commit()
+                flash("Tabela removida.", "success")
+            return redirect(url_for("project_splicer_pricing", pid=pid))
+
+        # ── Atribuir splicer a uma tabela ──
+        if action == "assign":
+            pricing_id = int(request.form.get("pricing_id") or 0)
+            user_ids = request.form.getlist("user_ids")  # múltiplos splicers
+            sp = SplicerPricing.query.get(pricing_id)
+            if not sp or sp.project_id != pid:
+                flash("Tabela inválida.", "danger")
+                return redirect(url_for("project_splicer_pricing", pid=pid))
+            added = 0
+            for uid_raw in user_ids:
+                try:
+                    uid = int(uid_raw)
+                except (ValueError, TypeError):
+                    continue
+                # Remove de outra tabela no mesmo projeto se existir
+                old = SplicerPricingAssignment.query.filter_by(user_id=uid, project_id=pid).first()
+                if old:
+                    if old.pricing_id == pricing_id:
+                        continue  # já está nesta tabela
+                    db.session.delete(old)
+                db.session.add(SplicerPricingAssignment(
+                    pricing_id=pricing_id, user_id=uid, project_id=pid
+                ))
+                added += 1
+            db.session.commit()
+            flash(f"{added} splicer(s) atribuído(s) à tabela '{sp.label}'.", "success")
+            return redirect(url_for("project_splicer_pricing", pid=pid))
+
+        # ── Remover splicer de uma tabela ──
+        if action == "unassign":
+            assignment_id = int(request.form.get("assignment_id") or 0)
+            a = SplicerPricingAssignment.query.get(assignment_id)
+            if a and a.project_id == pid:
+                db.session.delete(a)
+                db.session.commit()
+                flash("Splicer removido da tabela.", "success")
+            return redirect(url_for("project_splicer_pricing", pid=pid))
+
+    pricings = SplicerPricing.query.filter_by(project_id=pid).order_by(SplicerPricing.label).all()
+    # Splicers já atribuídos a alguma tabela neste projeto
+    all_assignments = SplicerPricingAssignment.query.filter_by(project_id=pid).all()
+    assigned_user_ids = {a.user_id for a in all_assignments}
+    all_splicers = User.query.filter_by(is_admin=False, is_company_owner=False, is_active=True).order_by(User.username).all()
+    # Dispositivos do projeto (mesmo que o cliente vê)
+    project_devices = DeviceType.query.filter_by(project_id=pid).order_by(DeviceType.name).all()
+    # Fallback: dispositivos da empresa se projeto não tiver nenhum
+    if not project_devices:
+        project_devices = DeviceType.query.filter_by(company=project.company, project_id=None).order_by(DeviceType.name).all()
+
+    return render_template(
+        "project_splicer_pricing.html",
+        project=project,
+        company_id=company_id,
+        pricings=pricings,
+        all_splicers=all_splicers,
+        assigned_user_ids=assigned_user_ids,
+        all_assignments=all_assignments,
+        project_devices=project_devices,
+    )
+
+
+@app.route("/api/project/<int:pid>/splicer-margin")
+@admin_required
+def api_splicer_margin(pid: int):
+    """Retorna relatório de margem por splicer para um projeto no período informado."""
+    project = Project.query.get_or_404(pid)
+    start_raw = request.args.get("start") or None
+    end_raw = request.args.get("end") or None
+
+    start_dt = datetime.fromisoformat(start_raw) if start_raw else None
+    end_dt = datetime.fromisoformat(end_raw + "T23:59:59") if end_raw else None
+
+    pricings = SplicerPricing.query.filter_by(project_id=pid).all()
+
+    results = []
+    seen_splicers = set()
+
+    for pricing in pricings:
+        for assignment in pricing.assignments:
+            splicer_user = assignment.user
+            if not splicer_user:
+                continue
+            splicer_name = splicer_user.splicer_name or splicer_user.username
+            if splicer_name in seen_splicers:
+                continue
+
+        q = Record.query.filter(Record.project_id == pid, Record.splicer == splicer_name)
+        if start_dt:
+            q = q.filter(Record.created_date >= start_dt)
+        if end_dt:
+            q = q.filter(Record.created_date <= end_dt)
+
+        records = q.all()
+        total_splices = sum(r.splices or 0 for r in records)
+        revenue = sum(r.total_usd or 0.0 for r in records)
+        cost = _calc_splicer_cost(records, pricing) or 0.0
+        margin = revenue - cost
+
+        results.append({
+            "splicer": splicer_name,
+            "total_records": len(records),
+            "total_splices": total_splices,
+            "revenue_usd": round(revenue, 2),
+            "cost_usd": round(cost, 2),
+            "margin_usd": round(margin, 2),
+            "margin_pct": round((margin / revenue * 100) if revenue > 0 else 0, 1),
+            "included_splices": pricing.included_splices,
+            "device_prices": pricing.get_device_prices(),
+            "tiers": pricing.get_tiers(),
+        })
+        seen_splicers.add(splicer_name)
+
+    # Splicers com produção mas sem tabela
+    q_all = Record.query.filter(Record.project_id == pid)
+    if start_dt:
+        q_all = q_all.filter(Record.created_date >= start_dt)
+    if end_dt:
+        q_all = q_all.filter(Record.created_date <= end_dt)
+    for r in q_all.all():
+        name = r.splicer or ""
+        if name and name not in seen_splicers:
+            results.append({
+                "splicer": name,
+                "total_records": 1,
+                "total_splices": int(r.splices or 0),
+                "revenue_usd": round(float(r.total_usd or 0), 2),
+                "cost_usd": None,
+                "margin_usd": None,
+                "margin_pct": None,
+                "included_splices": None,
+                "device_value": None,
+                "tiers": [],
+            })
+            seen_splicers.add(name)
+
+    results.sort(key=lambda x: x["splicer"])
+    return jsonify({"project": project.name, "results": results})
+
+
+@app.route("/project/<int:pid>/margin-report")
+@admin_required
+def project_margin_report(pid: int):
+    """Relatório de margem por splicer — página completa."""
+    project = Project.query.get_or_404(pid)
+    comp_cfg = CompanyConfig.query.filter_by(name=project.company).first()
+    company_id = comp_cfg.id if comp_cfg else 0
+    return render_template("project_margin_report.html", project=project, company_id=company_id)
+# ═══════════════════════════════════════════════════════
 
 @app.route("/payroll")
+
 @admin_required
 def payroll_list():
     """Lista todas as folhas de pagamento."""
@@ -4013,6 +4403,10 @@ def payroll_new():
         total_splices = sum(r.splices or 0 for r in records)
         total_amount = sum(r.total_usd or 0.0 for r in records)
 
+        # Custo do splicer (modalidade de pagamento)
+        splicer_plan = _get_splicer_pricing(splicer_user.id, project_id) if project_id else None
+        splicer_cost = _calc_splicer_cost(records, splicer_plan)
+
         # Prazo de pagamento
         payment_days = getattr(project, "payment_days", None) or 30
         due_date = end_date + __import__("datetime").timedelta(days=payment_days)
@@ -4031,6 +4425,9 @@ def payroll_new():
             status="pending",
             created_by=current_user.id,
             notes=notes,
+            splicer_cost_usd=splicer_cost,
+            pricing_id=splicer_plan.id if splicer_plan else None,
+            plan_name=splicer_plan.label if splicer_plan else None,
         )
         db.session.add(payroll)
         db.session.commit()

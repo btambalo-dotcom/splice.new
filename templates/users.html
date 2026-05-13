@@ -169,6 +169,7 @@
               <th style="border-color:#2a2a3e;">Empresa</th>
               <th style="border-color:#2a2a3e; text-align:center;">Permissões</th>
               <th style="border-color:#2a2a3e; text-align:center;">Status</th>
+              <th style="border-color:#2a2a3e;">Planos/Projeto</th>
               <th style="border-color:#2a2a3e;"></th>
             </tr>
           </thead>
@@ -207,6 +208,23 @@
                   <span class="badge-role badge-active">Ativo</span>
                 {% else %}
                   <span class="badge-role badge-inactive">Inativo</span>
+                {% endif %}
+              </td>
+
+              <td>
+                {% if not u.is_admin and not u.is_company_owner %}
+                  {% set u_sp = user_pricings.get(u.id, []) %}
+                  {% if u_sp %}
+                    {% for sp in u_sp %}
+                      <span class="badge" style="background:rgba(79,142,247,.15);color:#4f8ef7;border:1px solid rgba(79,142,247,.3);font-size:.68rem;font-weight:400;">
+                        {{ sp.project.name if sp.project else '?' }}
+                      </span>
+                    {% endfor %}
+                  {% else %}
+                    <span style="color:#333;font-size:.75rem;">— sem tabela</span>
+                  {% endif %}
+                {% else %}
+                  <span style="color:#333;font-size:.75rem;">—</span>
                 {% endif %}
               </td>
 
@@ -278,14 +296,12 @@ function syncRole() {
   const rowVal = document.getElementById('row_values');
 
   if (isAdmin) {
-    // Admin: bloqueia todo o bloco de permissões (tem tudo)
     document.getElementById('perm_section').style.opacity = '.35';
     document.getElementById('perm_section').style.pointerEvents = 'none';
     document.getElementById('perm_active').checked = true;
     document.getElementById('perm_expenses').checked = true;
     document.getElementById('perm_values').checked = true;
   } else if (isOwner) {
-    // Dono de empresa: pode ativar/desativar mas despesas e valores não se aplicam
     document.getElementById('perm_section').style.opacity = '1';
     document.getElementById('perm_section').style.pointerEvents = '';
     rowExp.style.opacity = '.3';
@@ -293,7 +309,6 @@ function syncRole() {
     rowVal.style.opacity = '.3';
     rowVal.style.pointerEvents = 'none';
   } else {
-    // Splicer: permissões totalmente configuráveis
     document.getElementById('perm_section').style.opacity = '1';
     document.getElementById('perm_section').style.pointerEvents = '';
     rowExp.style.opacity = '1';
@@ -303,5 +318,11 @@ function syncRole() {
   }
 }
 syncRole();
+
+// ── Link para tabelas de preços do projeto ──
+function goToPricing(uid) {
+    window.location.href = '/users/' + uid + '/pricings';
+}
 </script>
+
 {% endblock %}

@@ -81,11 +81,40 @@
       </div>
       <div class="col-4">
         <div class="stat-box">
-          <div class="text-secondary" style="font-size:.72rem;">Valor Total (USD)</div>
+          <div class="text-secondary" style="font-size:.72rem;">Receita (cliente)</div>
           <div class="fw-bold fs-4" style="color:#10b981;">$ {{ '%.2f'|format(payroll.total_amount_usd or 0) }}</div>
         </div>
       </div>
     </div>
+
+    {% if payroll.splicer_cost_usd is not none %}
+    <div class="row g-3 mb-3">
+      <div class="col-4">
+        <div class="stat-box">
+          <div class="text-secondary" style="font-size:.72rem;">Custo Splicer</div>
+          <div class="fw-bold fs-4" style="color:#fb923c;">$ {{ '%.2f'|format(payroll.splicer_cost_usd or 0) }}</div>
+          {% if payroll.plan_name %}
+          <div class="text-secondary" style="font-size:.68rem;margin-top:.25rem;">{{ payroll.plan_name }}</div>
+          {% endif %}
+        </div>
+      </div>
+      <div class="col-4">
+        <div class="stat-box">
+          {% set margin = (payroll.total_amount_usd or 0) - (payroll.splicer_cost_usd or 0) %}
+          <div class="text-secondary" style="font-size:.72rem;">Margem $</div>
+          <div class="fw-bold fs-4" style="color:{{ '#10b981' if margin >= 0 else '#ef4444' }};">$ {{ '%.2f'|format(margin) }}</div>
+        </div>
+      </div>
+      <div class="col-4">
+        <div class="stat-box">
+          {% set revenue = payroll.total_amount_usd or 0 %}
+          {% set margin_pct = ((revenue - (payroll.splicer_cost_usd or 0)) / revenue * 100) if revenue > 0 else 0 %}
+          <div class="text-secondary" style="font-size:.72rem;">Margem %</div>
+          <div class="fw-bold fs-4" style="color:{{ '#10b981' if margin_pct >= 0 else '#ef4444' }};">{{ '%.1f'|format(margin_pct) }}%</div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
 
     {% if payroll.status == 'pending' %}
     <div class="pay-card p-3">

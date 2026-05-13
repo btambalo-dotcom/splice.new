@@ -1,0 +1,373 @@
+{% extends 'base.html' %}
+{% block title %}Tabelas de Splicers · {{ project.name }} · SPLICER{% endblock %}
+{% block content %}
+<style>
+  .card-dark { background:#1e1e2e; border:1px solid #2a2a3e; border-radius:12px; }
+  .section-title { font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; color:#555; font-weight:600; margin-bottom:.75rem; }
+  .form-control, .form-select { background:#12121c !important; border-color:#2a2a3e !important; color:#ddd !important; }
+  .form-control:focus, .form-select:focus { border-color:#00d4ff !important; box-shadow:0 0 0 2px rgba(0,212,255,.15) !important; }
+  .form-control::placeholder { color:#444 !important; }
+  .btn-cyan { background:#00d4ff; border:none; color:#000; font-weight:600; border-radius:8px; }
+  .btn-cyan:hover { background:#00b8e0; color:#000; }
+  .tier-grid { display:grid; grid-template-columns:1fr 1fr 1fr 32px; gap:.4rem; align-items:center; }
+  .tier-grid-hdr { display:grid; grid-template-columns:1fr 1fr 1fr 32px; gap:.4rem; margin-bottom:.25rem; }
+  .tier-grid-hdr span,.dev-grid-hdr span { font-size:.65rem; text-transform:uppercase; letter-spacing:.07em; color:#444; }
+  .dev-grid { display:grid; grid-template-columns:1fr 90px 110px; gap:.4rem; align-items:center; }
+  .dev-grid-hdr { display:grid; grid-template-columns:1fr 90px 110px; gap:.4rem; margin-bottom:.25rem; }
+  .dev-name-label { font-size:.82rem; color:#ccc; padding:.35rem .5rem; background:#0d0d18; border:1px solid #2a2a3e; border-radius:6px; }
+  .dev-client-price { font-size:.78rem; color:#666; padding:.35rem .5rem; background:#0d0d18; border:1px solid #1a1a2e; border-radius:6px; text-align:right; }
+  .btn-icon { background:none; border:1px solid #2a2a3e; border-radius:6px; color:#555; padding:.12rem .35rem; font-size:.7rem; cursor:pointer; line-height:1; }
+  .btn-icon:hover { border-color:#ef4444; color:#ef4444; }
+  .pricing-card { background:#12121c; border:1px solid #2a2a3e; border-radius:10px; padding:1rem 1.1rem; margin-bottom:.85rem; }
+  .pricing-card-hdr { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:.5rem; }
+  .pricing-label { font-size:.9rem; font-weight:600; color:#e0e0e0; }
+  .tier-pill { display:inline-block; background:rgba(0,212,255,.08); border:1px solid rgba(0,212,255,.2); color:#00d4ff; border-radius:20px; padding:.18em .65em; font-size:.7rem; margin:.1rem .1rem; }
+  .dev-pill  { display:inline-block; background:rgba(138,43,226,.08); border:1px solid rgba(138,43,226,.2); color:#a78bfa; border-radius:20px; padding:.18em .65em; font-size:.7rem; margin:.1rem .1rem; }
+  .splicer-chip { display:inline-flex; align-items:center; gap:.3rem; background:rgba(79,142,247,.1); border:1px solid rgba(79,142,247,.25); color:#4f8ef7; border-radius:20px; padding:.2em .6em; font-size:.72rem; margin:.15rem .1rem; }
+  .splicer-chip form { display:inline; }
+  .splicer-chip button { background:none; border:none; color:#4f8ef7; cursor:pointer; font-size:.65rem; padding:0; line-height:1; opacity:.6; }
+  .splicer-chip button:hover { opacity:1; color:#ef4444; }
+  .meta-line { font-size:.72rem; color:#555; margin-bottom:.35rem; }
+  hr.sep { border-color:#2a2a3e; margin:.85rem 0; }
+  .warn-box { font-size:.78rem; color:#fbbf24; background:rgba(251,191,36,.07); border:1px solid rgba(251,191,36,.2); border-radius:8px; padding:.6rem .9rem; margin-bottom:.75rem; }
+  .assign-section { background:#0a0a18; border:1px solid #2a2a3e; border-radius:8px; padding:.75rem 1rem; margin-top:.6rem; }
+  .assign-title { font-size:.65rem; text-transform:uppercase; letter-spacing:.08em; color:#444; margin-bottom:.5rem; }
+  .splicer-checkbox-grid { display:grid; grid-template-columns:1fr 1fr; gap:.3rem; max-height:140px; overflow-y:auto; }
+  .splicer-check-item { display:flex; align-items:center; gap:.4rem; font-size:.78rem; color:#bbb; padding:.25rem .4rem; border-radius:4px; }
+  .splicer-check-item:hover { background:rgba(255,255,255,.04); }
+  .splicer-check-item input { accent-color:#00d4ff; width:14px; height:14px; flex-shrink:0; }
+  .splicer-check-item.disabled-check { opacity:.4; cursor:not-allowed; }
+</style>
+
+<div class="d-flex align-items-center gap-2 mb-4 flex-wrap">
+  <a href="{{ url_for('settings_project_detail', pid=project.id) }}" class="btn btn-outline-secondary btn-sm">← Projeto</a>
+  <div>
+    <h4 class="mb-0 fw-semibold">Tabelas de Pagamento de Splicers</h4>
+    <p class="text-secondary mb-0" style="font-size:.82rem;">{{ project.company }} / {{ project.name }}</p>
+  </div>
+  <a href="{{ url_for('project_margin_report', pid=project.id) }}" class="btn btn-outline-success btn-sm ms-auto">📊 Relatório de Margem</a>
+</div>
+
+{% if not project_devices %}
+<div class="warn-box">
+  ⚠️ Nenhum dispositivo cadastrado neste projeto. Acesse
+  <a href="{{ url_for('settings_project_detail', pid=project.id) }}" style="color:#fbbf24;">Configurações do Projeto</a>
+  para adicionar dispositivos antes de criar tabelas.
+</div>
+{% endif %}
+
+<div class="row g-4">
+
+  <!-- ═══ TABELAS EXISTENTES ═══ -->
+  <div class="col-lg-7">
+    <p class="section-title">Tabelas cadastradas ({{ pricings|length }})</p>
+
+    {% if pricings %}
+      {% for sp in pricings %}
+      <div class="pricing-card">
+        <div class="pricing-card-hdr">
+          <div class="pricing-label">{{ sp.label }}</div>
+          <div class="d-flex gap-2">
+            <button class="btn btn-sm btn-outline-primary" style="font-size:.7rem;"
+                    onclick="openEdit({{ sp.id }})">Editar</button>
+            <form method="post" style="display:inline;"
+                  onsubmit="return confirm('Remover tabela {{ sp.label|e }} e todos os splicers atribuídos?')">
+              <input type="hidden" name="action" value="delete">
+              <input type="hidden" name="pricing_id" value="{{ sp.id }}">
+              <button class="btn btn-sm btn-outline-danger" style="font-size:.7rem;">✕</button>
+            </form>
+          </div>
+        </div>
+
+        <div class="meta-line">Fusões inclusas: <strong style="color:#ddd;">{{ sp.included_splices }}</strong></div>
+
+        {# Tiers #}
+        {% set tiers = sp.get_tiers() %}
+        {% if tiers %}
+        <div class="mb-1">
+          {% for t in tiers %}
+          <span class="tier-pill">{{ t.min }}{% if t.max %} – {{ t.max }}{% else %} – ∞{% endif %} → ${{ "%.2f"|format(t.price) }}/fusão</span>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="meta-line">Nenhuma faixa configurada</div>
+        {% endif %}
+
+        {# Device prices #}
+        {% set dev_prices = sp.get_device_prices() %}
+        {% if dev_prices %}
+        <div class="mb-1 mt-1">
+          {% for dname, dprice in dev_prices.items() %}{% if dprice and dprice > 0 %}
+          <span class="dev-pill">{{ dname }}: ${{ "%.2f"|format(dprice) }}</span>
+          {% endif %}{% endfor %}
+        </div>
+        {% endif %}
+
+        {# Splicers atribuídos #}
+        <div class="assign-section">
+          <div class="assign-title">Splicers nesta tabela</div>
+          <div>
+            {% for a in sp.assignments %}
+            <span class="splicer-chip">
+              ⚡ {{ a.user.splicer_name or a.user.username }}
+              <form method="post">
+                <input type="hidden" name="action" value="unassign">
+                <input type="hidden" name="assignment_id" value="{{ a.id }}">
+                <button type="submit" title="Remover" onclick="return confirm('Remover este splicer da tabela?')">✕</button>
+              </form>
+            </span>
+            {% else %}
+            <span class="meta-line">Nenhum splicer atribuído.</span>
+            {% endfor %}
+          </div>
+
+          {# Atribuir splicers #}
+          {% set this_ids = sp.assignments | map(attribute='user_id') | list %}
+          {% set available = all_splicers | rejectattr('id', 'in', assigned_user_ids) | list %}
+          {% set available_here = all_splicers | selectattr('id', 'in', this_ids) | list %}
+          {# show button to open assign modal #}
+          <button class="btn btn-sm mt-2"
+                  style="font-size:.7rem;border:1px solid #2a2a3e;color:#888;background:none;"
+                  onclick="openAssign({{ sp.id }}, '{{ sp.label|e }}')">
+            + Atribuir splicers
+          </button>
+        </div>
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="card-dark p-4 text-center text-muted">
+        <div style="font-size:2rem;opacity:.3;margin-bottom:.5rem;">💰</div>
+        <p class="mb-1">Nenhuma tabela cadastrada ainda.</p>
+        <p class="small mb-0">Crie tabelas ao lado e atribua splicers a cada uma.</p>
+      </div>
+    {% endif %}
+  </div>
+
+  <!-- ═══ FORMULÁRIO NOVA/EDITAR TABELA ═══ -->
+  <div class="col-lg-5">
+    <div class="card-dark p-4" id="form-card">
+      <p class="section-title" id="form-title">Nova tabela</p>
+
+      <form method="post" id="pricing-form">
+        <input type="hidden" name="action" value="add" id="form-action">
+        <input type="hidden" name="pricing_id" id="form-pricing-id">
+
+        <div class="mb-3">
+          <label class="form-label form-label-sm text-secondary">Nome / rótulo da tabela</label>
+          <input class="form-control form-control-sm" name="label" id="form-label"
+                 placeholder="Ex.: Padrão, Sênior, Sub..." required>
+        </div>
+
+        <hr class="sep">
+
+        <div class="mb-3">
+          <label class="form-label form-label-sm text-secondary">Fusões inclusas por lançamento</label>
+          <input class="form-control form-control-sm" name="included_splices" id="form-included"
+                 type="number" min="0" value="0">
+          <div class="form-text" style="color:#444;font-size:.68rem;">Sem cobrança</div>
+        </div>
+
+        <hr class="sep">
+
+        <p class="section-title">Dispositivos — valor pago ao splicer</p>
+        {% if project_devices %}
+        <div class="dev-grid-hdr">
+          <span>Dispositivo</span><span style="text-align:right;">$ cliente</span><span style="text-align:right;">$ splicer</span>
+        </div>
+        {% for dt in project_devices %}
+        <div class="dev-grid mb-2">
+          <div class="dev-name-label">{{ dt.name }}</div>
+          <div class="dev-client-price">${{ "%.2f"|format(dt.value_usd) }}</div>
+          <input type="hidden" name="dev_name_{{ loop.index0 }}" value="{{ dt.name }}">
+          <input class="form-control form-control-sm text-end"
+                 name="dev_price_{{ loop.index0 }}" id="devprice__{{ dt.name }}"
+                 type="number" step="0.01" min="0" value="0.00">
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="warn-box">Cadastre dispositivos no projeto primeiro.</div>
+        {% endif %}
+
+        <hr class="sep">
+
+        <p class="section-title">Faixas de preço por fusão</p>
+        <div class="tier-grid-hdr">
+          <span>Splices mín.</span><span>Splices máx.</span><span>$ / fusão</span><span></span>
+        </div>
+        <div id="tiers-container"></div>
+        <button type="button" class="btn btn-outline-secondary btn-sm w-100 mb-3"
+                onclick="addTier()">+ Adicionar faixa</button>
+
+        <button type="submit" class="btn btn-cyan w-100" id="form-submit-btn">Criar tabela</button>
+        <button type="button" class="btn btn-outline-secondary btn-sm w-100 mt-2 d-none"
+                id="cancel-edit-btn" onclick="resetForm()">Cancelar edição</button>
+      </form>
+    </div>
+  </div>
+
+</div>
+
+<!-- Modal de atribuição de splicers -->
+<div class="modal fade" id="assignModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content" style="background:#1e1e2e;border:1px solid #2a2a3e;">
+      <div class="modal-header" style="border-color:#2a2a3e;">
+        <h6 class="modal-title mb-0" id="assign-modal-title">Atribuir splicers</h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="post" id="assign-form">
+        <input type="hidden" name="action" value="assign">
+        <input type="hidden" name="pricing_id" id="assign-pricing-id">
+        <div class="modal-body">
+          <p class="text-secondary mb-2" style="font-size:.82rem;">
+            Selecione um ou mais splicers para adicionar a esta tabela.<br>
+            <span style="font-size:.72rem;color:#555;">Splicers já em outra tabela serão movidos automaticamente.</span>
+          </p>
+          <div class="splicer-checkbox-grid" id="assign-splicer-list"></div>
+          <p class="text-muted text-center mt-3 d-none" id="assign-no-splicers" style="font-size:.82rem;">
+            Todos os splicers já estão atribuídos a alguma tabela.<br>
+            Remova-os da tabela atual para mover.
+          </p>
+        </div>
+        <div class="modal-footer" style="border-color:#2a2a3e;">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+          <button type="submit" class="btn btn-cyan btn-sm">Confirmar atribuição</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+const PRICING_DATA = {
+{% for sp in pricings %}
+  {{ sp.id }}: {
+    id: {{ sp.id }},
+    label: {{ sp.label | tojson }},
+    included_splices: {{ sp.included_splices }},
+    device_prices: {{ sp.device_prices_json or '{}' | safe }},
+    tiers: {{ sp.tiers_json or '[]' | safe }},
+    assigned_ids: [{% for a in sp.assignments %}{{ a.user_id }}{% if not loop.last %},{% endif %}{% endfor %}]
+  }{% if not loop.last %},{% endif %}
+{% endfor %}
+};
+
+const ALL_SPLICERS = [
+{% for u in all_splicers %}
+  { id: {{ u.id }}, name: {{ (u.splicer_name or u.username) | tojson }}, assigned_pricing_id: {% for a in all_assignments %}{% if a.user_id == u.id %}{{ a.pricing_id }}{% endif %}{% endfor %} || null }{% if not loop.last %},{% endif %}
+{% endfor %}
+];
+
+const PROJECT_DEVICES = [
+{% for dt in project_devices %}
+  { name: {{ dt.name | tojson }}, client_price: {{ dt.value_usd }} }{% if not loop.last %},{% endif %}
+{% endfor %}
+];
+
+let tierCount = 0;
+
+function addTier(minVal, maxVal, priceVal) {
+  const c = document.getElementById('tiers-container');
+  const i = tierCount++;
+  const d = document.createElement('div');
+  d.className = 'tier-grid mb-1'; d.id = 'tr' + i;
+  const minV = (minVal !== undefined && minVal !== null) ? minVal : '';
+  const maxV = (maxVal !== undefined && maxVal !== null) ? maxVal : '';
+  const priceV = (priceVal !== undefined && priceVal !== null) ? priceVal : '';
+  d.innerHTML = `
+    <input class="form-control form-control-sm" name="tier_min_${i}" type="number" min="0" placeholder="1" value="${minV}">
+    <input class="form-control form-control-sm" name="tier_max_${i}" type="number" min="0" placeholder="∞ (vazio)" value="${maxV}">
+    <input class="form-control form-control-sm text-end" name="tier_price_${i}" type="number" step="0.01" min="0" placeholder="0.00" value="${priceV}">
+    <button type="button" class="btn-icon" onclick="rmTier('tr${i}')">✕</button>`;
+  c.appendChild(d);
+}
+
+function rmTier(id) { document.getElementById(id)?.remove(); renumber(); }
+
+function renumber() {
+  tierCount = 0;
+  document.querySelectorAll('#tiers-container .tier-grid').forEach((row, i) => {
+    row.id = 'tr' + i;
+    const ins = row.querySelectorAll('input');
+    ins[0].name = 'tier_min_' + i; ins[1].name = 'tier_max_' + i; ins[2].name = 'tier_price_' + i;
+    row.querySelector('button').setAttribute('onclick', `rmTier('tr${i}')`);
+    tierCount = i + 1;
+  });
+}
+
+function setDevPrices(prices) {
+  PROJECT_DEVICES.forEach(d => {
+    const el = document.getElementById('devprice__' + d.name);
+    if (el) el.value = parseFloat((prices && prices[d.name]) || 0).toFixed(2);
+  });
+}
+
+function resetForm() {
+  document.getElementById('form-action').value = 'add';
+  document.getElementById('form-pricing-id').value = '';
+  document.getElementById('form-label').value = '';
+  document.getElementById('form-included').value = '0';
+  document.getElementById('tiers-container').innerHTML = ''; tierCount = 0;
+  addTier(1, '', '');
+  setDevPrices({});
+  document.getElementById('form-title').textContent = 'Nova tabela';
+  document.getElementById('form-submit-btn').textContent = 'Criar tabela';
+  document.getElementById('cancel-edit-btn').classList.add('d-none');
+}
+
+function openEdit(id) {
+  const d = PRICING_DATA[id]; if (!d) return;
+  document.getElementById('form-action').value = 'edit';
+  document.getElementById('form-pricing-id').value = id;
+  document.getElementById('form-label').value = d.label || '';
+  document.getElementById('form-included').value = d.included_splices || 0;
+  setDevPrices(d.device_prices || {});
+  document.getElementById('tiers-container').innerHTML = ''; tierCount = 0;
+  (d.tiers || []).forEach(t => addTier(t.min, t.max, t.price));
+  document.getElementById('form-title').textContent = 'Editar: ' + (d.label || '');
+  document.getElementById('form-submit-btn').textContent = 'Salvar alterações';
+  document.getElementById('cancel-edit-btn').classList.remove('d-none');
+  document.getElementById('form-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function openAssign(pricingId, label) {
+  document.getElementById('assign-pricing-id').value = pricingId;
+  document.getElementById('assign-modal-title').textContent = 'Atribuir splicers — ' + label;
+
+  const list = document.getElementById('assign-splicer-list');
+  const noSplicers = document.getElementById('assign-no-splicers');
+  list.innerHTML = '';
+
+  const data = PRICING_DATA[pricingId];
+  const currentIds = data ? data.assigned_ids : [];
+
+  let shown = 0;
+  ALL_SPLICERS.forEach(s => {
+    const alreadyHere = currentIds.includes(s.id);
+    if (alreadyHere) return; // skip already in this table
+
+    const div = document.createElement('div');
+    div.className = 'splicer-check-item';
+
+    let hint = '';
+    if (s.assigned_pricing_id && s.assigned_pricing_id !== pricingId) {
+      const other = PRICING_DATA[s.assigned_pricing_id];
+      hint = `<span style="font-size:.65rem;color:#888;"> (em ${other ? other.label : '?'})</span>`;
+    }
+
+    div.innerHTML = `<input type="checkbox" name="user_ids" value="${s.id}" id="sc_${s.id}">
+      <label for="sc_${s.id}" style="cursor:pointer;margin:0;">${s.name}${hint}</label>`;
+    list.appendChild(div);
+    shown++;
+  });
+
+  noSplicers.classList.toggle('d-none', shown > 0);
+  list.classList.toggle('d-none', shown === 0);
+
+  new bootstrap.Modal(document.getElementById('assignModal')).show();
+}
+
+// Sempre começa com uma faixa vazia no formulário
+addTier(1, '', '');
+</script>
+{% endblock %}
