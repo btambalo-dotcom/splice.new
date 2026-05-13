@@ -304,10 +304,12 @@ function syncRole() {
   } else if (isOwner) {
     document.getElementById('perm_section').style.opacity = '1';
     document.getElementById('perm_section').style.pointerEvents = '';
+    // Despesas: não se aplica ao owner
     rowExp.style.opacity = '.3';
     rowExp.style.pointerEvents = 'none';
-    rowVal.style.opacity = '.3';
-    rowVal.style.pointerEvents = 'none';
+    // Valores ($): owner PODE ter acesso configurável
+    rowVal.style.opacity = '1';
+    rowVal.style.pointerEvents = '';
   } else {
     document.getElementById('perm_section').style.opacity = '1';
     document.getElementById('perm_section').style.pointerEvents = '';

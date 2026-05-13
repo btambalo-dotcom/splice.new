@@ -2997,6 +2997,7 @@ def record_view(rid):
 
     is_admin = bool(getattr(current_user, "is_admin", False))
     is_owner = bool(getattr(current_user, "is_company_owner", False))
+    can_view_values = is_admin or bool(getattr(current_user, "can_view_values", True))
 
     # Admin => tela completa
     if is_admin:
@@ -3004,7 +3005,8 @@ def record_view(rid):
         if rec.map:
             mp = CompanyMap.query.filter_by(name=rec.map, company=rec.company).first()
         map_id_for_button = mp.id if mp is not None else None
-        return render_template("record_view.html", rec=rec, map_id_for_button=map_id_for_button)
+        return render_template("record_view.html", rec=rec, map_id_for_button=map_id_for_button,
+                               can_view_values=can_view_values)
 
     # Dono de empresa (cliente) => manda para o mapa com foco no dispositivo
     if is_owner and rec.map:
@@ -3029,7 +3031,8 @@ def record_view(rid):
                 abort(403)
 
     map_id_for_button = mp.id if mp is not None else None
-    return render_template("record_view.html", rec=rec, map_id_for_button=map_id_for_button)
+    return render_template("record_view.html", rec=rec, map_id_for_button=map_id_for_button,
+                           can_view_values=can_view_values)
 @app.route("/logout")
 @login_required
 def logout():
