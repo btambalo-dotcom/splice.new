@@ -1,209 +1,309 @@
 {% extends 'base.html' %}
-{% block title %}Projeto {{ project.name }} · {{ project.company }} · SPLICER{% endblock %}
+{% block title %}{{ project.name }} · {{ project.company }} · SPLICER{% endblock %}
 {% block content %}
-<h3 class="mb-3">Empresa: {{ project.company }} <span class="text-secondary">/</span> Projeto: {{ project.name }}</h3>
+<style>
+.cfg-sidebar { width:200px; flex-shrink:0; }
+.cfg-sidebar-nav { display:flex; flex-direction:column; gap:.15rem; }
+.cfg-sidebar-btn { display:flex; align-items:center; gap:.5rem; padding:.55rem .85rem; border:none; background:none; color:var(--color-text-secondary); font-size:.88rem; cursor:pointer; border-radius:8px; text-align:left; width:100%; }
+.cfg-sidebar-btn.active { background:var(--color-background-secondary); color:var(--color-text-primary); font-weight:500; }
+.cfg-sidebar-btn:hover:not(.active) { background:var(--color-background-secondary); opacity:.7; }
+.cfg-panel { display:none; }
+.cfg-panel.active { display:block; }
+.cfg-main { flex:1; min-width:0; }
+.section-header { font-size:.75rem; text-transform:uppercase; letter-spacing:.07em; color:var(--color-text-secondary); margin-bottom:1rem; font-weight:500; }
+.device-row, .tier-row { display:flex; align-items:center; justify-content:space-between; padding:.5rem .75rem; border-radius:6px; border:1px solid var(--color-border-tertiary); margin-bottom:.4rem; font-size:.88rem; }
+.map-card { border:1px solid var(--color-border-tertiary); border-radius:8px; padding:.85rem 1rem; margin-bottom:.75rem; }
+.map-card-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:.75rem; }
+.map-name { font-weight:500; font-size:.9rem; }
+.map-rules { background:var(--color-background-secondary); border-radius:6px; padding:.75rem; }
+</style>
 
-<div class="row g-4">
-  <div class="col-lg-4">
-    <div class="card p-4 h-100">
-      <h5>Fusões inclusas (opcional)</h5>
-      <form method="post" action="{{ url_for('settings_project_detail', pid=project.id) }}" class="row g-2 mb-3">
-        <input type="hidden" name="action" value="update_project">
-        <div class="col-12">
-          <label class="form-label">Fusões inclusas por lançamento</label>
-          <input class="form-control" name="included_splices" type="number" min="0" value="{{ project.included_splices if project.included_splices is not none else '' }}" placeholder="(vazio = usa o valor da empresa)">
-          <div class="form-text">Se deixar vazio, o sistema usa as fusões inclusas configuradas na empresa.</div>
-        </div>
-        <div class="col-12 mt-2">
-          <label class="form-label">Prazo de pagamento (dias) <span class="text-muted" style="font-weight:400;font-size:.85em;">após criação do payroll</span></label>
-          <input class="form-control" name="payment_days" type="number" min="1" max="365" value="{{ project.payment_days if project.payment_days is not none else 30 }}" placeholder="30">
-          <div class="form-text">Usado para calcular a data de vencimento no payroll.</div>
-        </div>
-        <div class="col-12">
-          <button class="btn btn-primary w-100" type="submit">Salvar</button>
-        </div>
-      </form>
+<!-- Breadcrumb -->
+<nav style="font-size:.82rem; margin-bottom:1.25rem; color:var(--color-text-secondary);">
+  <a href="{{ url_for('settings') }}" style="color:var(--color-text-info); text-decoration:none;">Configurações</a>
+  <span class="mx-1">›</span>
+  <a href="{{ url_for('settings_company_detail', cid=company_id) }}" style="color:var(--color-text-info); text-decoration:none;">{{ project.company }}</a>
+  <span class="mx-1">›</span>
+  <span style="color:var(--color-text-primary);">{{ project.name }}</span>
+</nav>
 
-      <a href="{{ url_for('settings_company_detail', cid=company_id) }}" class="btn btn-outline-secondary btn-sm w-100">Voltar para empresa</a>
-      <a href="{{ url_for('project_splicer_pricing', pid=project.id) }}" class="btn btn-outline-success btn-sm w-100 mt-2">💰 Tabelas de Pagamento dos Splicers</a>
+<!-- Cabeçalho do projeto -->
+<div class="d-flex align-items-start justify-content-between mb-4 flex-wrap gap-2">
+  <div>
+    <h4 class="mb-0">{{ project.name }}</h4>
+    <span class="text-secondary" style="font-size:.82rem;">{{ project.company }}</span>
+  </div>
+  <a href="{{ url_for('project_splicer_pricing', pid=project.id) }}" class="btn btn-outline-success btn-sm">
+    💰 Tabelas de pagamento dos splicers
+  </a>
+</div>
+
+<!-- Layout: sidebar + conteúdo -->
+<div class="d-flex gap-4 align-items-start">
+
+  <!-- Sidebar de navegação -->
+  <div class="cfg-sidebar">
+    <div class="cfg-sidebar-nav">
+      <button class="cfg-sidebar-btn active" onclick="showSection('geral', this)">Visão geral</button>
+      <button class="cfg-sidebar-btn" onclick="showSection('dispositivos', this)">Dispositivos</button>
+      <button class="cfg-sidebar-btn" onclick="showSection('faixas', this)">Faixas de preço</button>
+      <button class="cfg-sidebar-btn" onclick="showSection('mapas', this)">Mapas</button>
     </div>
   </div>
 
-  <div class="col-lg-4">
-    <div class="card p-4 h-100">
-      <h5>Dispositivos ({{ project.name }})</h5>
-      <form method="post" action="{{ url_for('settings_device_add') }}" class="row g-2 mb-3">
-        <input type="hidden" name="company" value="{{ project.company }}">
-        <input type="hidden" name="project_id" value="{{ project.id }}">
-        <input type="hidden" name="next" value="{{ url_for('settings_project_detail', pid=project.id) }}">
-        <div class="col-12">
-          <label class="form-label">Nome do dispositivo</label>
-          <input class="form-control" name="name" placeholder="Ex.: CAM, CTO, ONT" required>
-        </div>
-        <div class="col-12">
-          <label class="form-label">Valor (USD)</label>
-          <div class="input-group">
-            <span class="input-group-text">$</span>
-            <input class="form-control" name="value_usd" type="number" step="0.01" min="0" required>
+  <!-- Conteúdo -->
+  <div class="cfg-main">
+
+    <!-- ── Visão Geral ── -->
+    <div id="section-geral" class="cfg-panel active">
+      <p class="section-header">Configurações do projeto</p>
+      <div class="row g-4">
+        <div class="col-md-5">
+          <div class="card p-4">
+            <h6 class="mb-3">Parâmetros gerais</h6>
+            <form method="post" action="{{ url_for('settings_project_detail', pid=project.id) }}" class="row g-2">
+              <input type="hidden" name="action" value="update_project">
+              <div class="col-12">
+                <label class="form-label form-label-sm">Fusões inclusas por lançamento</label>
+                <input class="form-control form-control-sm" name="included_splices" type="number" min="0"
+                  value="{{ project.included_splices if project.included_splices is not none else '' }}"
+                  placeholder="(vazio = usa o padrão da empresa)">
+                <div class="form-text" style="font-size:.75rem;">Deixe vazio para herdar o valor da empresa ({{ project.company }}).</div>
+              </div>
+              <div class="col-12 mt-1">
+                <label class="form-label form-label-sm">Prazo de pagamento (dias)</label>
+                <input class="form-control form-control-sm" name="payment_days" type="number" min="1" max="365"
+                  value="{{ project.payment_days if project.payment_days is not none else 30 }}" placeholder="30">
+                <div class="form-text" style="font-size:.75rem;">Prazo para vencimento calculado no payroll.</div>
+              </div>
+              <div class="col-12">
+                <button class="btn btn-primary btn-sm w-100" type="submit">Salvar</button>
+              </div>
+            </form>
           </div>
         </div>
-        <div class="col-12">
-          <button class="btn btn-primary w-100" type="submit">Salvar dispositivo</button>
+        <div class="col-md-7">
+          <div class="card p-4">
+            <h6 class="mb-2">Resumo do projeto</h6>
+            <div class="d-flex justify-content-between py-2 border-bottom" style="font-size:.85rem;">
+              <span class="text-secondary">Empresa</span>
+              <strong>{{ project.company }}</strong>
+            </div>
+            <div class="d-flex justify-content-between py-2 border-bottom" style="font-size:.85rem;">
+              <span class="text-secondary">Fusões inclusas</span>
+              <strong>{{ project.included_splices if project.included_splices is not none else '— usa empresa' }}</strong>
+            </div>
+            <div class="d-flex justify-content-between py-2 border-bottom" style="font-size:.85rem;">
+              <span class="text-secondary">Prazo de pagamento</span>
+              <strong>{{ project.payment_days or 30 }} dias</strong>
+            </div>
+            <div class="d-flex justify-content-between py-2 border-bottom" style="font-size:.85rem;">
+              <span class="text-secondary">Dispositivos próprios</span>
+              <strong>{{ types|length }}</strong>
+            </div>
+            <div class="d-flex justify-content-between py-2 border-bottom" style="font-size:.85rem;">
+              <span class="text-secondary">Faixas próprias</span>
+              <strong>{{ tiers|length }}</strong>
+            </div>
+            <div class="d-flex justify-content-between py-2" style="font-size:.85rem;">
+              <span class="text-secondary">Mapas</span>
+              <strong>{{ maps|length }}</strong>
+            </div>
+          </div>
         </div>
-      </form>
-
-      <table class="table table-sm table-dark align-middle mb-0">
-        <thead>
-          <tr>
-            <th>Dispositivo</th>
-            <th class="text-end">Valor</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for d in types %}
-            <tr>
-              <td>{{ d.name }}</td>
-              <td class="text-end">${{ '%.2f'|format(d.value_usd) }}</td>
-              <td class="text-end">
-                <a href="{{ url_for('settings_device_delete', did=d.id, next=url_for('settings_project_detail', pid=project.id)) }}"
-                   class="btn btn-sm btn-outline-danger"
-                   onclick="return confirm('Remover dispositivo?');">✕</a>
-              </td>
-            </tr>
-          {% else %}
-            <tr><td colspan="3" class="text-secondary">Nenhum dispositivo cadastrado.</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
+      </div>
     </div>
-  </div>
 
-  <div class="col-lg-4">
-    <div class="card p-4 h-100">
-      <h5>Faixas &amp; mapas ({{ project.name }})</h5>
-
-      <form method="post" action="{{ url_for('settings_tier_add') }}" class="row g-2 mb-3">
-        <input type="hidden" name="company" value="{{ project.company }}">
-        <input type="hidden" name="project_id" value="{{ project.id }}">
-        <input type="hidden" name="next" value="{{ url_for('settings_project_detail', pid=project.id) }}">
-        <div class="col-4">
-          <label class="form-label">Splices mín.</label>
-          <input class="form-control" name="min_splices" type="number" min="0" value="1">
-        </div>
-        <div class="col-4">
-          <label class="form-label">Splices máx.</label>
-          <input class="form-control" name="max_splices" type="number" min="0" placeholder="∞">
-        </div>
-        <div class="col-4">
-          <label class="form-label">$ / fusão</label>
-          <div class="input-group">
-            <span class="input-group-text">$</span>
-            <input class="form-control" name="price" type="number" step="0.01" min="0" required>
-          </div>
-        </div>
-        <div class="col-12">
-          <button class="btn btn-primary w-100" type="submit">Adicionar faixa</button>
-        </div>
-      </form>
-
-      <table class="table table-sm table-dark align-middle mb-3">
-        <thead>
-          <tr>
-            <th>Splices</th>
-            <th class="text-end">$ / fusão</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for t in tiers %}
-            <tr>
-              <td>
-                {% if t.max_splices %}
-                  {{ t.min_splices }} – {{ t.max_splices }}
-                {% else %}
-                  {{ t.min_splices }} – ∞
-                {% endif %}
-              </td>
-              <td class="text-end">${{ '%.2f'|format(t.price_per_splice_usd) }}</td>
-              <td class="text-end">
-                <a href="{{ url_for('settings_tier_delete', tid=t.id, next=url_for('settings_project_detail', pid=project.id)) }}"
-                   class="btn btn-sm btn-outline-danger"
-                   onclick="return confirm('Remover faixa?');">✕</a>
-              </td>
-            </tr>
-          {% else %}
-            <tr><td colspan="3" class="text-secondary">Nenhuma faixa cadastrada.</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-
-      <h6 class="mt-3">Mapas do projeto</h6>
-      <form method="post" action="{{ url_for('settings_project_detail', pid=project.id) }}" class="row g-2 mb-2">
-        <div class="col-8">
-          <label class="form-label">Novo mapa</label>
-          <input class="form-control" name="new_map" placeholder="Ex.: MAP-001" >
-        </div>
-        <div class="col-4 d-flex align-items-end">
-          <button class="btn btn-outline-light w-100" type="submit">Adicionar mapa</button>
-        </div>
-      </form>
-
-      <div class="border rounded p-2" style="max-height: 180px; overflow-y: auto;">
-        {% if maps %}
-          <ul class="list-unstyled mb-0 small">
-            {% for m in maps %}
-              <li class="mb-3">
-                <div class="d-flex justify-content-between align-items-center">
-                  <div>
-                    <div><b>{{ m.name }}</b></div>
-                    {% if m.project_id %}
-                      <a href="{{ url_for('map_view', map_id=m.id) }}" class="badge bg-info text-dark mt-1">
-                        Abrir mapa interativo
-                      </a>
-                      <a href="{{ url_for('settings_map_access', map_id=m.id) }}" class="badge bg-secondary text-light mt-1 ms-1">
-                        Splicers do mapa
-                      </a>
-                    {% endif %}
-                  </div>
-                  <a href="{{ url_for('settings_project_detail', pid=project.id) }}?del_map={{ m.id }}" class="text-danger"
-                     onclick="return confirm('Remover mapa?');">✕</a>
+    <!-- ── Dispositivos ── -->
+    <div id="section-dispositivos" class="cfg-panel">
+      <p class="section-header">Dispositivos — {{ project.name }}</p>
+      <div class="row g-4">
+        <div class="col-md-5">
+          <div class="card p-4">
+            <h6 class="mb-3">Adicionar dispositivo</h6>
+            <form method="post" action="{{ url_for('settings_device_add') }}" class="row g-2">
+              <input type="hidden" name="company" value="{{ project.company }}">
+              <input type="hidden" name="project_id" value="{{ project.id }}">
+              <input type="hidden" name="next" value="{{ url_for('settings_project_detail', pid=project.id) }}">
+              <div class="col-12">
+                <label class="form-label form-label-sm">Nome do dispositivo</label>
+                <input class="form-control form-control-sm" name="name" placeholder="Ex.: CAM, CTO, ONT" required>
+              </div>
+              <div class="col-12">
+                <label class="form-label form-label-sm">Valor (USD)</label>
+                <div class="input-group input-group-sm">
+                  <span class="input-group-text">$</span>
+                  <input class="form-control" name="value_usd" type="number" step="0.01" min="0" required>
                 </div>
+              </div>
+              <div class="col-12">
+                <button class="btn btn-primary btn-sm w-100" type="submit">Adicionar</button>
+              </div>
+            </form>
+          </div>
+        </div>
+        <div class="col-md-7">
+          {% if types %}
+            {% for d in types %}
+            <div class="device-row">
+              <span>{{ d.name }}</span>
+              <div class="d-flex align-items-center gap-2">
+                <strong>${{ '%.2f'|format(d.value_usd) }}</strong>
+                <a href="{{ url_for('settings_device_delete', did=d.id, next=url_for('settings_project_detail', pid=project.id)) }}"
+                   class="btn btn-sm btn-outline-danger" onclick="return confirm('Remover dispositivo?')">✕</a>
+              </div>
+            </div>
+            {% endfor %}
+          {% else %}
+            <div class="card p-3 text-center text-secondary" style="font-size:.85rem;">
+              Sem dispositivos específicos. O projeto herda os dispositivos de {{ project.company }}.
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
 
-                <form method="post" action="{{ url_for('settings_project_detail', pid=project.id) }}" class="row g-2 mt-1">
+    <!-- ── Faixas de preço ── -->
+    <div id="section-faixas" class="cfg-panel">
+      <p class="section-header">Faixas de preço — {{ project.name }}</p>
+      <div class="row g-4">
+        <div class="col-md-5">
+          <div class="card p-4">
+            <h6 class="mb-3">Adicionar faixa</h6>
+            <form method="post" action="{{ url_for('settings_tier_add') }}" class="row g-2">
+              <input type="hidden" name="company" value="{{ project.company }}">
+              <input type="hidden" name="project_id" value="{{ project.id }}">
+              <input type="hidden" name="next" value="{{ url_for('settings_project_detail', pid=project.id) }}">
+              <div class="col-4">
+                <label class="form-label form-label-sm">Mín.</label>
+                <input class="form-control form-control-sm" name="min_splices" type="number" min="0" value="1">
+              </div>
+              <div class="col-4">
+                <label class="form-label form-label-sm">Máx.</label>
+                <input class="form-control form-control-sm" name="max_splices" type="number" min="0" placeholder="∞">
+              </div>
+              <div class="col-4">
+                <label class="form-label form-label-sm">$ / fusão</label>
+                <input class="form-control form-control-sm" name="price" type="number" step="0.01" min="0" required>
+              </div>
+              <div class="col-12">
+                <button class="btn btn-primary btn-sm w-100" type="submit">Adicionar faixa</button>
+              </div>
+            </form>
+          </div>
+        </div>
+        <div class="col-md-7">
+          {% if tiers %}
+            {% for t in tiers %}
+            <div class="tier-row">
+              <span>{{ t.min_splices }} – {% if t.max_splices %}{{ t.max_splices }}{% else %}∞{% endif %} fusões</span>
+              <div class="d-flex align-items-center gap-2">
+                <strong>${{ '%.2f'|format(t.price_per_splice_usd) }}/fusão</strong>
+                <a href="{{ url_for('settings_tier_delete', tid=t.id, next=url_for('settings_project_detail', pid=project.id)) }}"
+                   class="btn btn-sm btn-outline-danger" onclick="return confirm('Remover faixa?')">✕</a>
+              </div>
+            </div>
+            {% endfor %}
+          {% else %}
+            <div class="card p-3 text-center text-secondary" style="font-size:.85rem;">
+              Sem faixas específicas. O projeto herda as faixas de {{ project.company }}.
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Mapas ── -->
+    <div id="section-mapas" class="cfg-panel">
+      <p class="section-header">Mapas — {{ project.name }}</p>
+      <div class="row g-4">
+        <div class="col-md-4">
+          <div class="card p-4">
+            <h6 class="mb-3">Adicionar mapa</h6>
+            <form method="post" action="{{ url_for('settings_project_detail', pid=project.id) }}" class="row g-2">
+              <div class="col-12">
+                <label class="form-label form-label-sm">Nome do mapa</label>
+                <input class="form-control form-control-sm" name="new_map" placeholder="Ex.: MAP-001">
+              </div>
+              <div class="col-12">
+                <button class="btn btn-primary btn-sm w-100" type="submit">Adicionar</button>
+              </div>
+            </form>
+          </div>
+        </div>
+        <div class="col-md-8">
+          {% if maps %}
+            {% for m in maps %}
+            <div class="map-card">
+              <div class="map-card-header">
+                <span class="map-name">{{ m.name }}</span>
+                <div class="d-flex gap-2">
+                  {% if m.project_id %}
+                  <a href="{{ url_for('map_view', map_id=m.id) }}" class="btn btn-sm btn-outline-info">Abrir mapa</a>
+                  <a href="{{ url_for('settings_map_access', map_id=m.id) }}" class="btn btn-sm btn-outline-secondary">Splicers</a>
+                  {% endif %}
+                  <a href="{{ url_for('settings_project_detail', pid=project.id) }}?del_map={{ m.id }}"
+                     class="btn btn-sm btn-outline-danger" onclick="return confirm('Remover mapa?')">✕</a>
+                </div>
+              </div>
+
+              <!-- Regras do mapa -->
+              <div class="map-rules">
+                <form method="post" action="{{ url_for('settings_project_detail', pid=project.id) }}" class="row g-2">
                   <input type="hidden" name="action" value="update_map_rules">
                   <input type="hidden" name="map_id" value="{{ m.id }}">
-
                   <div class="col-12">
-                    <div class="form-check">
-                      <input class="form-check-input" type="checkbox" name="mid_end_enabled" id="midEnd{{ m.id }}" {% if m.mid_end_enabled %}checked{% endif %}>
-                      <label class="form-check-label" for="midEnd{{ m.id }}">
+                    <div class="form-check form-check-sm">
+                      <input class="form-check-input" type="checkbox" name="mid_end_enabled"
+                        id="midEnd{{ m.id }}" {% if m.mid_end_enabled %}checked{% endif %}>
+                      <label class="form-check-label" for="midEnd{{ m.id }}" style="font-size:.83rem;">
                         Habilitar seleção MEIO/PONTA no lançamento
                       </label>
                     </div>
-                    <div class="form-text">Só aparece no Entry se este checkbox estiver marcado.</div>
-                  </div>
-
-                  <div class="col-6">
-                    <label class="form-label">Inclusas (MEIO)</label>
-                    <input class="form-control" name="included_meio" type="number" min="0" value="{{ m.included_splices_meio or 0 }}">
                   </div>
                   <div class="col-6">
-                    <label class="form-label">Inclusas (PONTA)</label>
-                    <input class="form-control" name="included_ponta" type="number" min="0" value="{{ m.included_splices_ponta or 0 }}">
+                    <label class="form-label form-label-sm">Inclusas MEIO</label>
+                    <input class="form-control form-control-sm" name="included_meio" type="number"
+                      min="0" value="{{ m.included_splices_meio or 0 }}">
+                  </div>
+                  <div class="col-6">
+                    <label class="form-label form-label-sm">Inclusas PONTA</label>
+                    <input class="form-control form-control-sm" name="included_ponta" type="number"
+                      min="0" value="{{ m.included_splices_ponta or 0 }}">
                   </div>
                   <div class="col-12">
-                    <button class="btn btn-outline-light btn-sm w-100" type="submit">Salvar regras do mapa</button>
+                    <button class="btn btn-outline-secondary btn-sm w-100" type="submit">Salvar regras</button>
                   </div>
                 </form>
-              </li>
+              </div>
+            </div>
             {% endfor %}
-          </ul>
-        {% else %}
-          <span class="text-secondary small">Nenhum mapa cadastrado ainda.</span>
-        {% endif %}
+          {% else %}
+            <div class="card p-3 text-center text-secondary" style="font-size:.85rem;">
+              Nenhum mapa cadastrado neste projeto.
+            </div>
+          {% endif %}
+        </div>
       </div>
     </div>
-  </div>
-</div>
+
+  </div><!-- fim cfg-main -->
+</div><!-- fim d-flex -->
+
+<script>
+function showSection(id, btn) {
+  document.querySelectorAll('.cfg-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.cfg-sidebar-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('section-' + id).classList.add('active');
+  btn.classList.add('active');
+}
+
+// Abre a tab correta se houver ?tab=X na URL
+const urlTab = new URLSearchParams(location.search).get('tab');
+if (urlTab) {
+  const btn = [...document.querySelectorAll('.cfg-sidebar-btn')].find(b =>
+    b.getAttribute('onclick').includes("'" + urlTab + "'"));
+  if (btn) showSection(urlTab, btn);
+}
+</script>
 {% endblock %}

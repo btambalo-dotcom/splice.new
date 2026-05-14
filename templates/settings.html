@@ -1,142 +1,203 @@
-
 {% extends 'base.html' %}
 {% block title %}Configurações · SPLICER{% endblock %}
 {% block content %}
-<h3 class="mb-3">Configurações</h3>
+<style>
+.cfg-tab-nav { display:flex; gap:.25rem; border-bottom:1px solid var(--color-border-tertiary); margin-bottom:1.5rem; }
+.cfg-tab { padding:.5rem 1.1rem; border:none; background:none; color:var(--color-text-secondary); font-size:.88rem; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; border-radius:4px 4px 0 0; }
+.cfg-tab.active { color:var(--color-text-primary); border-bottom-color:var(--color-text-info); font-weight:500; }
+.cfg-tab:hover:not(.active) { background:var(--color-background-secondary); }
+.cfg-panel { display:none; }
+.cfg-panel.active { display:block; }
+.company-row { display:flex; align-items:center; justify-content:space-between; padding:.65rem .85rem; border-radius:8px; border:1px solid var(--color-border-tertiary); margin-bottom:.5rem; }
+.company-row:hover { background:var(--color-background-secondary); }
+.company-name { font-weight:500; font-size:.93rem; }
+.company-meta { font-size:.75rem; color:var(--color-text-secondary); margin-top:.15rem; }
+.badge-splices { font-size:.72rem; background:var(--color-background-secondary); color:var(--color-text-secondary); border:1px solid var(--color-border-tertiary); border-radius:20px; padding:.15em .6em; }
+</style>
 
-
-<div class="row g-4 mt-1 mb-3">
-  <div class="col-lg-7">
-    <div class="card p-4 h-100">
-      <h5 class="mb-2">Backup do banco de dados</h5>
-      <p class="small text-muted mb-3">
-        Gere e baixe uma cópia do arquivo <code>.db</code> com todos os lançamentos, empresas,
-        mapas, usuários, etc. Guarde esse arquivo em um local seguro.
-      </p>
-      <a href="{{ url_for('settings_backup_db') }}" class="btn btn-outline-primary">
-        Baixar backup (.db)
-      </a>
-      <p class="small text-muted mt-3 mb-0">
-        O backup funciona para os bancos SQLite usados pelo sistema (arquivo <code>.db</code>).
-        Em servidores como o Render, é uma boa prática baixar esse arquivo com frequência.
-      </p>
-    </div>
+<div class="d-flex align-items-center mb-4 gap-3">
+  <div>
+    <h3 class="mb-0">Configurações</h3>
+    <p class="text-secondary mb-0" style="font-size:.83rem;">Sistema · Emitente · Empresas</p>
   </div>
-  <div class="col-lg-5">
-    <div class="card p-4 h-100">
-      <h6 class="mb-2">Importante</h6>
-      <ul class="small mb-0">
-        <li>O arquivo baixado contém todos os dados atuais do sistema.</li>
-        <li>Para restaurar um backup, um técnico pode substituir manualmente o arquivo
-          de banco de dados no servidor.</li>
-        <li>Recomendo fazer backup antes de grandes mudanças ou atualizações.</li>
-      </ul>
+  <a href="{{ url_for('settings_backup_db') }}" class="btn btn-outline-secondary btn-sm ms-auto">
+    ⬇ Backup do banco
+  </a>
+</div>
+
+<div class="cfg-tab-nav">
+  <button class="cfg-tab active" onclick="showTab('empresas', this)">Empresas clientes</button>
+  <button class="cfg-tab" onclick="showTab('emitente', this)">Minha empresa</button>
+  <button class="cfg-tab" onclick="showTab('sistema', this)">Sistema</button>
+</div>
+
+<!-- ── Tab: Empresas ── -->
+<div id="tab-empresas" class="cfg-panel active">
+  <div class="row g-4">
+    <div class="col-lg-5">
+      <div class="card p-4">
+        <h6 class="mb-3">Nova empresa cliente</h6>
+        <form method="post" action="{{ url_for('settings_company_add') }}" class="row g-2">
+          <div class="col-12">
+            <label class="form-label form-label-sm">Nome da empresa</label>
+            <input class="form-control form-control-sm" name="name" placeholder="Ex.: AT&T, Twelve LLC" required>
+          </div>
+          <div class="col-12">
+            <label class="form-label form-label-sm">Fusões inclusas por lançamento</label>
+            <input class="form-control form-control-sm" name="included_splices" type="number" min="0" value="1">
+            <div class="form-text" style="font-size:.75rem;">Pode ser ajustado individualmente por projeto.</div>
+          </div>
+          <div class="col-12">
+            <label class="form-label form-label-sm">Endereço para invoice</label>
+            <textarea class="form-control form-control-sm" name="invoice_address" rows="3"
+              placeholder="Nome da empresa&#10;Endereço completo&#10;Cidade, Estado CEP"></textarea>
+          </div>
+          <div class="col-12">
+            <button class="btn btn-primary btn-sm w-100" type="submit">Cadastrar empresa</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="col-lg-7">
+      <h6 class="mb-2" style="color:var(--color-text-secondary); font-size:.78rem; text-transform:uppercase; letter-spacing:.06em;">{{ companies|length }} empresa(s) cadastrada(s)</h6>
+      {% if companies %}
+        {% for c in companies %}
+        <div class="company-row">
+          <div>
+            <div class="company-name">{{ c.name }}</div>
+            {% if c.invoice_address %}
+            <div class="company-meta">{{ c.invoice_address.replace('\n', ' · ') | truncate(60) }}</div>
+            {% endif %}
+          </div>
+          <div class="d-flex align-items-center gap-2">
+            <span class="badge-splices">{{ c.included_splices }} inclusas</span>
+            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('settings_company_detail', cid=c.id) }}">Configurar →</a>
+          </div>
+        </div>
+        {% endfor %}
+      {% else %}
+        <div class="card p-4 text-center text-secondary">
+          <p class="mb-0">Nenhuma empresa cadastrada ainda.</p>
+        </div>
+      {% endif %}
     </div>
   </div>
 </div>
 
-<div class="row g-4">
-  <div class="col-lg-5">
-    <div class="card p-4 h-100">
-      <h5>Empresas &amp; fusões inclusas</h5>
-      <form method="post" action="{{ url_for('settings_company_add') }}" class="row g-2 mb-3">
-        <div class="col-12">
-          <label class="form-label">Empresa</label>
-          <input class="form-control" name="name" placeholder="Ex.: AT&amp;T" required>
-        </div>
-        <div class="col-12">
-          <label class="form-label">Fusões inclusas por lançamento</label>
-          <input class="form-control" name="included_splices" type="number" min="0" value="1">
-        </div>
-        <div class="col-12">
-          <label class="form-label">Endereço para invoice (nome + endereço completos)</label>
-          <textarea class="form-control" name="invoice_address" rows="3" placeholder="Ex.:&#10;AT&amp;T&#10;123 Main St&#10;Cidade - Estado"></textarea>
-        </div>
-        <div class="col-12">
-          <button class="btn btn-primary w-100" type="submit">Salvar empresa</button>
-        </div>
-      </form>
-
-      <h6 class="mt-3">Empresas cadastradas</h6>
-      <table class="table table-sm table-dark align-middle mb-0">
-        <thead>
-          <tr>
-            <th>Empresa</th>
-            <th class="text-center">Fusões inclusas</th>
-            <th class="text-end">Ações</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for c in companies %}
-            <tr>
-              <td>
-                {{ c.name }}<br>
-                {% if c.invoice_address %}
-                  <small class="text-secondary">{{ c.invoice_address.replace('\n', ' · ') }}</small>
-                {% endif %}
-              </td>
-              <td class="text-center">{{ c.included_splices }}</td>
-              <td class="text-end">
-                <a class="btn btn-sm btn-outline-info" href="{{ url_for('settings_company_detail', cid=c.id) }}">Configurar</a>
-              </td>
-            </tr>
+<!-- ── Tab: Minha empresa (emitente) ── -->
+<div id="tab-emitente" class="cfg-panel">
+  <div class="row g-4">
+    <div class="col-lg-6">
+      <div class="card p-4">
+        <h6 class="mb-3">Dados do emitente da invoice</h6>
+        <form method="post" action="{{ url_for('settings_system_update') }}" class="row g-2">
+          <div class="col-12">
+            <label class="form-label form-label-sm">Nome da empresa</label>
+            <input class="form-control form-control-sm" name="my_company_name"
+              value="{{ syscfg.my_company_name or '' }}" placeholder="Ex.: King All Service LLC">
+          </div>
+          <div class="col-12">
+            <label class="form-label form-label-sm">Endereço completo</label>
+            <textarea class="form-control form-control-sm" name="my_company_address" rows="3"
+              placeholder="Rua, número, cidade, estado, CEP">{{ syscfg.my_company_address or '' }}</textarea>
+          </div>
+          <div class="col-6">
+            <label class="form-label form-label-sm">CNPJ / Tax ID</label>
+            <input class="form-control form-control-sm" name="my_company_tax_id" value="{{ syscfg.my_company_tax_id or '' }}">
+          </div>
+          <div class="col-6">
+            <label class="form-label form-label-sm">Telefone</label>
+            <input class="form-control form-control-sm" name="my_company_phone" value="{{ syscfg.my_company_phone or '' }}">
+          </div>
+          <div class="col-12">
+            <label class="form-label form-label-sm">E-mail</label>
+            <input class="form-control form-control-sm" name="my_company_email" type="email" value="{{ syscfg.my_company_email or '' }}">
+          </div>
+          <div class="col-12">
+            <button class="btn btn-success btn-sm w-100" type="submit">Salvar dados do emitente</button>
+          </div>
+        </form>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="card p-4">
+        <h6 class="mb-3">Prévia da invoice</h6>
+        <div class="p-3 rounded" style="background:var(--color-background-secondary); font-size:.82rem; line-height:1.7;">
+          <div style="font-weight:500;">{{ syscfg.my_company_name or '— nome da empresa —' }}</div>
+          {% if syscfg.my_company_address %}
+            {% for line in (syscfg.my_company_address or '').splitlines() %}
+              <div>{{ line }}</div>
+            {% endfor %}
           {% else %}
-            <tr>
-              <td colspan="3" class="text-secondary">Nenhuma empresa cadastrada ainda.</td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <div class="col-lg-7">
-    <div class="card p-4 mb-4">
-      <h5>Dados da minha empresa (emitente da invoice)</h5>
-      <form method="post" action="{{ url_for('settings_system_update') }}" class="row g-2">
-        <div class="col-12">
-          <label class="form-label">Nome da sua empresa</label>
-          <input class="form-control" name="my_company_name" value="{{ syscfg.my_company_name or '' }}" placeholder="Ex.: King All Service LLC">
+            <div style="color:var(--color-text-secondary);">— endereço —</div>
+          {% endif %}
+          {% if syscfg.my_company_email or syscfg.my_company_phone %}
+            <div style="margin-top:.4rem; color:var(--color-text-secondary);">
+              {{ syscfg.my_company_email or '' }}{% if syscfg.my_company_email and syscfg.my_company_phone %} · {% endif %}{{ syscfg.my_company_phone or '' }}
+            </div>
+          {% endif %}
         </div>
-        <div class="col-12">
-          <label class="form-label">Endereço completo</label>
-          <textarea class="form-control" name="my_company_address" rows="3" placeholder="Rua, número, cidade, estado, CEP">{{ syscfg.my_company_address or '' }}</textarea>
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">CNPJ / Tax ID (opcional)</label>
-          <input class="form-control" name="my_company_tax_id" value="{{ syscfg.my_company_tax_id or '' }}">
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Telefone</label>
-          <input class="form-control" name="my_company_phone" value="{{ syscfg.my_company_phone or '' }}">
-        </div>
-        <div class="col-12">
-          <label class="form-label">E-mail</label>
-          <input class="form-control" name="my_company_email" type="email" value="{{ syscfg.my_company_email or '' }}">
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Chave da API do Geoapify</label>
-          <input class="form-control" name="geoapify_api_key" value="{{ syscfg.geoapify_api_key or '' }}" placeholder="Cole sua chave aqui">
-        </div>
-        <div class="col-md-6">
-          <label class="form-label">Cabeçalho padrão da lousa</label>
-          <input class="form-control" name="board_header" value="{{ syscfg.board_header or '' }}" placeholder="Ex.: ANSIE">
-        </div>
-        <div class="col-12">
-          <button class="btn btn-success w-100" type="submit">Salvar dados da minha empresa</button>
-        </div>
-      </form>
-    </div>
-
-    <div class="card p-4 h-100">
-      <h5>Como funciona</h5>
-      <ul class="small mb-0">
-        <li>Use esta tela para <b>cadastrar as empresas</b> com as quais você trabalha.</li>
-        <li>Em cada empresa você pode configurar <b>fusões inclusas, dispositivos, faixas de fusão e mapas específicos</b>.</li>
-        <li>Na tela de <b>Lançamento</b>, você escolhe a empresa e o sistema já aplica os valores e mapas configurados.</li>
-        <li>Os campos de <b>endereço da empresa</b> e <b>dados da sua empresa</b> são usados na geração da <b>invoice em PDF</b>.</li>
-      </ul>
+        <p class="text-secondary mt-2 mb-0" style="font-size:.78rem;">Estes dados aparecem como remetente em todas as invoices PDF geradas.</p>
+      </div>
     </div>
   </div>
 </div>
+
+<!-- ── Tab: Sistema ── -->
+<div id="tab-sistema" class="cfg-panel">
+  <div class="row g-4">
+    <div class="col-lg-5">
+      <div class="card p-4">
+        <h6 class="mb-3">Configurações do sistema</h6>
+        <form method="post" action="{{ url_for('settings_system_update') }}" class="row g-2">
+          <div class="col-12">
+            <label class="form-label form-label-sm">Chave da API do Geoapify</label>
+            <input class="form-control form-control-sm" name="geoapify_api_key"
+              value="{{ syscfg.geoapify_api_key or '' }}" placeholder="Cole sua chave aqui">
+            <div class="form-text" style="font-size:.75rem;">Usada para geocodificação nos mapas interativos.</div>
+          </div>
+          <div class="col-12">
+            <label class="form-label form-label-sm">Cabeçalho padrão da lousa</label>
+            <input class="form-control form-control-sm" name="board_header"
+              value="{{ syscfg.board_header or '' }}" placeholder="Ex.: ANSIE">
+          </div>
+          <!-- mantém os outros campos ocultos para não perder valores ao salvar -->
+          <input type="hidden" name="my_company_name" value="{{ syscfg.my_company_name or '' }}">
+          <input type="hidden" name="my_company_address" value="{{ syscfg.my_company_address or '' }}">
+          <input type="hidden" name="my_company_tax_id" value="{{ syscfg.my_company_tax_id or '' }}">
+          <input type="hidden" name="my_company_phone" value="{{ syscfg.my_company_phone or '' }}">
+          <input type="hidden" name="my_company_email" value="{{ syscfg.my_company_email or '' }}">
+          <div class="col-12">
+            <button class="btn btn-primary btn-sm w-100" type="submit">Salvar configurações</button>
+          </div>
+        </form>
+      </div>
+    </div>
+    <div class="col-lg-7">
+      <div class="card p-4">
+        <h6 class="mb-2">Backup do banco de dados</h6>
+        <p class="text-secondary small mb-3">
+          Gere e baixe uma cópia completa do banco com todos os lançamentos, empresas, mapas, usuários e configurações.
+        </p>
+        <a href="{{ url_for('settings_backup_db') }}" class="btn btn-outline-primary btn-sm">
+          ⬇ Baixar backup (.db)
+        </a>
+        <div class="mt-3 p-3 rounded" style="background:var(--color-background-secondary); font-size:.8rem; color:var(--color-text-secondary);">
+          <strong>Recomendações:</strong> faça backup antes de atualizações ou mudanças grandes.
+          Em produção no Render, baixe com frequência pois o disco é efêmero.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function showTab(id, btn) {
+  document.querySelectorAll('.cfg-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.cfg-tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-' + id).classList.add('active');
+  btn.classList.add('active');
+}
+</script>
 {% endblock %}
