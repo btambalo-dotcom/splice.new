@@ -3902,7 +3902,7 @@ def export_pdf():
         """Trunca o texto para caber na célula, sem invadir a coluna seguinte."""
         if text is None:
             text = ""
-        text = str(text)
+        text = _pdf_safe(str(text))
         if width <= 0:
             return ""
         if pdf.get_string_width(text) <= width:
@@ -3938,19 +3938,19 @@ def export_pdf():
         if no_values:
             row = [
                 r.created_date.strftime("%Y-%m-%d") if r.created_date else "",
-                r.company or "",
-                r.map or "",
-                r.type or "",
-                r.device or "",
+                _pdf_safe(r.company or ""),
+                _pdf_safe(r.map or ""),
+                _pdf_safe(r.type or ""),
+                _pdf_safe(r.device or ""),
                 str(r.splices or 0),
             ]
         else:
             row = [
                 r.created_date.strftime("%Y-%m-%d") if r.created_date else "",
-                r.company or "",
-                r.map or "",
-                r.type or "",
-                r.device or "",
+                _pdf_safe(r.company or ""),
+                _pdf_safe(r.map or ""),
+                _pdf_safe(r.type or ""),
+                _pdf_safe(r.device or ""),
                 str(r.splices or 0),
                 f"{(r.price_splices_usd or 0):.2f}",
                 f"{(r.total_usd or 0):.2f}",
@@ -4013,6 +4013,15 @@ def invoice_delete(iid: int):
     db.session.commit()
     flash("Invoice deleted.", "success")
     return redirect(url_for("invoices_list"))
+
+def _pdf_safe(text) -> str:
+    """Converte texto para ASCII removendo acentos — necessário para fontes Arial/Helvetica no fpdf2."""
+    if not text:
+        return ""
+    import unicodedata as _ud
+    nfd = _ud.normalize("NFD", str(text))
+    return nfd.encode("ascii", "ignore").decode("ascii")
+
 @app.route("/export/invoice")
 @login_required
 def export_invoice():
@@ -4152,19 +4161,19 @@ def export_invoice():
     # header - your company (FROM)
     pdf.set_font("Arial", "B", 12)
     if syscfg and syscfg.my_company_name:
-        pdf.cell(0, 6, syscfg.my_company_name, ln=1)
+        pdf.cell(0, 6, _pdf_safe(syscfg.my_company_name), ln=1)
     if syscfg and syscfg.my_company_address:
         for line in (syscfg.my_company_address or "").splitlines():
             if line.strip():
                 pdf.set_font("Arial", "", 9)
-                pdf.cell(0, 5, line.strip(), ln=1)
+                pdf.cell(0, 5, _pdf_safe(line.strip()), ln=1)
     if syscfg and (syscfg.my_company_email or syscfg.my_company_phone):
         contact_parts = []
         if syscfg.my_company_email:
             contact_parts.append(syscfg.my_company_email)
         if syscfg.my_company_phone:
             contact_parts.append(syscfg.my_company_phone)
-        pdf.cell(0, 5, " | ".join(contact_parts), ln=1)
+        pdf.cell(0, 5, _pdf_safe(" | ".join(contact_parts)), ln=1)
     pdf.ln(4)
 
     # invoice title and metadata
@@ -4185,11 +4194,11 @@ def export_invoice():
         if cfg_cli.invoice_address:
             for line in (cfg_cli.invoice_address or "").splitlines():
                 if line.strip():
-                    pdf.cell(0, 5, line.strip(), ln=1)
+                    pdf.cell(0, 5, _pdf_safe(line.strip()), ln=1)
         else:
-            pdf.cell(0, 5, cfg_cli.name, ln=1)
+            pdf.cell(0, 5, _pdf_safe(cfg_cli.name), ln=1)
     else:
-        pdf.cell(0, 5, company_filter or "", ln=1)
+        pdf.cell(0, 5, _pdf_safe(company_filter or ""), ln=1)
 
     pdf.ln(4)
 
@@ -4218,9 +4227,9 @@ def export_invoice():
     for line in lines:
         row = [
             (line.get("launch_date") or "-"),
-            line["map"] or "-",
-            line["device"] or "-",
-            line["role"],
+            _pdf_safe(line["map"] or "-"),
+            _pdf_safe(line["device"] or "-"),
+            _pdf_safe(line["role"]),
             str(line["included"]),
             str(line["splices"]),
             f"$ {line['price_device_usd']:.2f}",
@@ -4234,7 +4243,7 @@ def export_invoice():
             pdf.set_font("Arial", "", 9)
 
         for w, val in zip(col_widths, row):
-            pdf.cell(w, line_h, str(val), border=1)
+            pdf.cell(w, line_h, _pdf_safe(str(val)), border=1)
         pdf.ln(line_h)
 
     pdf.ln(4)
