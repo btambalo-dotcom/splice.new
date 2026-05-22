@@ -775,6 +775,10 @@ class DeviceType(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False)
     value_usd = db.Column(db.Float, default=0.0, nullable=False)
+    # Valores específicos para MEIO/PONTA (quando mid_end_enabled no mapa).
+    # Se NULL, cai no value_usd padrão.
+    value_meio_usd = db.Column(db.Float, nullable=True)
+    value_ponta_usd = db.Column(db.Float, nullable=True)
     company = db.Column(db.String(120), nullable=True)  # se None = valor padrão
     project_id = db.Column(db.Integer, db.ForeignKey('project.id'), nullable=True, index=True)
     project = db.relationship('Project', backref=db.backref('device_types', lazy=True))
@@ -1172,6 +1176,8 @@ with app.app_context():
     ensure("record", "placed_by", "VARCHAR(120)")
     ensure("record", "placed_at", "TIMESTAMP")
     ensure("device_type", "project_id", "INTEGER")
+    ensure("device_type", "value_meio_usd", "DOUBLE PRECISION")
+    ensure("device_type", "value_ponta_usd", "DOUBLE PRECISION")
     ensure("splice_tier", "project_id", "INTEGER")
     ensure("company_map", "project_id", "INTEGER")
     ensure("company_map", "mid_end_enabled", "BOOLEAN")
@@ -1279,7 +1285,13 @@ def included_splices_for(company: str | None, project_id: int | None = None) -> 
 
     return 1
 
-def device_value_for(name: str, company: str | None, project_id: int | None = None) -> float:
+def device_value_for(name: str, company: str | None, project_id: int | None = None, map_role: str | None = None) -> float:
+    """Retorna o valor do dispositivo considerando a regra MEIO/PONTA.
+
+    Quando map_role for 'MEIO' ou 'PONTA' e o DeviceType tiver os campos
+    value_meio_usd / value_ponta_usd preenchidos, usa esses valores.
+    Caso contrario, cai no value_usd padrao.
+    """
     if not name:
         return 0.0
 
@@ -1299,13 +1311,23 @@ def device_value_for(name: str, company: str | None, project_id: int | None = No
         order_clauses = []
         if project_id:
             order_clauses.append(case((DeviceType.project_id == project_id, 0), else_=1))
-        # prioriza company específico quando existir
+        # prioriza company especifico quando existir
         order_clauses.append(case((DeviceType.company == company, 0), else_=1))
         dt = q.order_by(*order_clauses).first()
     else:
         dt = q.first()
 
-    return float(dt.value_usd) if dt else 0.0
+    if not dt:
+        return 0.0
+
+    # Aplica regra MEIO/PONTA se disponivel
+    role = (map_role or "").strip().upper()
+    if role == "MEIO" and dt.value_meio_usd is not None:
+        return float(dt.value_meio_usd)
+    if role == "PONTA" and dt.value_ponta_usd is not None:
+        return float(dt.value_ponta_usd)
+
+    return float(dt.value_usd)
 
 def tier_price_for(count: int, company: str | None, project_id: int | None = None) -> float:
     """Retorna o $/fusão da faixa respeitando prioridade:
@@ -1571,6 +1593,7 @@ def compute_prices(
     company: str | None,
     project_id: int | None = None,
     included_override: int | None = None,
+    map_role: str | None = None,
 ):
     """Calcula preço de fusões e dispositivo para um lançamento manual.
 
@@ -1599,7 +1622,7 @@ def compute_prices(
     price_splices = charge * price_per_splice
 
     # Valor do dispositivo (CAN também pode ter valor fixo de device, se configurado)
-    price_device = device_value_for(device_name or "", company, project_id)
+    price_device = device_value_for(device_name or "", company, project_id, map_role=map_role)
 
     return price_splices, price_device, price_splices + price_device
 
@@ -2395,6 +2418,7 @@ def entry():
             company,
             project_id,
             included_override=included_override,
+            map_role=map_role,
         )
 
         rec = Record(
@@ -2623,6 +2647,7 @@ def photo_entry():
             company=company,
             project_id=project_id,
             included_override=included_override,
+            map_role=map_role,
         )
 
         rec = base_rec
@@ -2851,6 +2876,7 @@ def record_edit(rid):
             company,
             project_id,
             included_override=included_override,
+            map_role=map_role,
         )
 
         rec.company = company
@@ -3665,6 +3691,19 @@ def settings_device_add():
     except ValueError:
         value = 0.0
 
+    # Valores MEIO/PONTA (opcionais)
+    def _opt_float(field):
+        raw = (request.form.get(field) or "").strip()
+        if raw == "":
+            return None
+        try:
+            return float(raw)
+        except ValueError:
+            return None
+
+    value_meio = _opt_float("value_meio_usd")
+    value_ponta = _opt_float("value_ponta_usd")
+
     if not name:
         flash("Nome do dispositivo é obrigatório.", "danger")
         return redirect(next_url or url_for("settings"))
@@ -3672,8 +3711,13 @@ def settings_device_add():
     dt = DeviceType.query.filter_by(name=name, company=company, project_id=project_id).first()
     if dt:
         dt.value_usd = value
+        dt.value_meio_usd = value_meio
+        dt.value_ponta_usd = value_ponta
     else:
-        dt = DeviceType(name=name, company=company, project_id=project_id, value_usd=value)
+        dt = DeviceType(
+            name=name, company=company, project_id=project_id,
+            value_usd=value, value_meio_usd=value_meio, value_ponta_usd=value_ponta,
+        )
         db.session.add(dt)
     db.session.commit()
     flash("Dispositivo salvo.", "success")
@@ -5876,6 +5920,7 @@ def api_update_record_from_map(record_id):
             company,
             project_id,
             included_override=included_override,
+            map_role=map_role,
         )
         rec.price_splices_usd = price_splices
         rec.price_device_usd = price_device
