@@ -5426,6 +5426,309 @@ def api_import_kmz(map_id):
     return jsonify({"ok": True, "imported": imported})
 
 
+@app.route("/api/maps/<int:map_id>/import_haf", methods=["POST"])
+@login_required
+def api_import_haf(map_id):
+    """
+    Importa dispositivos a partir de planilha HAF FIBER (.xlsx).
+    Colunas usadas:
+      - LAT  (índice 26)
+      - LONG (índice 27)
+      - COMMENT (índice 22) → usado como nome do dispositivo
+      - HOUSE NUMBER (índice 0), STREET NAME (índice 3), STREET TYPE (índice 4),
+        PRE DIRECTION (índice 2), POST DIRECTION (índice 5), CITY NAME (índice 11),
+        STATE CODE (índice 12), ZIP CODE (índice 13) → montam o endereço da residência
+    """
+    mp = CompanyMap.query.get_or_404(map_id)
+    ensure_map_access(mp)
+
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_owner = bool(
+        getattr(current_user, "is_company_owner", False)
+        and _current_user_company_name() == mp.company
+    )
+    if not (is_admin or is_owner):
+        abort(403)
+
+    file_storage = request.files.get("haf_file") or request.files.get("file") or None
+    if not file_storage or not getattr(file_storage, "filename", None):
+        return jsonify({"ok": False, "error": "Arquivo Excel (.xlsx) obrigatório."}), 400
+
+    filename_lower = (file_storage.filename or "").lower()
+    if not (filename_lower.endswith(".xlsx") or filename_lower.endswith(".xls")):
+        return jsonify({"ok": False, "error": "Formato inválido. Envie um arquivo .xlsx."}), 400
+
+    try:
+        from openpyxl import load_workbook
+        import io
+
+        content = file_storage.read()
+        wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        ws = wb.active
+
+        imported = 0
+        skipped = 0
+
+        for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True)):
+            try:
+                lat = row[26]
+                lon = row[27]
+                comment = row[22]
+
+                # Coordenadas são obrigatórias
+                if lat is None or lon is None:
+                    skipped += 1
+                    continue
+                try:
+                    lat = float(lat)
+                    lon = float(lon)
+                except (TypeError, ValueError):
+                    skipped += 1
+                    continue
+
+                # Nome do dispositivo vem do campo COMMENT
+                device_name = str(comment).strip() if comment else f"HAF_{row_idx}"
+
+                # Montar endereço legível da residência
+                house_num  = str(row[0]).strip() if row[0] is not None else ""
+                pre_dir    = str(row[2]).strip() if row[2] else ""
+                street     = str(row[3]).strip() if row[3] else ""
+                st_type    = str(row[4]).strip() if row[4] else ""
+                post_dir   = str(row[5]).strip() if row[5] else ""
+                city       = str(row[11]).strip() if row[11] else ""
+                state      = str(row[12]).strip() if row[12] else ""
+                zipcode    = str(row[13]).strip() if row[13] else ""
+
+                parts = [p for p in [house_num, pre_dir, street, st_type, post_dir] if p]
+                street_line = " ".join(parts)
+                city_line   = ", ".join(p for p in [city, state, zipcode] if p)
+                geo_address = ", ".join(p for p in [street_line, city_line] if p) or None
+
+                # Verifica se já existe registro para este dispositivo neste mapa
+                existing = Record.query.filter_by(
+                    company=mp.company,
+                    map=mp.name,
+                    device=device_name,
+                ).first()
+
+                if existing:
+                    # Atualiza coordenadas e endereço se estiverem vazios
+                    if existing.latitude is None:
+                        existing.latitude = lat
+                    if existing.longitude is None:
+                        existing.longitude = lon
+                    if not getattr(existing, "geo_address", None) and geo_address:
+                        existing.geo_address = geo_address
+                else:
+                    rec = Record(
+                        company=mp.company,
+                        map=mp.name,
+                        project_id=mp.project_id,
+                        device=device_name,
+                        latitude=lat,
+                        longitude=lon,
+                        geo_address=geo_address,
+                        splices=0,
+                    )
+                    db.session.add(rec)
+                    imported += 1
+
+            except Exception:
+                skipped += 1
+                continue
+
+        db.session.commit()
+        wb.close()
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"ok": False, "error": f"Falha ao processar arquivo: {str(e)}"}), 500
+
+    return jsonify({"ok": True, "imported": imported, "skipped": skipped})
+
+
+@app.route("/api/maps/<int:map_id>/import_splice_report", methods=["POST"])
+@login_required
+def api_import_splice_report(map_id):
+    """
+    Lê o arquivo SIGNAL (gerado pelo sistema, ex: SIGNAL_V4.xlsx) e atualiza
+    os Records deste mapa com:
+      - pon_name      → PON 1, PON 2, ... (pela ordem das abas SE no arquivo)
+      - splitter_name → nome do SE (ex: 2911E_SE_001)
+      - ote_label     → fibras fusionadas (ex: F1,F2,F3)
+
+    O arquivo deve ter uma aba "RESUMO" com colunas:
+      [0] SPLITTER | [1] PORTA | [2] TIPO | [3] DESTINO | [4] Nº FIBRA | [5] ...
+    As abas individuais (ex: SE_001, SE_004...) definem a ordem dos PONs.
+    O campo 'pon_order' (opcional) permite sobrescrever a ordem: nomes de abas
+    separados por vírgula/quebra de linha.
+    """
+    mp = CompanyMap.query.get_or_404(map_id)
+    ensure_map_access(mp)
+
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_owner = bool(
+        getattr(current_user, "is_company_owner", False)
+        and _current_user_company_name() == mp.company
+    )
+    if not (is_admin or is_owner):
+        abort(403)
+
+    file_storage = request.files.get("splice_file") or request.files.get("file") or None
+    if not file_storage or not getattr(file_storage, "filename", None):
+        return jsonify({"ok": False, "error": "Arquivo Excel (.xlsx) obrigatório."}), 400
+
+    filename_lower = (file_storage.filename or "").lower()
+    if not (filename_lower.endswith(".xlsx") or filename_lower.endswith(".xls")):
+        return jsonify({"ok": False, "error": "Formato inválido. Envie um arquivo .xlsx."}), 400
+
+    try:
+        from openpyxl import load_workbook
+        import io
+
+        content = file_storage.read()
+        wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+
+        # Determine PON order: non-RESUMO sheets in file order, or user override
+        pon_order_raw = (request.form.get("pon_order") or "").strip()
+        import re as _re
+        pon_order_user = [s.strip() for s in _re.split(r'[,;\n]+', pon_order_raw) if s.strip()]
+
+        if pon_order_user:
+            pon_sheets = pon_order_user
+        else:
+            # Auto: all sheets except RESUMO, in file order
+            pon_sheets = [s for s in wb.sheetnames if s.upper() != "RESUMO"]
+
+        # Validate sheet names
+        missing = [s for s in pon_sheets if s not in wb.sheetnames]
+        if missing:
+            return jsonify({
+                "ok": False,
+                "error": f"Aba(s) não encontrada(s): {chr(44).join(missing)}"
+            }), 400
+
+        # Build PON name map: sheet_name -> "PON N"
+        # Also extract the full splitter name from the sheet data (row 0 col 0)
+        sheet_to_pon = {}
+        sheet_to_splitter = {}
+        for idx, sheet_name in enumerate(pon_sheets, start=1):
+            sheet_to_pon[sheet_name] = f"PON {idx}"
+            ws_tmp = wb[sheet_name]
+            # Try to get the SE name from the title row (first non-empty cell in col A rows 1-3)
+            splitter_name = sheet_name  # fallback to sheet name
+            for row in ws_tmp.iter_rows(max_row=3, values_only=True):
+                val = str(row[0]) if row[0] else ""
+                if "SE_" in val or "SPL" in val.upper():
+                    splitter_name = val.replace("MAPEAMENTO DE PORTAS  ·  ", "").split("  ·")[0].strip()
+                    break
+            sheet_to_splitter[sheet_name] = splitter_name
+
+        # Read RESUMO sheet — it has all FT assignments
+        # Columns: [0]SPLITTER [1]PORTA [2]TIPO [3]DESTINO [4]Nº FIBRA [5]BUFFER/FIBRA
+        ft_data = {}  # ft_name -> {'sheet': str, 'pon': str, 'splitter': str, 'fibers': set}
+
+        if "RESUMO" in wb.sheetnames:
+            ws_resumo = wb["RESUMO"]
+            for row in ws_resumo.iter_rows(min_row=3, values_only=True):
+                splitter_cell = str(row[0]).strip() if row[0] else ""
+                dest_type     = str(row[2]).strip() if row[2] else ""
+                dest          = str(row[3]).strip() if row[3] else ""
+                fnum_raw      = row[4]
+
+                # Only rows that go to a FT device
+                if not dest or "_FT_" not in dest:
+                    continue
+                if dest_type not in ("FT (saída)", "FT (entrada)"):
+                    continue
+                if fnum_raw is None:
+                    continue
+
+                try:
+                    fnum = int(fnum_raw)
+                except (ValueError, TypeError):
+                    continue
+
+                # Find which PON sheet this splitter belongs to
+                # splitter_cell in RESUMO is the full SE name (e.g. "2911E_SE_001")
+                # sheet names are like "SE_001" — match by suffix
+                matched_sheet = None
+                for sh in pon_sheets:
+                    # Direct match (sheet_name == splitter_cell) or suffix match
+                    if sh == splitter_cell:
+                        matched_sheet = sh
+                        break
+                    # e.g. sheet="SE_001", splitter_cell="2911E_SE_001"
+                    if splitter_cell.endswith(sh) or sh.endswith(splitter_cell.split("_", 1)[-1] if "_" in splitter_cell else splitter_cell):
+                        matched_sheet = sh
+                        break
+
+                if not matched_sheet:
+                    continue
+
+                pon_name   = sheet_to_pon[matched_sheet]
+                splitter_n = splitter_cell  # keep full name from RESUMO
+
+                if dest not in ft_data:
+                    ft_data[dest] = {
+                        "sheet":    matched_sheet,
+                        "pon":      pon_name,
+                        "splitter": splitter_n,
+                        "fibers":   set(),
+                    }
+                ft_data[dest]["fibers"].add(fnum)
+
+        wb.close()
+
+        # Load all records for this map
+        all_records = Record.query.filter_by(
+            company=mp.company,
+            map=mp.name,
+        ).all()
+
+        rec_by_device = {(r.device or "").strip(): r for r in all_records}
+
+        updated   = 0
+        not_found = []
+
+        for ft_device, info in ft_data.items():
+            rec = rec_by_device.get(ft_device)
+
+            if not rec:
+                # Fallback: suffix match  e.g. "2911E_FT_001" → ends with "FT_001"
+                suffix = "_".join(ft_device.split("_")[-2:])
+                for dev_name, r in rec_by_device.items():
+                    if dev_name.endswith(suffix):
+                        rec = r
+                        break
+
+            if not rec:
+                not_found.append(ft_device)
+                continue
+
+            fibers_str = ",".join(f"F{n}" for n in sorted(info["fibers"]))
+            rec.pon_name      = info["pon"]
+            rec.splitter_name = info["splitter"]
+            rec.ote_label     = fibers_str
+            updated += 1
+
+        db.session.commit()
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"ok": False, "error": f"Erro ao processar arquivo: {str(e)}"}), 500
+
+    pon_map = {sheet_to_splitter.get(sh, sh): sheet_to_pon[sh] for sh in pon_sheets}
+
+    return jsonify({
+        "ok": True,
+        "updated": updated,
+        "not_found": not_found,
+        "pon_map": pon_map,
+        "total_ft_in_file": len(ft_data),
+    })
+
+
 @app.route("/api/maps/<int:map_id>/records", methods=["GET"])
 @login_required
 def api_map_records(map_id):

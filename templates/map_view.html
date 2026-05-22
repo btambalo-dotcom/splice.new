@@ -145,6 +145,47 @@
         <small class="text-muted d-block mb-3">
           <span data-i18n="kmz_help">O sistema vai criar ou atualizar os dispositivos deste mapa com base nos pontos do arquivo KMZ.</span>
         </small>
+
+        <hr class="border-secondary">
+
+        <h5 class="card-title mb-3">Importar via planilha HAF (.xlsx)</h5>
+        <form id="haf-form" class="mb-2" enctype="multipart/form-data">
+          <div class="mb-2">
+            <input type="file" name="haf_file" accept=".xlsx,.xls" class="form-control form-control-sm bg-dark text-light border-secondary" required>
+          </div>
+          <button type="submit" class="btn btn-success btn-sm w-100">
+            Importar planilha HAF
+          </button>
+        </form>
+        <small class="text-muted d-block mb-3">
+          Importa dispositivos a partir da planilha HAF FIBER. Usa as colunas <strong>LAT</strong>, <strong>LONG</strong>, <strong>COMMENT</strong> (nome do dispositivo) e o endereço completo da residência que cada dispositivo vai alimentar.
+        </small>
+
+        <hr class="border-secondary">
+
+        <h5 class="card-title mb-3">Importar Splice Report (.xlsx)</h5>
+        <form id="splice-report-form" class="mb-2" enctype="multipart/form-data">
+          <div class="mb-2">
+            <label class="form-label small text-muted mb-1">Arquivo SIGNAL (.xlsx)</label>
+            <input type="file" name="splice_file" accept=".xlsx,.xls" class="form-control form-control-sm bg-dark text-light border-secondary" required>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small text-muted mb-1">
+              Ordem dos PONs — nomes das abas, um por linha
+              <span class="text-secondary">(deixe vazio para usar a ordem do arquivo)</span>
+            </label>
+            <textarea name="pon_order" rows="4"
+              class="form-control form-control-sm bg-dark text-light border-secondary font-monospace"
+              placeholder="Ex:&#10;SE_001&#10;SE_004&#10;SE_008&#10;SE_015"
+              style="font-size:0.75rem; resize:vertical;"></textarea>
+          </div>
+          <button type="submit" class="btn btn-warning btn-sm w-100" style="color:#000">
+            Importar SIGNAL
+          </button>
+        </form>
+        <small class="text-muted d-block mb-3">
+          Usa o arquivo SIGNAL gerado pelo sistema. Cada aba vira um PON — a ordem das abas define PON 1, PON 2, etc. Preenche <strong>PON</strong>, <strong>splitter</strong> e <strong>fibras</strong> de cada dispositivo no mapa.
+        </small>
         {% if current_user.is_admin %}
         <button type="button" class="btn btn-outline-warning btn-sm w-100 mb-3" id="auto-network-btn">
           Montar rede automática
@@ -435,6 +476,8 @@
     const recordsUrl = "{{ url_for('api_map_records', map_id=map_obj.id) }}";
     const autoNetworkUrl = "{{ url_for('api_auto_network', map_id=map_obj.id) }}";
     const importKmzUrl = "{{ url_for('api_import_kmz', map_id=map_obj.id) }}";
+    const importHafUrl = "{{ url_for('api_import_haf', map_id=map_obj.id) }}";
+    const importSpliceReportUrl = "{{ url_for('api_import_splice_report', map_id=map_obj.id) }}";
     const addRecordUrl = "{{ url_for('api_add_record_to_map', map_id=map_obj.id) }}";
     const sectionColorsUrl = "{{ url_for('map_section_colors', map_id=map_obj.id) }}";
     const initialFocusRecordId = {{ focus_record_id if focus_record_id is not none else "null" }};
@@ -1548,6 +1591,77 @@ function openDeviceModalById(id) {
         loadMarkers();
       } else {
         alert('Falha ao importar KMZ.');
+      }
+    });
+
+    const hafForm = document.getElementById('haf-form');
+    if (hafForm) hafForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const btn = hafForm.querySelector('button[type="submit"]');
+      const origText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Importando...';
+
+      try {
+        const formData = new FormData(ev.target);
+        const resp = await fetch(importHafUrl, {
+          method: 'POST',
+          body: formData
+        });
+        const data = await resp.json();
+        if (data.ok) {
+          alert(`✅ Importados ${data.imported} dispositivos novos.` +
+                (data.skipped > 0 ? `\n⚠️ ${data.skipped} linha(s) ignoradas (sem coordenadas).` : ''));
+          loadMarkers();
+        } else {
+          alert('Erro ao importar planilha HAF: ' + (data.error || 'Falha desconhecida.'));
+        }
+      } catch (err) {
+        alert('Erro de rede ao importar planilha HAF.');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = origText;
+        ev.target.reset();
+      }
+    });
+
+    const spliceReportForm = document.getElementById('splice-report-form');
+    if (spliceReportForm) spliceReportForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const btn = spliceReportForm.querySelector('button[type="submit"]');
+      const origText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Processando...';
+
+      try {
+        const formData = new FormData(ev.target);
+        const resp = await fetch(importSpliceReportUrl, {
+          method: 'POST',
+          body: formData
+        });
+        const data = await resp.json();
+        if (data.ok) {
+          // Build PON map summary
+          let ponSummary = '';
+          if (data.pon_map && Object.keys(data.pon_map).length > 0) {
+            ponSummary = '\n\nMapeamento de PONs:\n' +
+              Object.entries(data.pon_map).map(([se, pon]) => `  ${pon} → ${se}`).join('\n');
+          }
+          let notFoundMsg = '';
+          if (data.not_found && data.not_found.length > 0) {
+            notFoundMsg = `\n⚠️ ${data.not_found.length} dispositivo(s) não encontrado(s) no mapa.`;
+          }
+          alert(`✅ ${data.updated} dispositivo(s) atualizados com PON, splitter e fibras.${notFoundMsg}${ponSummary}`);
+          loadMarkers();
+        } else {
+          alert('Erro ao importar Splice Report: ' + (data.error || 'Falha desconhecida.'));
+        }
+      } catch (err) {
+        alert('Erro de rede ao importar Splice Report.');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = origText;
+        ev.target.reset();
       }
     });
 
