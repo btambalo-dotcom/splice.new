@@ -1186,6 +1186,36 @@ with app.app_context():
     ensure("device_type", "is_ribbon", "BOOLEAN")
     ensure("device_type", "ribbon_price_usd", "DOUBLE PRECISION")
     ensure("record", "ribbon_count", "INTEGER")
+    # Garante FALSE como padrão para is_ribbon em registros existentes (NULL -> FALSE)
+    try:
+        db.session.execute(text('UPDATE device_type SET is_ribbon = FALSE WHERE is_ribbon IS NULL'))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    # Recalcula preços de lançamentos ribbon com total zerado (caso a coluna is_ribbon
+    # estivesse NULL quando o lançamento foi feito, deixando preços em $0.00)
+    try:
+        ribbon_types = DeviceType.query.filter(DeviceType.is_ribbon == True).all()
+        ribbon_names = {dt.name.lower(): dt for dt in ribbon_types}
+        if ribbon_names:
+            broken = Record.query.filter(
+                Record.ribbon_count.isnot(None),
+                Record.ribbon_count > 0,
+                Record.total_usd == 0.0,
+            ).all()
+            for rec in broken:
+                rtype = (rec.type or "").lower()
+                dt = ribbon_names.get(rtype)
+                if dt and dt.ribbon_price_usd:
+                    price = float(rec.ribbon_count) * float(dt.ribbon_price_usd)
+                    rec.price_splices_usd = 0.0
+                    rec.price_device_usd = price
+                    rec.total_usd = price
+            if broken:
+                db.session.commit()
+    except Exception:
+        db.session.rollback()
     ensure("splice_tier", "project_id", "INTEGER")
     ensure("company_map", "project_id", "INTEGER")
     ensure("company_map", "mid_end_enabled", "BOOLEAN")

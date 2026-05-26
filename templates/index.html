@@ -153,7 +153,7 @@ mb-3">Registros</h5>
             <td>{{ r.device }}</td>
             <td>{{ r.splicer }}</td>
             <td>
-              {% if r.type and r.type.upper() == 'BS RIBBON' and r.ribbon_count %}
+              {% if r.ribbon_count and r.ribbon_count > 0 %}
                 <span class="badge" style="background:#6f42c1;">🎀 {{ r.ribbon_count }} fita{{ 's' if r.ribbon_count != 1 else '' }}</span>
               {% else %}
                 {{ r.splices }}
