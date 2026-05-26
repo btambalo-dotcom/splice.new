@@ -779,7 +779,10 @@ class DeviceType(db.Model):
     # Se NULL, cai no value_usd padrão.
     value_meio_usd = db.Column(db.Float, nullable=True)
     value_ponta_usd = db.Column(db.Float, nullable=True)
-    company = db.Column(db.String(120), nullable=True)  # se None = valor padrão
+    # Ribbon: quando True, o lancamento usa fitas (ribbon_count) em vez de fusoes.
+    is_ribbon = db.Column(db.Boolean, default=False, nullable=False)
+    ribbon_price_usd = db.Column(db.Float, nullable=True)  # valor fixo por fita
+    company = db.Column(db.String(120), nullable=True)  # se None = valor padrao
     project_id = db.Column(db.Integer, db.ForeignKey('project.id'), nullable=True, index=True)
     project = db.relationship('Project', backref=db.backref('device_types', lazy=True))
 
@@ -871,6 +874,8 @@ class Record(db.Model):
     price_device_usd = db.Column(db.Float, default=0.0)
     total_usd = db.Column(db.Float, default=0.0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    # Ribbon: quando o dispositivo e do tipo ribbon, armazena a qtd de fitas
+    ribbon_count = db.Column(db.Integer, nullable=True)
 
     # Testes (níveis por fusão, armazenados como CSV) e flag de concluído
     test_levels = db.Column(db.Text, nullable=True)
@@ -1178,6 +1183,9 @@ with app.app_context():
     ensure("device_type", "project_id", "INTEGER")
     ensure("device_type", "value_meio_usd", "DOUBLE PRECISION")
     ensure("device_type", "value_ponta_usd", "DOUBLE PRECISION")
+    ensure("device_type", "is_ribbon", "BOOLEAN")
+    ensure("device_type", "ribbon_price_usd", "DOUBLE PRECISION")
+    ensure("record", "ribbon_count", "INTEGER")
     ensure("splice_tier", "project_id", "INTEGER")
     ensure("company_map", "project_id", "INTEGER")
     ensure("company_map", "mid_end_enabled", "BOOLEAN")
@@ -1285,48 +1293,53 @@ def included_splices_for(company: str | None, project_id: int | None = None) -> 
 
     return 1
 
+def _get_device_type(name: str, company: str | None, project_id: int | None = None):
+    """Busca o DeviceType com prioridade: projeto > empresa > global."""
+    if not name:
+        return None
+    q = DeviceType.query.filter(DeviceType.name.ilike(name))
+    if project_id:
+        q = q.filter(or_(DeviceType.project_id == project_id, DeviceType.project_id.is_(None)))
+    else:
+        q = q.filter(DeviceType.project_id.is_(None))
+    if company:
+        q = q.filter(or_(DeviceType.company == company, DeviceType.company.is_(None)))
+        order_clauses = []
+        if project_id:
+            order_clauses.append(case((DeviceType.project_id == project_id, 0), else_=1))
+        order_clauses.append(case((DeviceType.company == company, 0), else_=1))
+        return q.order_by(*order_clauses).first()
+    return q.first()
+
+
+def device_is_ribbon(name: str, company: str | None, project_id: int | None = None) -> tuple:
+    """Retorna (is_ribbon, ribbon_price_usd) para o dispositivo."""
+    dt = _get_device_type(name, company, project_id)
+    if dt and bool(getattr(dt, "is_ribbon", False)):
+        return True, float(getattr(dt, "ribbon_price_usd", None) or 0.0)
+    return False, 0.0
+
+
 def device_value_for(name: str, company: str | None, project_id: int | None = None, map_role: str | None = None) -> float:
     """Retorna o valor do dispositivo considerando a regra MEIO/PONTA.
 
     Quando map_role for 'MEIO' ou 'PONTA' e o DeviceType tiver os campos
     value_meio_usd / value_ponta_usd preenchidos, usa esses valores.
     Caso contrario, cai no value_usd padrao.
+    Dispositivos ribbon nao tem valor de dispositivo fixo (o preco e por fita).
     """
-    if not name:
-        return 0.0
-
-    # Prioridade de busca:
-    # 1) dispositivo do projeto
-    # 2) dispositivo da empresa
-    # 3) dispositivo global (company NULL / project NULL)
-    q = DeviceType.query.filter(DeviceType.name.ilike(name))
-
-    if project_id:
-        q = q.filter(or_(DeviceType.project_id == project_id, DeviceType.project_id.is_(None)))
-    else:
-        q = q.filter(DeviceType.project_id.is_(None))
-
-    if company:
-        q = q.filter(or_(DeviceType.company == company, DeviceType.company.is_(None)))
-        order_clauses = []
-        if project_id:
-            order_clauses.append(case((DeviceType.project_id == project_id, 0), else_=1))
-        # prioriza company especifico quando existir
-        order_clauses.append(case((DeviceType.company == company, 0), else_=1))
-        dt = q.order_by(*order_clauses).first()
-    else:
-        dt = q.first()
-
+    dt = _get_device_type(name, company, project_id)
     if not dt:
         return 0.0
-
+    # Ribbon: nao cobra valor fixo de dispositivo
+    if bool(getattr(dt, "is_ribbon", False)):
+        return 0.0
     # Aplica regra MEIO/PONTA se disponivel
     role = (map_role or "").strip().upper()
     if role == "MEIO" and dt.value_meio_usd is not None:
         return float(dt.value_meio_usd)
     if role == "PONTA" and dt.value_ponta_usd is not None:
         return float(dt.value_ponta_usd)
-
     return float(dt.value_usd)
 
 def tier_price_for(count: int, company: str | None, project_id: int | None = None) -> float:
@@ -1594,16 +1607,21 @@ def compute_prices(
     project_id: int | None = None,
     included_override: int | None = None,
     map_role: str | None = None,
+    ribbon_count: int | None = None,
 ):
-    """Calcula preço de fusões e dispositivo para um lançamento manual.
+    """Calcula preco de fusoes e dispositivo para um lancamento manual.
 
-    Se included_override vier preenchido, ele tem prioridade (ex.: mapas com regra MEIO/PONTA).
-
-    Regras:
-    - TODAS as tecnologias/tipos (inclusive CAN) seguem a mesma regra de fusões.
-    - As faixas de preço ($/fusão) são determinadas pelo TOTAL de fusões do lançamento.
-      A quantidade cobrada é (splices - fusões inclusas).
+    - Ribbon: se o dispositivo for ribbon, calcula ribbon_count x ribbon_price_usd.
+      Fusoes e valor de dispositivo sao ignorados nesse caso.
+    - MEIO/PONTA: included_override tem prioridade sobre a configuracao padrao.
     """
+    # --- Ribbon ---
+    is_rib, ribbon_price = device_is_ribbon(device_name or "", company, project_id)
+    if is_rib:
+        count = int(ribbon_count or 0)
+        price_ribbon = count * ribbon_price
+        return 0.0, price_ribbon, price_ribbon
+
     total_splices = int(splices or 0)
 
     # Fusões inclusas: override do mapa (MEIO/PONTA) > projeto > empresa > padrão
@@ -1621,7 +1639,7 @@ def compute_prices(
     price_per_splice = tier_price_for(total_splices, company, project_id) if charge > 0 else 0.0
     price_splices = charge * price_per_splice
 
-    # Valor do dispositivo (CAN também pode ter valor fixo de device, se configurado)
+    # Valor do dispositivo
     price_device = device_value_for(device_name or "", company, project_id, map_role=map_role)
 
     return price_splices, price_device, price_splices + price_device
@@ -2250,11 +2268,12 @@ def entry():
     devices_by_project = {}
     devices_by_company = {}
     for dt in DeviceType.query.order_by(DeviceType.company, DeviceType.name).all():
+        dobj = {"name": dt.name, "is_ribbon": bool(getattr(dt, "is_ribbon", False))}
         if dt.project_id:
-            devices_by_project.setdefault(str(dt.project_id), []).append(dt.name)
+            devices_by_project.setdefault(str(dt.project_id), []).append(dobj)
         else:
             key = dt.company or "__global__"
-            devices_by_company.setdefault(key, []).append(dt.name)
+            devices_by_company.setdefault(key, []).append(dobj)
 
     splicer_options = []
     if getattr(current_user, "is_admin", False):
@@ -2307,6 +2326,7 @@ def entry():
         device_for_price = type_val or device_name
 
         splices_raw = request.form.get("splices") or "0"
+        ribbon_count_raw = (request.form.get("ribbon_count") or "").strip()
         created_raw = request.form.get("created") or ""
         splicer = (request.form.get("splicer") or "").strip() or default_splicer
         confirm_duplicate = (request.form.get("confirm_duplicate") == "yes")
@@ -2375,6 +2395,11 @@ def entry():
         except ValueError:
             splices = 0
 
+        try:
+            ribbon_count = int(ribbon_count_raw) if ribbon_count_raw else None
+        except ValueError:
+            ribbon_count = None
+
         if created_raw:
             try:
                 created_date = datetime.strptime(created_raw, "%Y-%m-%d")
@@ -2419,12 +2444,14 @@ def entry():
             project_id,
             included_override=included_override,
             map_role=map_role,
+            ribbon_count=ribbon_count,
         )
 
+        is_rib, _ = device_is_ribbon(device_for_price or "", company, project_id)
         rec = Record(
             map=map_val,
             type=type_val,
-            splices=splices,
+            splices=(0 if is_rib else splices),
             device=device_name,
             splicer=splicer,
             created_date=created_date,
@@ -2435,6 +2462,7 @@ def entry():
             price_splices_usd=price_splices,
             price_device_usd=price_device,
             total_usd=total,
+            ribbon_count=(ribbon_count if is_rib else None),
             ft_in=(None if type_val.strip().upper().startswith("CAN") else (ft_in or None)),
             ft_out=(None if type_val.strip().upper().startswith("CAN") else (ft_out or None)),
             can_cable_count=(can_cable_count if type_val.strip().upper().startswith("CAN") else None),
@@ -2799,11 +2827,12 @@ def record_edit(rid):
     devices_by_project = {}
     devices_by_company = {}
     for dt in DeviceType.query.order_by(DeviceType.company, DeviceType.name).all():
+        dobj = {"name": dt.name, "is_ribbon": bool(getattr(dt, "is_ribbon", False))}
         if dt.project_id:
-            devices_by_project.setdefault(str(dt.project_id), []).append(dt.name)
+            devices_by_project.setdefault(str(dt.project_id), []).append(dobj)
         else:
             key = dt.company or "__global__"
-            devices_by_company.setdefault(key, []).append(dt.name)
+            devices_by_company.setdefault(key, []).append(dobj)
 
     splicer_options = []
     if getattr(current_user, "is_admin", False):
@@ -2826,6 +2855,7 @@ def record_edit(rid):
         device_for_price = type_val or device_name
 
         splices_raw = request.form.get("splices") or "0"
+        ribbon_count_raw = (request.form.get("ribbon_count") or "").strip()
         created_raw = request.form.get("created") or ""
         splicer = (request.form.get("splicer") or "").strip() or default_splicer
         ft_in = (request.form.get("ft_in") or "").strip()
@@ -2836,6 +2866,11 @@ def record_edit(rid):
             splices = int(splices_raw or 0)
         except ValueError:
             splices = 0
+
+        try:
+            ribbon_count = int(ribbon_count_raw) if ribbon_count_raw else None
+        except ValueError:
+            ribbon_count = None
 
         if created_raw:
             try:
@@ -2877,14 +2912,17 @@ def record_edit(rid):
             project_id,
             included_override=included_override,
             map_role=map_role,
+            ribbon_count=ribbon_count,
         )
 
+        is_rib_edit, _ = device_is_ribbon(device_for_price or "", company, project_id)
         rec.company = company
         rec.project_id = project_id
         rec.map = map_val
         rec.type = type_val
         rec.device = device_name
-        rec.splices = splices
+        rec.splices = (0 if is_rib_edit else splices)
+        rec.ribbon_count = (ribbon_count if is_rib_edit else None)
         rec.splicer = splicer
         rec.created_date = created_date
         rec.map_role = map_role
@@ -3703,6 +3741,8 @@ def settings_device_add():
 
     value_meio = _opt_float("value_meio_usd")
     value_ponta = _opt_float("value_ponta_usd")
+    is_ribbon = bool(request.form.get("is_ribbon"))
+    ribbon_price = _opt_float("ribbon_price_usd")
 
     if not name:
         flash("Nome do dispositivo é obrigatório.", "danger")
@@ -3713,10 +3753,14 @@ def settings_device_add():
         dt.value_usd = value
         dt.value_meio_usd = value_meio
         dt.value_ponta_usd = value_ponta
+        dt.is_ribbon = is_ribbon
+        dt.ribbon_price_usd = ribbon_price if is_ribbon else None
     else:
         dt = DeviceType(
             name=name, company=company, project_id=project_id,
             value_usd=value, value_meio_usd=value_meio, value_ponta_usd=value_ponta,
+            is_ribbon=is_ribbon,
+            ribbon_price_usd=(ribbon_price if is_ribbon else None),
         )
         db.session.add(dt)
     db.session.commit()
@@ -5920,7 +5964,8 @@ def api_update_record_from_map(record_id):
             company,
             project_id,
             included_override=included_override,
-            map_role=map_role,
+            map_role=rec.map_role,
+            ribbon_count=rec.ribbon_count,
         )
         rec.price_splices_usd = price_splices
         rec.price_device_usd = price_device

@@ -134,7 +134,7 @@ mb-3">Registros</h5>
           <th class="nowrap-cell">Type</th>
           <th>Device</th>
           <th>Splicer</th>
-          <th>Splices</th>
+          <th>Splices / Fitas</th>
           {% if can_view_values %}<th>$ Fusões</th>
           <th>$ Device</th>
           <th>$ Total</th>{% endif %}
@@ -152,7 +152,13 @@ mb-3">Registros</h5>
             <td class="nowrap-cell">{{ r.type }}</td>
             <td>{{ r.device }}</td>
             <td>{{ r.splicer }}</td>
-            <td>{{ r.splices }}</td>
+            <td>
+              {% if r.type and r.type.upper() == 'BS RIBBON' and r.ribbon_count %}
+                <span class="badge" style="background:#6f42c1;">🎀 {{ r.ribbon_count }} fita{{ 's' if r.ribbon_count != 1 else '' }}</span>
+              {% else %}
+                {{ r.splices }}
+              {% endif %}
+            </td>
             {% if can_view_values %}<td>$ {{ '%.2f'|format(r.price_splices_usd or 0) }}</td>
             <td>$ {{ '%.2f'|format(r.price_device_usd or 0) }}</td>
             <td>$ {{ '%.2f'|format(r.total_usd or 0) }}</td>{% endif %}

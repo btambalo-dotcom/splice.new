@@ -310,14 +310,18 @@
         <div class="row g-2">
           <div class="col-md-6">
             <label class="form-label">Tipo do dispositivo</label>
-            <select class="form-select bg-dark text-light border-secondary" id="device-type">
+            <select class="form-select bg-dark text-light border-secondary" id="device-type" {% if not current_user.is_admin and not current_user.is_company_owner %}disabled{% endif %}>
               <option>OTE</option>
               <option>Splitter</option>
               <option>D</option>
               <option>BS</option>
+              <option>BS RIBBON</option>
               <option>Butt Splicer</option>
               <option>Outro</option>
             </select>
+            {% if not current_user.is_admin and not current_user.is_company_owner %}
+            <div class="form-text text-muted" style="font-size:.75rem;">Tipo só pode ser alterado pelo Admin.</div>
+            {% endif %}
           </div>
           <div class="col-md-6">
             <label class="form-label">Port label</label>

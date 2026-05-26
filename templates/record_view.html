@@ -42,8 +42,14 @@
         <dt class="col-4">Device type</dt>
         <dd class="col-8">{{ rec.type or '-' }}</dd>
 
-        <dt class="col-4">Splices</dt>
-        <dd class="col-8">{{ rec.splices or 0 }}</dd>
+        <dt class="col-4">Splices / Fitas</dt>
+        <dd class="col-8">
+          {% if rec.type and rec.type.upper() == 'BS RIBBON' and rec.ribbon_count %}
+            <span class="badge" style="background:#6f42c1;">🎀 {{ rec.ribbon_count }} fita{{ 's' if rec.ribbon_count != 1 else '' }}</span>
+          {% else %}
+            {{ rec.splices or 0 }}
+          {% endif %}
+        </dd>
 
         <dt class="col-4">Observações</dt>
         <dd class="col-8">{{ rec.device_info or '-' }}</dd>

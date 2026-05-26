@@ -76,7 +76,7 @@
            autocomplete="off"
            autofocus>
         </div>
-        <div class="row g-2">
+        <div id="splices-wrap" class="row g-2">
           <div class="col-6">
             <label class="form-label">Splices</label>
             <input name="splices" type="number" min="0" class="form-control" value="{{ form_splices|default('0') }}">
@@ -84,6 +84,17 @@
           <div class="col-6">
             <label class="form-label">Data</label>
             <input name="created" type="date" class="form-control" value="{{ form_created|default(today) }}">
+          </div>
+        </div>
+
+        <div id="ribbon-wrap" class="row g-2 mt-2" style="display:none;">
+          <div class="col-6">
+            <label class="form-label">🎀 Nº de fitas (Ribbon)</label>
+            <input name="ribbon_count" id="ribbon-count-input" type="number" min="1" class="form-control" value="{{ form_ribbon_count|default('') }}" placeholder="Ex.: 3">
+          </div>
+          <div class="col-6">
+            <label class="form-label">Data</label>
+            <input name="created" type="date" class="form-control" value="{{ form_created|default(today) }}" id="ribbon-date-input" style="display:none;">
           </div>
         </div>
 
@@ -190,6 +201,10 @@
   const typeSelect = document.getElementById('type-select');
 
   const typeIsCan = () => String((typeSelect && typeSelect.value) || '').trim().toUpperCase().startsWith('CAN');
+  const typeIsRibbon = () => {
+    const opt = typeSelect && typeSelect.options[typeSelect.selectedIndex];
+    return opt && opt.dataset && opt.dataset.isRibbon === '1';
+  };
   const singleFtWrap = document.getElementById('single-ft-wrap');
   const canCablesWrap = document.getElementById('can-cables-wrap');
   const canCableCountInput = document.getElementById('can-cable-count');
@@ -228,10 +243,21 @@
     }
   }
 
+  function updateRibbonVisibility() {
+    const isRib = typeIsRibbon();
+    const splicesWrap = document.getElementById('splices-wrap');
+    const ribbonWrap = document.getElementById('ribbon-wrap');
+    if (splicesWrap) splicesWrap.style.display = isRib ? 'none' : '';
+    if (ribbonWrap) ribbonWrap.style.display = isRib ? '' : 'none';
+    if (singleFtWrap) if (isRib) singleFtWrap.style.display = 'none';
+    if (canCablesWrap) if (isRib) canCablesWrap.style.display = 'none';
+  }
+
   function updateFtVisibility() {
     const isCan = typeIsCan();
-    if (singleFtWrap) singleFtWrap.style.display = isCan ? 'none' : '';
-    if (canCablesWrap) canCablesWrap.style.display = isCan ? '' : 'none';
+    const isRib = typeIsRibbon();
+    if (singleFtWrap) singleFtWrap.style.display = (isCan || isRib) ? 'none' : '';
+    if (canCablesWrap) canCablesWrap.style.display = (isCan && !isRib) ? '' : 'none';
     if (isCan && canCablesContainer && !canCablesContainer.children.length) {
       let existingCount = Array.isArray(existingCanCables) ? existingCanCables.length : 0;
       let countVal = Number(canCableCountInput && canCableCountInput.value || 0) || existingCount;
@@ -307,10 +333,12 @@
 
     types.forEach(t => {
       const opt = document.createElement('option');
-      opt.value = t;
-      opt.textContent = t;
+      opt.value = t.name !== undefined ? t.name : t;
+      opt.textContent = t.name !== undefined ? t.name : t;
+      if (t.is_ribbon) opt.dataset.isRibbon = '1';
       typeSelect.appendChild(opt);
     });
+    updateRibbonVisibility();
   }
 
   function updateMaps() {
@@ -416,6 +444,7 @@
   });
 
   if (typeSelect) typeSelect.addEventListener('change', () => {
+    updateRibbonVisibility();
     if (typeIsCan() && canCablesContainer && !canCablesContainer.children.length) {
       const ans = window.prompt('Quantos cabos esse CAN possui?', canCableCountInput && canCableCountInput.value ? canCableCountInput.value : '1');
       if (ans !== null && canCableCountInput) canCableCountInput.value = ans;

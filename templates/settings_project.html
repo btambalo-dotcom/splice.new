@@ -151,6 +151,19 @@
                   <input class="form-control" name="value_ponta_usd" type="number" step="0.01" min="0" placeholder="Opcional">
                 </div>
               </div>
+              <div class="col-12 mt-1">
+                <div class="form-check">
+                  <input class="form-check-input" type="checkbox" name="is_ribbon" id="is_ribbon_proj" value="1" onchange="document.getElementById('ribbon_price_proj').closest('.col-12').style.display=this.checked?'':'none'">
+                  <label class="form-check-label form-label-sm" for="is_ribbon_proj">🎀 Dispositivo Ribbon (fitas)</label>
+                </div>
+              </div>
+              <div class="col-12" id="ribbon_price_proj_wrap" style="display:none;">
+                <label class="form-label form-label-sm">Valor por fita (USD)</label>
+                <div class="input-group input-group-sm">
+                  <span class="input-group-text">$</span>
+                  <input class="form-control" name="ribbon_price_usd" id="ribbon_price_proj" type="number" step="0.01" min="0" placeholder="Ex.: 2.50">
+                </div>
+              </div>
               <div class="col-12">
                 <button class="btn btn-primary btn-sm w-100" type="submit">Adicionar</button>
               </div>
@@ -163,7 +176,9 @@
             <div class="device-row">
               <span>{{ d.name }}</span>
               <div class="d-flex align-items-center gap-2">
-                {% if d.value_meio_usd is not none or d.value_ponta_usd is not none %}
+                {% if d.is_ribbon %}
+                  <span class="badge" style="background:#6f42c1;" title="Ribbon">🎀 ${{ '%.2f'|format(d.ribbon_price_usd or 0) }}/fita</span>
+                {% elif d.value_meio_usd is not none or d.value_ponta_usd is not none %}
                   <span class="badge bg-secondary" title="Padrão">${{ '%.2f'|format(d.value_usd) }}</span>
                   {% if d.value_meio_usd is not none %}
                     <span class="badge" style="background:#0d6efd;" title="MEIO">M ${{ '%.2f'|format(d.value_meio_usd) }}</span>
