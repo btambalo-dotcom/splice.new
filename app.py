@@ -1757,7 +1757,7 @@ def index():
             pass
 
     # Oculta dispositivos importados do KMZ que ainda não tiveram lançamento (splicer/splices)
-    query = query.filter((Record.splices > 0) | (Record.total_usd > 0) | (Record.price_device_usd > 0) | (Record.price_splices_usd > 0))
+    query = query.filter((Record.splices > 0) | (Record.total_usd > 0) | (Record.price_device_usd > 0) | (Record.price_splices_usd > 0) | (Record.ribbon_count > 0))
 
     records = query.order_by(Record.created_date.desc().nullslast(), Record.id.desc()).all()
     total_rows = len(records)
@@ -1877,7 +1877,7 @@ def build_filtered_record_query_from_request():
             pass
 
     # Oculta dispositivos importados do KMZ que ainda não viraram produção
-    query = query.filter((Record.splices > 0) | (Record.total_usd > 0) | (Record.price_device_usd > 0) | (Record.price_splices_usd > 0))
+    query = query.filter((Record.splices > 0) | (Record.total_usd > 0) | (Record.price_device_usd > 0) | (Record.price_splices_usd > 0) | (Record.ribbon_count > 0))
 
     return query
 
