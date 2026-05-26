@@ -1193,26 +1193,28 @@ with app.app_context():
     except Exception:
         db.session.rollback()
 
-    # Recalcula preços de lançamentos ribbon com total zerado (caso a coluna is_ribbon
-    # estivesse NULL quando o lançamento foi feito, deixando preços em $0.00)
+    # Recalcula precos de lancamentos ribbon com total zerado
     try:
         ribbon_types = DeviceType.query.filter(DeviceType.is_ribbon == True).all()
         ribbon_names = {dt.name.lower(): dt for dt in ribbon_types}
         if ribbon_names:
-            broken = Record.query.filter(
-                Record.ribbon_count.isnot(None),
-                Record.ribbon_count > 0,
-                Record.total_usd == 0.0,
-            ).all()
+            broken = Record.query.filter(Record.total_usd == 0.0).all()
+            changed = False
             for rec in broken:
-                rtype = (rec.type or "").lower()
+                rtype = (rec.type or "").lower().strip()
                 dt = ribbon_names.get(rtype)
-                if dt and dt.ribbon_price_usd:
-                    price = float(rec.ribbon_count) * float(dt.ribbon_price_usd)
+                if not dt:
+                    continue
+                rcount = rec.ribbon_count or (int(rec.splices or 0) if (rec.splices or 0) > 0 else None)
+                if rcount and dt.ribbon_price_usd:
+                    price = float(rcount) * float(dt.ribbon_price_usd)
                     rec.price_splices_usd = 0.0
                     rec.price_device_usd = price
                     rec.total_usd = price
-            if broken:
+                    rec.ribbon_count = rcount
+                    rec.splices = 0
+                    changed = True
+            if changed:
                 db.session.commit()
     except Exception:
         db.session.rollback()
@@ -1757,7 +1759,7 @@ def index():
             pass
 
     # Oculta dispositivos importados do KMZ que ainda não tiveram lançamento (splicer/splices)
-    query = query.filter((Record.splices > 0) | (Record.total_usd > 0) | (Record.price_device_usd > 0) | (Record.price_splices_usd > 0) | (Record.ribbon_count > 0))
+    query = query.filter((Record.splices > 0) | (Record.total_usd > 0) | (Record.price_device_usd > 0) | (Record.price_splices_usd > 0) | (Record.ribbon_count.isnot(None)))
 
     records = query.order_by(Record.created_date.desc().nullslast(), Record.id.desc()).all()
     total_rows = len(records)
@@ -1877,7 +1879,7 @@ def build_filtered_record_query_from_request():
             pass
 
     # Oculta dispositivos importados do KMZ que ainda não viraram produção
-    query = query.filter((Record.splices > 0) | (Record.total_usd > 0) | (Record.price_device_usd > 0) | (Record.price_splices_usd > 0) | (Record.ribbon_count > 0))
+    query = query.filter((Record.splices > 0) | (Record.total_usd > 0) | (Record.price_device_usd > 0) | (Record.price_splices_usd > 0) | (Record.ribbon_count.isnot(None)))
 
     return query
 
@@ -6505,23 +6507,31 @@ def admin_fix_ribbon():
         errors.append(f"Fix NULL is_ribbon: {e}")
 
     # 2) Recalcula registros ribbon com total zerado
+    # Busca por: ribbon_count preenchido OU type que bate com um DeviceType ribbon
     try:
         ribbon_types = DeviceType.query.filter(DeviceType.is_ribbon == True).all()
         ribbon_map = {dt.name.lower(): dt for dt in ribbon_types}
         if ribbon_map:
-            broken = Record.query.filter(
-                Record.ribbon_count.isnot(None),
-                Record.ribbon_count > 0,
-                Record.total_usd == 0.0,
-            ).all()
-            for rec in broken:
-                rtype = (rec.type or "").lower()
+            ribbon_type_names = list(ribbon_map.keys())
+            # Pega registros com total zerado cujo type seja ribbon OU ribbon_count preenchido
+            all_records = Record.query.filter(Record.total_usd == 0.0).all()
+            for rec in all_records:
+                rtype = (rec.type or "").lower().strip()
                 dt = ribbon_map.get(rtype)
-                if dt and dt.ribbon_price_usd:
-                    price = float(rec.ribbon_count) * float(dt.ribbon_price_usd)
+                if not dt:
+                    continue
+                # ribbon_count: usa o valor salvo ou tenta extrair do splices (fallback)
+                rcount = rec.ribbon_count
+                if not rcount:
+                    # splices pode ter sido salvo com o valor de fitas por engano
+                    rcount = int(rec.splices or 0) if (rec.splices or 0) > 0 else None
+                if rcount and dt.ribbon_price_usd:
+                    price = float(rcount) * float(dt.ribbon_price_usd)
                     rec.price_splices_usd = 0.0
                     rec.price_device_usd = price
                     rec.total_usd = price
+                    rec.ribbon_count = rcount
+                    rec.splices = 0
                     fixed_records += 1
             db.session.commit()
     except Exception as e:
