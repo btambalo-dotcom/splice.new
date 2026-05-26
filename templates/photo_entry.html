@@ -60,6 +60,23 @@
       </div>
     </div>
 
+    <div id="ribbon-wrap-photo" class="row g-2 mt-3" {% if not (device_type or '').upper().strip().startswith('RIBBON') %}style="display:none;"{% endif %}>
+      <div class="col-md-6">
+        <label class="form-label">🎀 Nº de fitas (Ribbon)</label>
+        <input type="number" name="ribbon_count" id="ribbon-count-photo" min="1" class="form-control"
+               value="{{ form_ribbon_count|default('') }}" placeholder="Ex.: 3">
+      </div>
+    </div>
+
+    <div class="form-check form-switch mt-3">
+      <input class="form-check-input" type="checkbox" id="is_ribbon_toggle" name="is_ribbon_toggle" value="1"
+             {% if (device_type or '').upper().strip().startswith('RIBBON') or 'RIBBON' in (device_type or '').upper() %}checked{% endif %}
+             onchange="document.getElementById('ribbon-wrap-photo').style.display=this.checked?'':'none';">
+      <label class="form-check-label" for="is_ribbon_toggle">
+        🎀 Este dispositivo é Ribbon (fitas)
+      </label>
+    </div>
+
     <div class="form-check form-switch mt-3">
       <input class="form-check-input" type="checkbox" id="is_can" name="is_can" value="1" {% if (device_type or '').upper().strip().startswith('CAN') %}checked{% endif %}>
       <label class="form-check-label" for="is_can">

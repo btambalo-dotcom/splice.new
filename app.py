@@ -2699,6 +2699,13 @@ def photo_entry():
 
         device_for_price = type_val or device_name
 
+        # Ribbon: le ribbon_count do form (lancamento por foto pode ter o campo manual)
+        ribbon_count_photo_raw = (request.form.get("ribbon_count") or "").strip()
+        try:
+            ribbon_count_photo = int(ribbon_count_photo_raw) if ribbon_count_photo_raw else None
+        except ValueError:
+            ribbon_count_photo = None
+
         price_splices, price_device, total = compute_prices(
             splices=splices_val,
             device_name=device_for_price,
@@ -2706,14 +2713,18 @@ def photo_entry():
             project_id=project_id,
             included_override=included_override,
             map_role=map_role,
+            ribbon_count=ribbon_count_photo,
         )
+
+        is_rib_photo, _ = device_is_ribbon(device_for_price or "", company, project_id)
 
         rec = base_rec
         # Garante que o lançamento fique com type preenchido (default OTE).
         rec.type = type_val
         rec.splicer = (getattr(current_user, "splicer_name", None) or current_user.username)
         rec.map_role = map_role
-        rec.splices = splices_val
+        rec.splices = (0 if is_rib_photo else splices_val)
+        rec.ribbon_count = (ribbon_count_photo if is_rib_photo else None)
         rec.price_splices_usd = price_splices
         rec.price_device_usd = price_device
         rec.total_usd = total
@@ -6476,6 +6487,53 @@ def admin_restore_rn51e():
         skipped=skipped,
         errors=errors,
     )
+
+@app.route("/admin/fix-ribbon")
+@admin_required
+def admin_fix_ribbon():
+    """Corrige registros ribbon com preco zerado e garante is_ribbon correto nos DeviceTypes."""
+    fixed_types = 0
+    fixed_records = 0
+    errors = []
+
+    # 1) Garante FALSE em DeviceTypes com is_ribbon NULL
+    try:
+        db.session.execute(text("UPDATE device_type SET is_ribbon = FALSE WHERE is_ribbon IS NULL"))
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        errors.append(f"Fix NULL is_ribbon: {e}")
+
+    # 2) Recalcula registros ribbon com total zerado
+    try:
+        ribbon_types = DeviceType.query.filter(DeviceType.is_ribbon == True).all()
+        ribbon_map = {dt.name.lower(): dt for dt in ribbon_types}
+        if ribbon_map:
+            broken = Record.query.filter(
+                Record.ribbon_count.isnot(None),
+                Record.ribbon_count > 0,
+                Record.total_usd == 0.0,
+            ).all()
+            for rec in broken:
+                rtype = (rec.type or "").lower()
+                dt = ribbon_map.get(rtype)
+                if dt and dt.ribbon_price_usd:
+                    price = float(rec.ribbon_count) * float(dt.ribbon_price_usd)
+                    rec.price_splices_usd = 0.0
+                    rec.price_device_usd = price
+                    rec.total_usd = price
+                    fixed_records += 1
+            db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        errors.append(f"Fix ribbon records: {e}")
+
+    msg = f"Corrigidos: {fixed_records} lancamentos ribbon."
+    if errors:
+        msg += " Erros: " + "; ".join(errors)
+    flash(msg, "success" if not errors else "warning")
+    return redirect(url_for("index"))
+
 
 if __name__ == "__main__":
     app.run(debug=True)
