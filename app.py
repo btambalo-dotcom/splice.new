@@ -6490,6 +6490,34 @@ def admin_restore_rn51e():
         errors=errors,
     )
 
+@app.route("/admin/ribbon-debug")
+@admin_required
+def admin_ribbon_debug():
+    """Mostra estado dos registros ribbon para diagnostico."""
+    ribbon_types = DeviceType.query.filter(DeviceType.is_ribbon == True).all()
+    ribbon_map = {dt.name.lower(): dt for dt in ribbon_types}
+
+    # Busca TODOS os records com type contendo RIBBON (case insensitive)
+    from sqlalchemy import func
+    ribbon_records = Record.query.filter(
+        func.lower(Record.type).contains('ribbon')
+    ).all()
+
+    lines = []
+    lines.append(f"=== DeviceTypes ribbon cadastrados ===")
+    for dt in ribbon_types:
+        lines.append(f"  id={dt.id} name='{dt.name}' is_ribbon={dt.is_ribbon} ribbon_price={dt.ribbon_price_usd} company={dt.company} project_id={dt.project_id}")
+
+    lines.append(f"\n=== Records com type contendo RIBBON ===")
+    for rec in ribbon_records:
+        lines.append(f"  id={rec.id} type='{rec.type}' splices={rec.splices} ribbon_count={rec.ribbon_count} total={rec.total_usd} company={rec.company} project_id={rec.project_id}")
+        rtype = (rec.type or "").lower().strip()
+        dt = ribbon_map.get(rtype)
+        lines.append(f"    -> DeviceType match: {dt.name if dt else 'NENHUM'} | ribbon_price={dt.ribbon_price_usd if dt else 'N/A'}")
+
+    return "<pre>" + "\n".join(lines) + "</pre>"
+
+
 @app.route("/admin/fix-ribbon")
 @admin_required
 def admin_fix_ribbon():
