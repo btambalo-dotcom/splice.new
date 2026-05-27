@@ -1207,10 +1207,11 @@ with app.app_context():
                     continue
                 rcount = rec.ribbon_count or (int(rec.splices or 0) if (rec.splices or 0) > 0 else None)
                 if rcount and dt.ribbon_price_usd:
-                    price = float(rcount) * float(dt.ribbon_price_usd)
-                    rec.price_splices_usd = 0.0
-                    rec.price_device_usd = price
-                    rec.total_usd = price
+                    price_fitas = float(rcount) * float(dt.ribbon_price_usd)
+                    price_enc = float(dt.value_usd or 0.0)
+                    rec.price_splices_usd = price_fitas
+                    rec.price_device_usd = price_enc
+                    rec.total_usd = price_fitas + price_enc
                     rec.ribbon_count = rcount
                     rec.splices = 0
                     changed = True
@@ -1363,9 +1364,8 @@ def device_value_for(name: str, company: str | None, project_id: int | None = No
     dt = _get_device_type(name, company, project_id)
     if not dt:
         return 0.0
-    # Ribbon: nao cobra valor fixo de dispositivo
-    if bool(getattr(dt, "is_ribbon", False)):
-        return 0.0
+    # Ribbon: cobra value_usd normalmente (enclosure/caixa)
+    # o valor por fita e calculado separadamente em compute_prices
     # Aplica regra MEIO/PONTA se disponivel
     role = (map_role or "").strip().upper()
     if role == "MEIO" and dt.value_meio_usd is not None:
@@ -1648,11 +1648,14 @@ def compute_prices(
     - MEIO/PONTA: included_override tem prioridade sobre a configuracao padrao.
     """
     # --- Ribbon ---
+    # price_splices = fitas x valor_por_fita
+    # price_device  = valor fixo do enclosure/caixa (value_usd do DeviceType)
     is_rib, ribbon_price = device_is_ribbon(device_name or "", company, project_id)
     if is_rib:
         count = int(ribbon_count or 0)
         price_ribbon = count * ribbon_price
-        return 0.0, price_ribbon, price_ribbon
+        price_enclosure = device_value_for(device_name or "", company, project_id, map_role=map_role)
+        return price_ribbon, price_enclosure, price_ribbon + price_enclosure
 
     total_splices = int(splices or 0)
 
@@ -6547,12 +6550,13 @@ def admin_fix_ribbon():
                 dt = ribbon_map.get(rtype)
                 if dt and dt.ribbon_price_usd:
                     rcount = int(manual_count_raw)
-                    price = float(rcount) * float(dt.ribbon_price_usd)
+                    price_fitas = float(rcount) * float(dt.ribbon_price_usd)
+                    price_enc = float(dt.value_usd or 0.0)
                     rec.ribbon_count = rcount
                     rec.splices = 0
-                    rec.price_splices_usd = 0.0
-                    rec.price_device_usd = price
-                    rec.total_usd = price
+                    rec.price_splices_usd = price_fitas
+                    rec.price_device_usd = price_enc
+                    rec.total_usd = price_fitas + price_enc
                     db.session.commit()
                     fixed_records += 1
                 else:
@@ -6574,10 +6578,11 @@ def admin_fix_ribbon():
                 rtype = (rec.type or "").lower().strip()
                 dt = ribbon_map.get(rtype)
                 if dt and dt.ribbon_price_usd and rec.ribbon_count:
-                    price = float(rec.ribbon_count) * float(dt.ribbon_price_usd)
-                    rec.price_splices_usd = 0.0
-                    rec.price_device_usd = price
-                    rec.total_usd = price
+                    price_fitas = float(rec.ribbon_count) * float(dt.ribbon_price_usd)
+                    price_enc = float(dt.value_usd or 0.0)
+                    rec.price_splices_usd = price_fitas
+                    rec.price_device_usd = price_enc
+                    rec.total_usd = price_fitas + price_enc
                     rec.splices = 0
                     fixed_records += 1
             db.session.commit()

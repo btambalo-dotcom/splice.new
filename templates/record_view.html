@@ -45,7 +45,7 @@
         <dt class="col-4">Splices / Fitas</dt>
         <dd class="col-8">
           {% if rec.ribbon_count and rec.ribbon_count > 0 %}
-            <span class="badge" style="background:#6f42c1;">🎀 {{ rec.ribbon_count }} fita{{ 's' if rec.ribbon_count != 1 else '' }}</span>
+            <span class="badge" style="background:#6f42c1;">RIBBON {{ rec.ribbon_count }} fita{{ 's' if rec.ribbon_count != 1 else '' }}</span>
           {% else %}
             {{ rec.splices or 0 }}
           {% endif %}

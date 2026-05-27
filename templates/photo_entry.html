@@ -62,7 +62,7 @@
 
     <div id="ribbon-wrap-photo" class="row g-2 mt-3" {% if not (device_type or '').upper().strip().startswith('RIBBON') %}style="display:none;"{% endif %}>
       <div class="col-md-6">
-        <label class="form-label">🎀 Nº de fitas (Ribbon)</label>
+        <label class="form-label">RIBBON Nº de fitas (Ribbon)</label>
         <input type="number" name="ribbon_count" id="ribbon-count-photo" min="1" class="form-control"
                value="{{ form_ribbon_count|default('') }}" placeholder="Ex.: 3">
       </div>
@@ -73,7 +73,7 @@
              {% if (device_type or '').upper().strip().startswith('RIBBON') or 'RIBBON' in (device_type or '').upper() %}checked{% endif %}
              onchange="document.getElementById('ribbon-wrap-photo').style.display=this.checked?'':'none';">
       <label class="form-check-label" for="is_ribbon_toggle">
-        🎀 Este dispositivo é Ribbon (fitas)
+        RIBBON Este dispositivo é Ribbon (fitas)
       </label>
     </div>
 

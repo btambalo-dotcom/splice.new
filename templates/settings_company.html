@@ -171,7 +171,7 @@
               <div class="col-12 mt-1">
                 <div class="form-check">
                   <input class="form-check-input" type="checkbox" name="is_ribbon" id="is_ribbon_co" value="1" onchange="document.getElementById('ribbon_price_co').closest('.col-12').style.display=this.checked?'':'none'">
-                  <label class="form-check-label form-label-sm" for="is_ribbon_co">🎀 Dispositivo Ribbon (fitas)</label>
+                  <label class="form-check-label form-label-sm" for="is_ribbon_co">RIBBON Dispositivo Ribbon (fitas)</label>
                 </div>
               </div>
               <div class="col-12" id="ribbon_price_co_wrap" style="display:none;">
@@ -194,7 +194,7 @@
               <span>{{ d.name }}</span>
               <div class="d-flex align-items-center gap-2">
                 {% if d.is_ribbon %}
-                  <span class="badge" style="background:#6f42c1;" title="Ribbon">🎀 ${{ '%.2f'|format(d.ribbon_price_usd or 0) }}/fita</span>
+                  <span class="badge" style="background:#6f42c1;" title="Ribbon">RIBBON ${{ '%.2f'|format(d.ribbon_price_usd or 0) }}/fita</span>
                 {% elif d.value_meio_usd is not none or d.value_ponta_usd is not none %}
                   <span class="badge bg-secondary" title="Padrão">${{ '%.2f'|format(d.value_usd) }}</span>
                   {% if d.value_meio_usd is not none %}

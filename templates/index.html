@@ -154,7 +154,7 @@ mb-3">Registros</h5>
             <td>{{ r.splicer }}</td>
             <td>
               {% if r.ribbon_count and r.ribbon_count > 0 %}
-                <span class="badge" style="background:#6f42c1;">🎀 {{ r.ribbon_count }} fita{{ 's' if r.ribbon_count != 1 else '' }}</span>
+                <span class="badge" style="background:#6f42c1;">RIBBON {{ r.ribbon_count }} fita{{ 's' if r.ribbon_count != 1 else '' }}</span>
               {% else %}
                 {{ r.splices }}
               {% endif %}
