@@ -496,7 +496,17 @@
 
     const preselectedType = "{{ form_type|default('') }}";
     if (preselectedType && typeSelect) {
+      // Tenta setar o valor; se nao existir na lista ainda, adiciona como opcao temporaria
       typeSelect.value = preselectedType;
+      if (typeSelect.value !== preselectedType) {
+        const tempOpt = document.createElement('option');
+        tempOpt.value = preselectedType;
+        tempOpt.textContent = preselectedType;
+        // marca como ribbon se o nome contiver ribbon
+        if (preselectedType.toUpperCase().includes('RIBBON')) tempOpt.dataset.isRibbon = '1';
+        typeSelect.appendChild(tempOpt);
+        typeSelect.value = preselectedType;
+      }
     } else if (typeSelect) {
       // Se não houver tipo pré-selecionado, tenta forçar OTE como padrão (se existir na lista)
       const optOte = Array.from(typeSelect.options || []).find(o => o.value === 'OTE');
@@ -504,6 +514,9 @@
         typeSelect.value = 'OTE';
       }
     }
+    // Atualiza visibilidade ribbon com base no tipo pre-selecionado
+    updateRibbonVisibility();
+    updateFtVisibility();
 
     const deviceInput = document.getElementById('device-name-input');
     if (deviceInput) {

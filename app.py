@@ -3043,6 +3043,7 @@ def record_edit(rid):
         form_ft_out=rec.ft_out or "",
         form_can_cable_count=str(rec.can_cable_count or ""),
         form_can_cables_json=rec.can_cables_json or "[]",
+        form_ribbon_count=str(rec.ribbon_count or ""),
     )
 
 
@@ -6518,11 +6519,10 @@ def admin_ribbon_debug():
     return "<pre>" + "\n".join(lines) + "</pre>"
 
 
-@app.route("/admin/fix-ribbon")
+@app.route("/admin/fix-ribbon", methods=["GET", "POST"])
 @admin_required
 def admin_fix_ribbon():
-    """Corrige registros ribbon com preco zerado e garante is_ribbon correto nos DeviceTypes."""
-    fixed_types = 0
+    """Corrige registros ribbon com preco zerado. Aceita record_id + ribbon_count manual."""
     fixed_records = 0
     errors = []
 
@@ -6534,37 +6534,56 @@ def admin_fix_ribbon():
         db.session.rollback()
         errors.append(f"Fix NULL is_ribbon: {e}")
 
-    # 2) Recalcula registros ribbon com total zerado
-    # Busca por: ribbon_count preenchido OU type que bate com um DeviceType ribbon
+    # 2) Correcao manual: record_id + ribbon_count passados via GET ou POST
+    manual_id_raw = (request.values.get("record_id") or "").strip()
+    manual_count_raw = (request.values.get("ribbon_count") or "").strip()
+    if manual_id_raw.isdigit() and manual_count_raw.isdigit():
+        try:
+            rec = Record.query.get(int(manual_id_raw))
+            if rec:
+                ribbon_types = DeviceType.query.filter(DeviceType.is_ribbon == True).all()
+                ribbon_map = {dt.name.lower(): dt for dt in ribbon_types}
+                rtype = (rec.type or "").lower().strip()
+                dt = ribbon_map.get(rtype)
+                if dt and dt.ribbon_price_usd:
+                    rcount = int(manual_count_raw)
+                    price = float(rcount) * float(dt.ribbon_price_usd)
+                    rec.ribbon_count = rcount
+                    rec.splices = 0
+                    rec.price_splices_usd = 0.0
+                    rec.price_device_usd = price
+                    rec.total_usd = price
+                    db.session.commit()
+                    fixed_records += 1
+                else:
+                    errors.append(f"Record {manual_id_raw}: DeviceType nao encontrado ou sem preco ribbon.")
+        except Exception as e:
+            db.session.rollback()
+            errors.append(f"Correcao manual: {e}")
+
+    # 3) Recalcula automaticamente registros ribbon com ribbon_count preenchido e total zerado
     try:
         ribbon_types = DeviceType.query.filter(DeviceType.is_ribbon == True).all()
         ribbon_map = {dt.name.lower(): dt for dt in ribbon_types}
         if ribbon_map:
-            ribbon_type_names = list(ribbon_map.keys())
-            # Pega registros com total zerado cujo type seja ribbon OU ribbon_count preenchido
-            all_records = Record.query.filter(Record.total_usd == 0.0).all()
+            all_records = Record.query.filter(
+                Record.total_usd == 0.0,
+                Record.ribbon_count.isnot(None),
+            ).all()
             for rec in all_records:
                 rtype = (rec.type or "").lower().strip()
                 dt = ribbon_map.get(rtype)
-                if not dt:
-                    continue
-                # ribbon_count: usa o valor salvo ou tenta extrair do splices (fallback)
-                rcount = rec.ribbon_count
-                if not rcount:
-                    # splices pode ter sido salvo com o valor de fitas por engano
-                    rcount = int(rec.splices or 0) if (rec.splices or 0) > 0 else None
-                if rcount and dt.ribbon_price_usd:
-                    price = float(rcount) * float(dt.ribbon_price_usd)
+                if dt and dt.ribbon_price_usd and rec.ribbon_count:
+                    price = float(rec.ribbon_count) * float(dt.ribbon_price_usd)
                     rec.price_splices_usd = 0.0
                     rec.price_device_usd = price
                     rec.total_usd = price
-                    rec.ribbon_count = rcount
                     rec.splices = 0
                     fixed_records += 1
             db.session.commit()
     except Exception as e:
         db.session.rollback()
-        errors.append(f"Fix ribbon records: {e}")
+        errors.append(f"Fix automatico: {e}")
 
     msg = f"Corrigidos: {fixed_records} lancamentos ribbon."
     if errors:
