@@ -3987,6 +3987,116 @@ def settings_tier_delete(tid: int):
     return redirect(next_url or url_for("settings"))
 
 
+@app.route("/settings/device/<int:did>/edit", methods=["POST"])
+@admin_required
+def settings_device_edit(did: int):
+    """Edita um DeviceType existente (valores e codigos de cobranca)."""
+    dt = DeviceType.query.get_or_404(did)
+    next_url = (request.form.get("next") or "").strip() or None
+
+    def _f(field):
+        return (request.form.get(field) or "").strip() or None
+    def _float(field):
+        v = (request.form.get(field) or "").strip()
+        try: return float(v) if v else None
+        except ValueError: return None
+
+    dt.value_usd        = float((request.form.get("value_usd") or "0")) or 0.0
+    dt.value_meio_usd   = _float("value_meio_usd")
+    dt.value_ponta_usd  = _float("value_ponta_usd")
+    dt.billing_code     = _f("billing_code")
+    dt.billing_code_meio  = _f("billing_code_meio")
+    dt.billing_code_ponta = _f("billing_code_ponta")
+    is_ribbon = bool(request.form.get("is_ribbon"))
+    dt.is_ribbon = is_ribbon
+    dt.ribbon_price_usd = _float("ribbon_price_usd") if is_ribbon else None
+    db.session.commit()
+
+    # Recalcula billing_codes_json de todos os lancamentos que usam este dispositivo
+    _recalc_billing_codes_for_device(dt)
+    flash(f"Dispositivo '{dt.name}' atualizado.", "success")
+    return redirect(next_url or url_for("settings"))
+
+
+@app.route("/settings/tier/<int:tid>/edit", methods=["POST"])
+@admin_required
+def settings_tier_edit(tid: int):
+    """Edita uma SpliceTier existente (preco e codigo de cobranca)."""
+    tier = SpliceTier.query.get_or_404(tid)
+    next_url = (request.form.get("next") or "").strip() or None
+
+    try:
+        tier.min_splices = int(request.form.get("min_splices") or 0)
+    except ValueError:
+        pass
+    max_raw = (request.form.get("max_splices") or "").strip()
+    tier.max_splices = int(max_raw) if max_raw.isdigit() else None
+    try:
+        tier.price_per_splice_usd = float(request.form.get("price") or 0)
+    except ValueError:
+        pass
+    tier.code_splice = (request.form.get("code_splice") or "").strip() or None
+    db.session.commit()
+
+    # Recalcula billing_codes_json de todos os lancamentos afetados por esta faixa
+    _recalc_billing_codes_for_tier(tier)
+    flash("Faixa atualizada.", "success")
+    return redirect(next_url or url_for("settings"))
+
+
+def _recalc_billing_codes_for_device(dt: DeviceType):
+    """Recalcula billing_codes_json para lancamentos que usam este DeviceType."""
+    try:
+        records = Record.query.filter(
+            Record.project_id == dt.project_id,
+            Record.company == dt.company,
+        ).all() if dt.project_id else Record.query.filter(
+            Record.company == dt.company
+        ).all()
+        changed = 0
+        for rec in records:
+            rtype = (rec.type or "").lower().strip()
+            dname = (dt.name or "").lower().strip()
+            if rtype != dname:
+                continue
+            bcodes = compute_billing_codes(
+                int(rec.splices or 0), rec.type or "",
+                rec.company, rec.project_id,
+                map_role=rec.map_role,
+                ribbon_count=getattr(rec, "ribbon_count", None),
+            )
+            rec.billing_codes_json = json.dumps(bcodes, ensure_ascii=False) if bcodes else None
+            changed += 1
+        if changed:
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
+def _recalc_billing_codes_for_tier(tier: SpliceTier):
+    """Recalcula billing_codes_json para lancamentos afetados por esta faixa."""
+    try:
+        records = Record.query.filter(
+            Record.project_id == tier.project_id,
+        ).all() if tier.project_id else Record.query.filter(
+            Record.company == tier.company
+        ).all()
+        changed = 0
+        for rec in records:
+            bcodes = compute_billing_codes(
+                int(rec.splices or 0), rec.type or "",
+                rec.company, rec.project_id,
+                map_role=rec.map_role,
+                ribbon_count=getattr(rec, "ribbon_count", None),
+            )
+            rec.billing_codes_json = json.dumps(bcodes, ensure_ascii=False) if bcodes else None
+            changed += 1
+        if changed:
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
 
 
 @app.route("/users", methods=["GET", "POST"])

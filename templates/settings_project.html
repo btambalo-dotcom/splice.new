@@ -211,6 +211,8 @@
                 {% else %}
                   <strong>${{ '%.2f'|format(d.value_usd) }}</strong>
                 {% endif %}
+                <button type="button" class="btn btn-sm btn-outline-secondary"
+                  onclick="openDeviceEdit({{ d.id }}, '{{ d.name }}', {{ d.value_usd }}, {{ d.value_meio_usd or 'null' }}, {{ d.value_ponta_usd or 'null' }}, {{ d.is_ribbon|int }}, {{ d.ribbon_price_usd or 'null' }}, '{{ d.billing_code or '' }}', '{{ d.billing_code_meio or '' }}', '{{ d.billing_code_ponta or '' }}')">✎</button>
                 <a href="{{ url_for('settings_device_delete', did=d.id, next=url_for('settings_project_detail', pid=project.id)) }}"
                    class="btn btn-sm btn-outline-danger" onclick="return confirm('Remover dispositivo?')">✕</a>
               </div>
@@ -371,6 +373,124 @@ if (urlTab) {
   const btn = [...document.querySelectorAll('.cfg-sidebar-btn')].find(b =>
     b.getAttribute('onclick').includes("'" + urlTab + "'"));
   if (btn) showSection(urlTab, btn);
+}
+</script>
+
+<!-- Modal: Editar Dispositivo -->
+<div class="modal fade" id="editDeviceModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content bg-dark text-light">
+      <div class="modal-header"><h5 class="modal-title">Editar Dispositivo</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="post" id="editDeviceForm">
+        <input type="hidden" name="next" value="{{ url_for('settings_project_detail', pid=project.id) }}">
+        <div class="modal-body row g-2">
+          <div class="col-12"><strong id="editDeviceName"></strong></div>
+          <div class="col-12">
+            <label class="form-label form-label-sm">Valor padrão ($)</label>
+            <input class="form-control form-control-sm" name="value_usd" id="ed_value_usd" type="number" step="0.01" min="0">
+          </div>
+          <div class="col-6">
+            <label class="form-label form-label-sm">Valor MEIO ($)</label>
+            <input class="form-control form-control-sm" name="value_meio_usd" id="ed_value_meio" type="number" step="0.01" min="0" placeholder="Opcional">
+          </div>
+          <div class="col-6">
+            <label class="form-label form-label-sm">Valor PONTA ($)</label>
+            <input class="form-control form-control-sm" name="value_ponta_usd" id="ed_value_ponta" type="number" step="0.01" min="0" placeholder="Opcional">
+          </div>
+          <div class="col-12">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" name="is_ribbon" id="ed_is_ribbon" value="1"
+                onchange="document.getElementById('ed_ribbon_wrap').style.display=this.checked?'':'none'">
+              <label class="form-check-label form-label-sm" for="ed_is_ribbon">RIBBON Dispositivo Ribbon (fitas)</label>
+            </div>
+          </div>
+          <div class="col-12" id="ed_ribbon_wrap" style="display:none;">
+            <label class="form-label form-label-sm">Valor por fita ($)</label>
+            <input class="form-control form-control-sm" name="ribbon_price_usd" id="ed_ribbon_price" type="number" step="0.01" min="0">
+          </div>
+          <div class="col-4">
+            <label class="form-label form-label-sm">Cód. cobrança</label>
+            <input class="form-control form-control-sm" name="billing_code" id="ed_billing_code" type="text" maxlength="30">
+          </div>
+          <div class="col-4">
+            <label class="form-label form-label-sm">Cód. MEIO</label>
+            <input class="form-control form-control-sm" name="billing_code_meio" id="ed_billing_meio" type="text" maxlength="30">
+          </div>
+          <div class="col-4">
+            <label class="form-label form-label-sm">Cód. PONTA</label>
+            <input class="form-control form-control-sm" name="billing_code_ponta" id="ed_billing_ponta" type="text" maxlength="30">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Salvar e recalcular lançamentos</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Editar Faixa -->
+<div class="modal fade" id="editTierModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content bg-dark text-light">
+      <div class="modal-header"><h5 class="modal-title">Editar Faixa de Fusões</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="post" id="editTierForm">
+        <input type="hidden" name="next" value="{{ url_for('settings_project_detail', pid=project.id) }}">
+        <div class="modal-body row g-2">
+          <div class="col-4">
+            <label class="form-label form-label-sm">Mín.</label>
+            <input class="form-control form-control-sm" name="min_splices" id="et_min" type="number" min="0">
+          </div>
+          <div class="col-4">
+            <label class="form-label form-label-sm">Máx.</label>
+            <input class="form-control form-control-sm" name="max_splices" id="et_max" type="number" min="0" placeholder="∞">
+          </div>
+          <div class="col-4">
+            <label class="form-label form-label-sm">$ / fusão</label>
+            <input class="form-control form-control-sm" name="price" id="et_price" type="number" step="0.01" min="0">
+          </div>
+          <div class="col-12">
+            <label class="form-label form-label-sm">Cód. cobrança</label>
+            <input class="form-control form-control-sm" name="code_splice" id="et_code" type="text" maxlength="30" placeholder="Ex.: FS01">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+          <button type="submit" class="btn btn-primary">Salvar e recalcular lançamentos</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script>
+function openDeviceEdit(id, name, val, valMeio, valPonta, isRib, ribPrice, code, codeMeio, codePonta) {
+  document.getElementById('editDeviceName').textContent = name;
+  document.getElementById('editDeviceForm').action = '/settings/device/' + id + '/edit';
+  document.getElementById('ed_value_usd').value = val || '';
+  document.getElementById('ed_value_meio').value = valMeio != null ? valMeio : '';
+  document.getElementById('ed_value_ponta').value = valPonta != null ? valPonta : '';
+  const ribChk = document.getElementById('ed_is_ribbon');
+  ribChk.checked = isRib == 1;
+  document.getElementById('ed_ribbon_wrap').style.display = isRib ? '' : 'none';
+  document.getElementById('ed_ribbon_price').value = ribPrice != null ? ribPrice : '';
+  document.getElementById('ed_billing_code').value = code || '';
+  document.getElementById('ed_billing_meio').value = codeMeio || '';
+  document.getElementById('ed_billing_ponta').value = codePonta || '';
+  new bootstrap.Modal(document.getElementById('editDeviceModal')).show();
+}
+function openTierEdit(id, min, max, price, code) {
+  document.getElementById('editTierForm').action = '/settings/tier/' + id + '/edit';
+  document.getElementById('et_min').value = min || '';
+  document.getElementById('et_max').value = max != null ? max : '';
+  document.getElementById('et_price').value = price || '';
+  document.getElementById('et_code').value = code || '';
+  new bootstrap.Modal(document.getElementById('editTierModal')).show();
 }
 </script>
 {% endblock %}
