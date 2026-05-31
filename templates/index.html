@@ -135,6 +135,7 @@ mb-3">Registros</h5>
           <th>Device</th>
           <th>Splicer</th>
           <th>Splices / Fitas</th>
+          {% if current_user.is_admin %}<th>Códigos</th>{% endif %}
           {% if can_view_values %}<th>$ Fusões</th>
           <th>$ Device</th>
           <th>$ Total</th>{% endif %}
@@ -159,6 +160,15 @@ mb-3">Registros</h5>
                 {{ r.splices }}
               {% endif %}
             </td>
+            {% if current_user.is_admin %}
+            <td>
+              {% if r.billing_codes_json %}
+                {% for c in r.billing_codes_json | from_json %}
+                <span class="badge bg-info text-dark me-1">{{ c }}</span>
+                {% endfor %}
+              {% endif %}
+            </td>
+            {% endif %}
             {% if can_view_values %}<td>$ {{ '%.2f'|format(r.price_splices_usd or 0) }}</td>
             <td>$ {{ '%.2f'|format(r.price_device_usd or 0) }}</td>
             <td>$ {{ '%.2f'|format(r.total_usd or 0) }}</td>{% endif %}

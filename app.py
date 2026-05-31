@@ -496,6 +496,16 @@ def import_kmz_for_map(company_map, file_storage):
 # --------- App & DB setup ---------
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret-key-change-me")
+
+@app.template_filter('from_json')
+def from_json_filter(value):
+    """Jinja2 filter: converte JSON string para objeto Python."""
+    if not value:
+        return []
+    try:
+        return json.loads(value)
+    except Exception:
+        return []
 app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY", "dev-key")
 
 # Database configuration: prefer DATABASE_URL/RENDER_DATABASE_URL (e.g. Render PostgreSQL),
@@ -782,6 +792,13 @@ class DeviceType(db.Model):
     # Ribbon: quando True, o lancamento usa fitas (ribbon_count) em vez de fusoes.
     is_ribbon = db.Column(db.Boolean, default=False, nullable=False)
     ribbon_price_usd = db.Column(db.Float, nullable=True)  # valor fixo por fita
+    # Codigos de cobranca do dispositivo
+    # billing_code       = codigo padrao (quando nao ha MEIO/PONTA ou sem distincao)
+    # billing_code_meio  = codigo especifico quando lancamento for MEIO
+    # billing_code_ponta = codigo especifico quando lancamento for PONTA
+    billing_code       = db.Column(db.String(30), nullable=True)
+    billing_code_meio  = db.Column(db.String(30), nullable=True)
+    billing_code_ponta = db.Column(db.String(30), nullable=True)
     company = db.Column(db.String(120), nullable=True)  # se None = valor padrao
     project_id = db.Column(db.Integer, db.ForeignKey('project.id'), nullable=True, index=True)
     project = db.relationship('Project', backref=db.backref('device_types', lazy=True))
@@ -791,6 +808,8 @@ class SpliceTier(db.Model):
     min_splices = db.Column(db.Integer, nullable=False)
     max_splices = db.Column(db.Integer, nullable=True)
     price_per_splice_usd = db.Column(db.Float, default=0.0, nullable=False)
+    # Codigo de cobranca (opcional): codigo unico por faixa de fusoes (ex: FS01)
+    code_splice = db.Column(db.String(30), nullable=True)
     company = db.Column(db.String(120), nullable=True)
     project_id = db.Column(db.Integer, db.ForeignKey('project.id'), nullable=True, index=True)
     project = db.relationship('Project', backref=db.backref('splice_tiers', lazy=True))
@@ -879,6 +898,9 @@ class Record(db.Model):
     # Ativo/Inativo: False = dispositivo desativado (pin vermelho no mapa)
     # NULL ou True = ativo (comportamento padrao)
     is_active = db.Column(db.Boolean, nullable=True, default=None)
+    # Codigos de cobranca calculados automaticamente no lancamento
+    # Armazenados como JSON: ["FS01", "FS15"] etc.
+    billing_codes_json = db.Column(db.Text, nullable=True)
 
     # Testes (níveis por fusão, armazenados como CSV) e flag de concluído
     test_levels = db.Column(db.Text, nullable=True)
@@ -1190,6 +1212,11 @@ with app.app_context():
     ensure("device_type", "ribbon_price_usd", "DOUBLE PRECISION")
     ensure("record", "ribbon_count", "INTEGER")
     ensure("record", "is_active", "BOOLEAN")
+    ensure("record", "billing_codes_json", "TEXT")
+    ensure("device_type", "billing_code", "VARCHAR(30)")
+    ensure("device_type", "billing_code_meio", "VARCHAR(30)")
+    ensure("device_type", "billing_code_ponta", "VARCHAR(30)")
+    ensure("splice_tier", "code_splice", "VARCHAR(30)")
     # Garante FALSE como padrão para is_ribbon em registros existentes (NULL -> FALSE)
     try:
         db.session.execute(text('UPDATE device_type SET is_ribbon = FALSE WHERE is_ribbon IS NULL'))
@@ -1634,6 +1661,67 @@ def extract_timestamp_fields_with_ai(image_bytes: bytes):
         return result, None
     except Exception as e:
         return None, f"Erro ao processar IA: {e}"
+
+
+def _best_tier_for(count: int, company: str | None, project_id: int | None = None):
+    """Retorna o objeto SpliceTier que corresponde ao count, com prioridade projeto > empresa > global."""
+    def _best(q):
+        tiers = q.all()
+        for t in sorted(tiers, key=lambda x: x.min_splices or 0, reverse=True):
+            if (t.min_splices or 0) <= count:
+                return t
+        return None
+    if project_id:
+        t = _best(SpliceTier.query.filter(SpliceTier.project_id == project_id))
+        if t:
+            return t
+    if company:
+        t = _best(SpliceTier.query.filter(SpliceTier.company == company, SpliceTier.project_id.is_(None)))
+        if t:
+            return t
+    return _best(SpliceTier.query.filter(SpliceTier.company.is_(None), SpliceTier.project_id.is_(None)))
+
+
+def compute_billing_codes(
+    splices: int,
+    device_name: str,
+    company: str | None,
+    project_id: int | None = None,
+    map_role: str | None = None,
+    ribbon_count: int | None = None,
+) -> list:
+    """Calcula os codigos de cobranca para um lancamento.
+
+    Retorna lista de codigos unicos (ex: ["FS01", "FS15"]).
+    Lista vazia se o projeto nao usa codigos.
+    """
+    codes = []
+
+    # Codigo do dispositivo (enclosure/caixa) — varia por MEIO/PONTA
+    dt = _get_device_type(device_name or "", company, project_id)
+    if dt:
+        role = (map_role or "").strip().upper()
+        dev_code = None
+        if role == "MEIO" and getattr(dt, "billing_code_meio", None):
+            dev_code = dt.billing_code_meio.strip()
+        elif role == "PONTA" and getattr(dt, "billing_code_ponta", None):
+            dev_code = dt.billing_code_ponta.strip()
+        elif getattr(dt, "billing_code", None):
+            dev_code = dt.billing_code.strip()
+        if dev_code:
+            codes.append(dev_code)
+
+    # Codigo de fusoes (por faixa — unico, sem distincao MEIO/PONTA)
+    is_rib = dt and bool(getattr(dt, "is_ribbon", False))
+    total = int(ribbon_count or 0) if is_rib else int(splices or 0)
+    if total > 0:
+        tier = _best_tier_for(total, company, project_id)
+        if tier and getattr(tier, "code_splice", None):
+            code = tier.code_splice.strip()
+            if code and code not in codes:
+                codes.append(code)
+
+    return codes
 
 
 def compute_prices(
@@ -2487,6 +2575,7 @@ def entry():
         )
 
         is_rib, _ = device_is_ribbon(device_for_price or "", company, project_id)
+        _bcodes = compute_billing_codes(splices, device_for_price or "", company, project_id, map_role=map_role, ribbon_count=ribbon_count)
         rec = Record(
             map=map_val,
             type=type_val,
@@ -2502,6 +2591,7 @@ def entry():
             price_device_usd=price_device,
             total_usd=total,
             ribbon_count=(ribbon_count if is_rib else None),
+            billing_codes_json=(json.dumps(_bcodes, ensure_ascii=False) if _bcodes else None),
             ft_in=(None if type_val.strip().upper().startswith("CAN") else (ft_in or None)),
             ft_out=(None if type_val.strip().upper().startswith("CAN") else (ft_out or None)),
             can_cable_count=(can_cable_count if type_val.strip().upper().startswith("CAN") else None),
@@ -2726,6 +2816,7 @@ def photo_entry():
         )
 
         is_rib_photo, _ = device_is_ribbon(device_for_price or "", company, project_id)
+        _bcodes_photo = compute_billing_codes(splices_val, device_for_price or "", company, project_id, map_role=map_role, ribbon_count=ribbon_count_photo)
 
         rec = base_rec
         # Garante que o lançamento fique com type preenchido (default OTE).
@@ -2734,6 +2825,7 @@ def photo_entry():
         rec.map_role = map_role
         rec.splices = (0 if is_rib_photo else splices_val)
         rec.ribbon_count = (ribbon_count_photo if is_rib_photo else None)
+        rec.billing_codes_json = json.dumps(_bcodes_photo, ensure_ascii=False) if _bcodes_photo else None
         rec.price_splices_usd = price_splices
         rec.price_device_usd = price_device
         rec.total_usd = total
@@ -2966,6 +3058,7 @@ def record_edit(rid):
         )
 
         is_rib_edit, _ = device_is_ribbon(device_for_price or "", company, project_id)
+        _bcodes_edit = compute_billing_codes(splices, device_for_price or "", company, project_id, map_role=map_role, ribbon_count=ribbon_count)
         rec.company = company
         rec.project_id = project_id
         rec.map = map_val
@@ -2973,6 +3066,7 @@ def record_edit(rid):
         rec.device = device_name
         rec.splices = (0 if is_rib_edit else splices)
         rec.ribbon_count = (ribbon_count if is_rib_edit else None)
+        rec.billing_codes_json = json.dumps(_bcodes_edit, ensure_ascii=False) if _bcodes_edit else None
         rec.splicer = splicer
         rec.created_date = created_date
         rec.map_role = map_role
@@ -3794,6 +3888,9 @@ def settings_device_add():
     value_ponta = _opt_float("value_ponta_usd")
     is_ribbon = bool(request.form.get("is_ribbon"))
     ribbon_price = _opt_float("ribbon_price_usd")
+    billing_code = (request.form.get("billing_code") or "").strip() or None
+    billing_code_meio = (request.form.get("billing_code_meio") or "").strip() or None
+    billing_code_ponta = (request.form.get("billing_code_ponta") or "").strip() or None
 
     if not name:
         flash("Nome do dispositivo é obrigatório.", "danger")
@@ -3806,12 +3903,18 @@ def settings_device_add():
         dt.value_ponta_usd = value_ponta
         dt.is_ribbon = is_ribbon
         dt.ribbon_price_usd = ribbon_price if is_ribbon else None
+        dt.billing_code = billing_code
+        dt.billing_code_meio = billing_code_meio
+        dt.billing_code_ponta = billing_code_ponta
     else:
         dt = DeviceType(
             name=name, company=company, project_id=project_id,
             value_usd=value, value_meio_usd=value_meio, value_ponta_usd=value_ponta,
             is_ribbon=is_ribbon,
             ribbon_price_usd=(ribbon_price if is_ribbon else None),
+            billing_code=billing_code,
+            billing_code_meio=billing_code_meio,
+            billing_code_ponta=billing_code_ponta,
         )
         db.session.add(dt)
     db.session.commit()
@@ -3855,12 +3958,17 @@ def settings_tier_add():
         flash("Splices mín. não pode ser negativo.", "danger")
         return redirect(next_url or url_for("settings"))
 
+    def _strip_code(field):
+        v = (request.form.get(field) or "").strip()
+        return v if v else None
+
     tier = SpliceTier(
         company=company,
         project_id=project_id,
         min_splices=min_s,
         max_splices=max_s,
         price_per_splice_usd=price,
+        code_splice=_strip_code("code_splice"),
     )
     db.session.add(tier)
     db.session.commit()
@@ -4265,6 +4373,29 @@ def export_invoice():
 
         grouped[key]["total_usd"] += float(getattr(r, "total_usd", 0.0) or 0.0)
 
+        # Coleta codigos de cobranca do registro
+        # Se nao estiver salvo, calcula na hora (registros antigos)
+        bcodes = []
+        if r.billing_codes_json:
+            try:
+                bcodes = json.loads(r.billing_codes_json)
+            except Exception:
+                pass
+        if not bcodes:
+            # Calcula na hora para registros antigos sem billing_codes_json
+            device_for_code = (r.type or r.device or "")
+            bcodes = compute_billing_codes(
+                int(r.splices or 0),
+                device_for_code,
+                r.company,
+                r.project_id,
+                map_role=r.map_role,
+                ribbon_count=getattr(r, "ribbon_count", None),
+            )
+        for c in bcodes:
+            if c and c not in grouped[key].setdefault("billing_codes", []):
+                grouped[key]["billing_codes"].append(c)
+
     # lista final de linhas da invoice (um item por grupo mapa/device/tipo)
     # A invoice deve mostrar SOMENTE o que foi realmente lançado/cobrado.
     # Regra: manter linhas com qualquer valor > 0 (splices, device price ou total).
@@ -4348,31 +4479,42 @@ def export_invoice():
     
     # === Tabela das linhas (uma linha por registro) ===
     # Coluna de data primeiro, como solicitado
-    col_widths = [22, 32, 52, 16, 12, 14, 20, 22]
-    headers = ["Date", "Map", "Device", "Tipo", "Incl.", "Splices", "Device price", "Total"]
+    # Verifica se algum registro tem codigos de cobranca
+    # A4 usable width = 190mm. Colunas somam exatamente 190.
+    # Sem codigos: Date(22) Map(30) Device(50) Tipo(14) Incl(10) Splices(14) Dev$(24) Total(26) = 190
+    # Com codigos: Date(20) Map(28) Device(42) Tipo(13) Incl(10) Splices(13) Dev$(22) Total(22) Codes(20) = 190
+    has_billing = any(l.get("billing_codes") for l in lines)
+    if has_billing:
+        col_widths = [20, 18, 28, 38, 13, 10, 13, 22, 28]
+        headers   = ["Date", "Codes", "Map", "Device", "Tipo", "Incl.", "Splices", "Dev $", "Total"]
+    else:
+        col_widths = [22, 30, 50, 14, 10, 14, 24, 26]
+        headers   = ["Date", "Map", "Device", "Tipo", "Incl.", "Splices", "Dev $", "Total"]
 
-    pdf.set_font("Arial", "B", 10)
+    pdf.set_font("Arial", "B", 9)
 
     def _draw_table_header():
         for w, h in zip(col_widths, headers):
-            pdf.cell(w, 7, h, border=1, align="C")
+            pdf.cell(w, 7, _pdf_safe(h), border=1, align="C")
         pdf.ln(7)
 
     _draw_table_header()
 
     line_h = 6
-    pdf.set_font("Arial", "", 9)
+    pdf.set_font("Arial", "", 8)
 
     for line in lines:
-        row = [
-            (line.get("launch_date") or "-"),
+        row = [(line.get("launch_date") or "-")]
+        if has_billing:
+            row.append(_pdf_safe(", ".join(line.get("billing_codes") or [])))
+        row += [
             _pdf_safe(line["map"] or "-"),
             _pdf_safe(line["device"] or "-"),
-            _pdf_safe(line["role"]),
-            str(line["included"]),
+            _pdf_safe(line["role"] or "-"),
+            str(line["included"] if line["included"] is not None else "-"),
             str(line["splices"]),
-            f"$ {line['price_device_usd']:.2f}",
-            f"$ {line['total_usd']:.2f}",
+            f"${line['price_device_usd']:.2f}",
+            f"${line['total_usd']:.2f}",
         ]
 
         # quebra de página manual antes de desenhar a linha
