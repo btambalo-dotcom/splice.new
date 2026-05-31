@@ -876,6 +876,9 @@ class Record(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     # Ribbon: quando o dispositivo e do tipo ribbon, armazena a qtd de fitas
     ribbon_count = db.Column(db.Integer, nullable=True)
+    # Ativo/Inativo: False = dispositivo desativado (pin vermelho no mapa)
+    # NULL ou True = ativo (comportamento padrao)
+    is_active = db.Column(db.Boolean, nullable=True, default=None)
 
     # Testes (níveis por fusão, armazenados como CSV) e flag de concluído
     test_levels = db.Column(db.Text, nullable=True)
@@ -1186,6 +1189,7 @@ with app.app_context():
     ensure("device_type", "is_ribbon", "BOOLEAN")
     ensure("device_type", "ribbon_price_usd", "DOUBLE PRECISION")
     ensure("record", "ribbon_count", "INTEGER")
+    ensure("record", "is_active", "BOOLEAN")
     # Garante FALSE como padrão para is_ribbon em registros existentes (NULL -> FALSE)
     try:
         db.session.execute(text('UPDATE device_type SET is_ribbon = FALSE WHERE is_ribbon IS NULL'))
@@ -1787,7 +1791,7 @@ def index():
 
     # Para usuários normais, o dropdown DEVE mostrar só ele mesmo.
     # Para dono de empresa, mantemos a lista completa (pode filtrar por qualquer splicer da empresa).
-    if not is_admin and not is_owner:
+    if not is_admin:
         if enforced_splicer:
             all_splicers = [enforced_splicer]
             splicer_filter = enforced_splicer
@@ -2021,7 +2025,7 @@ def record_add_photos(rid: int):
     # Permissões básicas: splicer só mexe nos próprios registros (admin pode tudo)
     is_admin = bool(getattr(current_user, "is_admin", False))
     is_owner = bool(getattr(current_user, "is_owner", False))
-    if not (is_admin or is_owner):
+    if not is_admin:
         # se não for admin/dono, deve ser o mesmo splicer
         current_splicer = (getattr(current_user, "splicer_name", None) or current_user.username)
         if (rec.splicer or "") != current_splicer:
@@ -3168,7 +3172,7 @@ def record_upload_photos(record_id):
     is_admin = getattr(current_user, "is_admin", False)
     is_owner = getattr(current_user, "is_company_owner", False)
 
-    if not (is_admin or is_owner):
+    if not is_admin:
         # Usuário normal: precisa ter acesso ao mapa ou ser o splicer do registro
         mp = None
         if rec.map:
@@ -5494,7 +5498,7 @@ def map_section_colors(map_id):
     # Modo escrita: apenas admin ou dono da empresa podem alterar as cores das seções
     is_admin = bool(getattr(current_user, "is_admin", False))
     is_owner = bool(getattr(current_user, "is_company_owner", False)) and _current_user_company_name() == mp.company
-    if not (is_admin or is_owner):
+    if not is_admin:
         abort(403)
 
     try:
@@ -5540,7 +5544,7 @@ def api_import_kmz(map_id):
         getattr(current_user, "is_company_owner", False)
         and _current_user_company_name() == mp.company
     )
-    if not (is_admin or is_owner):
+    if not is_admin:
         abort(403)
 
     file_storage = (
@@ -5582,7 +5586,7 @@ def api_import_haf(map_id):
         getattr(current_user, "is_company_owner", False)
         and _current_user_company_name() == mp.company
     )
-    if not (is_admin or is_owner):
+    if not is_admin:
         abort(403)
 
     file_storage = request.files.get("haf_file") or request.files.get("file") or None
@@ -5706,7 +5710,7 @@ def api_import_splice_report(map_id):
         getattr(current_user, "is_company_owner", False)
         and _current_user_company_name() == mp.company
     )
-    if not (is_admin or is_owner):
+    if not is_admin:
         abort(403)
 
     file_storage = request.files.get("splice_file") or request.files.get("file") or None
@@ -5919,6 +5923,8 @@ def api_map_records(map_id):
             "is_placed": bool(getattr(r, 'is_placed', False)),
             "placed_by": getattr(r, 'placed_by', None) or '',
             "placed_at": r.placed_at.isoformat() if getattr(r, 'placed_at', None) else None,
+            "is_active": getattr(r, 'is_active', None) is not False,
+            "ribbon_count": getattr(r, 'ribbon_count', None),
         })
     return jsonify({"records": data})
 
@@ -5966,14 +5972,18 @@ def api_update_record_from_map(record_id):
     is_owner = bool(getattr(current_user, "is_company_owner", False) and _current_user_company_name() == rec.company)
 
     splices_raw = (request.form.get("splices") or "").strip()
-    try:
-        if splices_raw != "":
-            rec.splices = int(splices_raw)
-    except ValueError:
-        pass
+    if is_admin:
+        try:
+            if splices_raw != "":
+                rec.splices = int(splices_raw)
+        except ValueError:
+            pass
 
     info = (request.form.get("device_info") or "").strip()
-    if is_admin or is_owner:
+    if is_admin:
+        new_device_name = (request.form.get('device_name') or '').strip()
+        if new_device_name:
+            rec.device = new_device_name
         rec.device_info = info or None
         rec.type = (request.form.get('device_type') or rec.type or 'OTE').strip() or 'OTE'
         rec.geo_address = (request.form.get('geo_address') or '').strip() or None
@@ -6051,6 +6061,35 @@ def api_update_record_from_map(record_id):
     db.session.commit()
     return jsonify({"ok": True})
 
+@app.route("/api/records/<int:record_id>/toggle-active", methods=["POST"])
+@login_required
+def api_toggle_record_active(record_id):
+    """Ativa ou desativa um dispositivo no mapa (pin fica vermelho). Somente admin."""
+    if not bool(getattr(current_user, "is_admin", False)):
+        return jsonify({"ok": False, "error": "Somente admin pode desativar dispositivos."}), 403
+    rec = Record.query.get_or_404(record_id)
+    # Toggle: None/True -> False, False -> True
+    currently_active = getattr(rec, "is_active", None) is not False
+    rec.is_active = not currently_active
+    db.session.commit()
+    return jsonify({"ok": True, "is_active": rec.is_active})
+
+
+@app.route("/api/records/<int:record_id>/delete-from-map", methods=["POST"])
+@login_required
+def api_delete_record_from_map(record_id):
+    """Remove permanentemente um dispositivo do mapa. Somente admin."""
+    if not bool(getattr(current_user, "is_admin", False)):
+        return jsonify({"ok": False, "error": "Somente admin pode excluir dispositivos."}), 403
+    rec = Record.query.get_or_404(record_id)
+    # Remove fotos associadas
+    for photo in list(rec.photos):
+        db.session.delete(photo)
+    db.session.delete(rec)
+    db.session.commit()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/records/<int:record_id>/update-coords", methods=["POST"])
 @login_required
 def api_update_record_coords(record_id):
@@ -6091,7 +6130,7 @@ def api_save_record_test(record_id):
     is_admin = bool(getattr(current_user, "is_admin", False))
     is_owner = bool(getattr(current_user, "is_company_owner", False))
 
-    if not (is_admin or is_owner):
+    if not is_admin:
         # 2) Tenta resolver o mapa desse record e usar a mesma lógica de acesso de mapas
         mp = None
         if rec.map:
@@ -6160,7 +6199,7 @@ def api_set_record_placed(record_id):
     is_admin = bool(getattr(current_user, "is_admin", False))
     is_owner = bool(getattr(current_user, "is_company_owner", False))
 
-    if not (is_admin or is_owner):
+    if not is_admin:
         mp = None
         if rec.map:
             mp = CompanyMap.query.filter_by(name=rec.map, company=rec.company).first()

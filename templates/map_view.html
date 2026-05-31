@@ -132,7 +132,7 @@
   <div class="col-lg-4">
     <div class="card bg-black border-secondary h-100">
       <div class="card-body">
-        {% if current_user.is_admin or current_user.is_company_owner %}
+        {% if current_user.is_admin %}
 <h5 class="card-title mb-3" data-i18n="import_devices_kmz">Importar dispositivos via KMZ</h5>
         <form id="kmz-form" class="mb-2" enctype="multipart/form-data">
           <div class="mb-2">
@@ -199,7 +199,7 @@
           <span data-i18n="pon_colors_help">Os dispositivos agora usam cor por PON. Cada PON recebe uma cor automática para facilitar a leitura da rede no mapa.</span>
         </p>
         <div id="section-colors-panel" class="d-flex flex-column gap-2 small mb-2"></div>
-        {% if current_user.is_admin or current_user.is_company_owner %}
+        {% if current_user.is_admin %}
         <button type="button" class="btn btn-outline-light btn-sm w-100 mb-3" id="save-section-colors-btn">
           Atualizar lista de PONs
         </button>
@@ -292,7 +292,7 @@
 
         <div class="mb-3">
           <label class="form-label" data-i18n="device_name">Nome do dispositivo</label>
-          <input type="text" class="form-control bg-secondary text-light" id="device-name" readonly>
+          <input type="text" class="form-control bg-dark text-light border-secondary" id="device-name" placeholder="Ex.: FT01, OTE-23">
         </div>
 
         <div class="mb-3">
@@ -304,13 +304,13 @@
           <label class="form-label" data-i18n="device_info">Informações do dispositivo</label>
           <input type="text" class="form-control bg-dark text-light border-secondary" id="device-info"
                  placeholder="Ex.: Fibra 73 indo para casa 12, porta 3 do splitter"
-                 {% if not current_user.is_admin and not current_user.is_company_owner %}readonly{% endif %}>
+                 {% if not current_user.is_admin %}readonly{% endif %}>
         </div>
 
         <div class="row g-2">
           <div class="col-md-6">
             <label class="form-label">Tipo do dispositivo</label>
-            <select class="form-select bg-dark text-light border-secondary" id="device-type" {% if not current_user.is_admin and not current_user.is_company_owner %}disabled{% endif %}>
+            <select class="form-select bg-dark text-light border-secondary" id="device-type" {% if not current_user.is_admin %}disabled{% endif %}>
               <option>OTE</option>
               <option>Splitter</option>
               <option>D</option>
@@ -319,7 +319,7 @@
               <option>Butt Splicer</option>
               <option>Outro</option>
             </select>
-            {% if not current_user.is_admin and not current_user.is_company_owner %}
+            {% if not current_user.is_admin %}
             <div class="form-text text-muted" style="font-size:.75rem;">Tipo só pode ser alterado pelo Admin.</div>
             {% endif %}
           </div>
@@ -375,6 +375,10 @@
           Abrir no Google Maps
         </a>
         <button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Fechar</button>
+        {% if current_user.is_admin %}
+        <button type="button" class="btn btn-warning btn-sm" id="btn-toggle-active" onclick="toggleDeviceActive()">Desativar</button>
+        <button type="button" class="btn btn-danger btn-sm" id="btn-delete-device" onclick="deleteDeviceFromMap()">Excluir</button>
+        {% endif %}
         <button type="submit" class="btn btn-primary">Salvar</button>
       </div>
     </form>
@@ -485,7 +489,7 @@
     const addRecordUrl = "{{ url_for('api_add_record_to_map', map_id=map_obj.id) }}";
     const sectionColorsUrl = "{{ url_for('map_section_colors', map_id=map_obj.id) }}";
     const initialFocusRecordId = {{ focus_record_id if focus_record_id is not none else "null" }};
-    const IS_OWNER_READONLY = {{ "true" if current_user.is_company_owner and not current_user.is_admin else "false" }};
+    const IS_OWNER_READONLY = false; // owner nao tem permissao de edicao
 const IS_ADMIN = {{ "true" if current_user.is_admin else "false" }};
     const MAP_NAME = "{{ map_obj.name }}";
     const testsReportUrl = "{{ url_for('export_map_tests_report', map_id=map_obj.id) }}";
@@ -1062,14 +1066,15 @@ function deviceTypeLabel(rec) {
    + badge de tipo (S / D / BS) no canto inferior esquerdo
    ───────────────────────────────────────────────── */
 function buildDeviceIcon(rec) {
-  const hasLaunch = (Number(rec.splices || 0) > 0) || Number(rec.has_photos || 0) > 0;
+  const hasLaunch = (Number(rec.splices || 0) > 0) || Number(rec.has_photos || 0) > 0 || (Number(rec.ribbon_count || 0) > 0);
   const tested    = !!rec.test_done;
   const placed    = !!rec.is_placed;
   const typeLabel = deviceTypeLabel(rec);
 
-  // Cor do pin: verde se lançado, azul se ainda não lançado
-  const pinColor = hasLaunch ? '#2ecc40' : '#1a73e8';
-  const pinDark  = hasLaunch ? '#1a7a25' : '#0d4fa8';
+  // Cor do pin: vermelho se desativado, verde se lancado, azul se ainda nao lancado
+  const isActive = rec.is_active !== false;
+  const pinColor = !isActive ? '#e74c3c' : (hasLaunch ? '#2ecc40' : '#1a73e8');
+  const pinDark  = !isActive ? '#922b21' : (hasLaunch ? '#1a7a25' : '#0d4fa8');
 
   // Badge de tipo (S / D / BS) — construído sem template aninhado
   var typeBadge = '';
@@ -1576,8 +1581,58 @@ function openDeviceModalById(id) {
         gmapsLink.href = "#";
       }
 
+      // Botao toggle ativo/inativo
+      const btnToggle = document.getElementById('btn-toggle-active');
+      if (btnToggle) {
+        const isActive = rec.is_active !== false;
+        btnToggle.textContent = isActive ? 'Desativar' : 'Reativar';
+        btnToggle.className = isActive ? 'btn btn-warning btn-sm' : 'btn btn-success btn-sm';
+        btnToggle.dataset.recordId = rec.id;
+        btnToggle.dataset.isActive = isActive ? '1' : '0';
+      }
+      const btnDelete = document.getElementById('btn-delete-device');
+      if (btnDelete) btnDelete.dataset.recordId = rec.id;
+
       const modal = new bootstrap.Modal(document.getElementById('deviceModal'));
       modal.show();
+    }
+
+    async function toggleDeviceActive() {
+      const btn = document.getElementById('btn-toggle-active');
+      const recId = btn && btn.dataset.recordId;
+      if (!recId) return;
+      if (!confirm('Confirma ' + (btn.dataset.isActive === '1' ? 'desativar' : 'reativar') + ' este dispositivo?')) return;
+      const resp = await fetch('/api/records/' + recId + '/toggle-active', { method: 'POST' });
+      const data = await resp.json();
+      if (data.ok) {
+        // Atualiza o registro local e redesenha o pin
+        const rec = allRecords.find(r => r.id == recId);
+        if (rec) {
+          rec.is_active = data.is_active;
+          refreshMarkers();
+        }
+        bootstrap.Modal.getInstance(document.getElementById('deviceModal')).hide();
+      } else {
+        alert(data.error || 'Erro ao alterar status.');
+      }
+    }
+
+    async function deleteDeviceFromMap() {
+      const btn = document.getElementById('btn-delete-device');
+      const recId = btn && btn.dataset.recordId;
+      if (!recId) return;
+      if (!confirm('EXCLUIR este dispositivo do mapa permanentemente? Esta ação não pode ser desfeita.')) return;
+      const resp = await fetch('/api/records/' + recId + '/delete-from-map', { method: 'POST' });
+      const data = await resp.json();
+      if (data.ok) {
+        // Remove do array local e redesenha
+        const idx = allRecords.findIndex(r => r.id == recId);
+        if (idx !== -1) allRecords.splice(idx, 1);
+        refreshMarkers();
+        bootstrap.Modal.getInstance(document.getElementById('deviceModal')).hide();
+      } else {
+        alert(data.error || 'Erro ao excluir dispositivo.');
+      }
     }
 
     const kmzForm = document.getElementById('kmz-form');
@@ -1686,8 +1741,10 @@ function openDeviceModalById(id) {
       const section = document.getElementById('device-section').value;
       const photosInput = document.getElementById('device-photos');
 
+      const deviceNameVal = document.getElementById('device-name').value.trim();
       const formData = new FormData();
       formData.append('splices', splices);
+      formData.append('device_name', deviceNameVal);
       formData.append('device_info', info);
       formData.append('device_type', deviceType);
       formData.append('geo_address', deviceAddress);
@@ -1708,6 +1765,11 @@ function openDeviceModalById(id) {
       });
       const data = await resp.json();
       if (data.ok) {
+        // Atualiza nome local imediatamente sem reload completo
+        if (deviceNameVal) {
+          const rec = allRecords.find(r => r.id == recId);
+          if (rec) rec.device = deviceNameVal;
+        }
         const modalEl = document.getElementById('deviceModal');
         const modal = bootstrap.Modal.getInstance(modalEl);
         modal.hide();
