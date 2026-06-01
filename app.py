@@ -1251,6 +1251,7 @@ with app.app_context():
         db.create_all()
     except Exception:
         pass
+    ensure("hour_record", "map_name", "VARCHAR(200)")
     # Garante FALSE como padrão para is_ribbon em registros existentes (NULL -> FALSE)
     try:
         db.session.execute(text('UPDATE device_type SET is_ribbon = FALSE WHERE is_ribbon IS NULL'))
