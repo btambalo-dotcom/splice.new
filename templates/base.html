@@ -24,6 +24,7 @@
             {% if (not current_user.is_company_owner) or current_user.is_admin %}
             <a href="{{ url_for('entry') }}" class="btn btn-sm btn-outline-light me-2" data-i18n="entry">Lançar</a>
             <a href="{{ url_for('photo_entry') }}" class="btn btn-sm btn-outline-info me-2" data-i18n="photo_entry">Lançar (foto)</a>
+            <a href="{{ url_for('hour_entry') }}" class="btn btn-sm btn-outline-warning me-2">Horas</a>
             <a href="{{ url_for('expenses') }}" class="btn btn-sm btn-outline-light me-2" data-i18n="expenses">Despesas</a>
             {% endif %}
             {% if current_user.is_admin %}

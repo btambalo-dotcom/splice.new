@@ -1,0 +1,113 @@
+
+{% extends 'base.html' %}
+{% block title %}Lançar Horas · SPLICER{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h3 class="mb-0">Lançamento de Horas</h3>
+  <a href="{{ url_for('hour_list') }}" class="btn btn-outline-info btn-sm">Ver histórico</a>
+</div>
+
+{% if errors %}
+<div class="alert alert-danger">
+  {% for e in errors %}<div>{{ e }}</div>{% endfor %}
+</div>
+{% endif %}
+
+{% if hourly_rates %}
+<form method="post" class="card p-4" style="max-width:560px;">
+  <div class="row g-3">
+
+    {% if is_admin %}
+    <div class="col-12">
+      <label class="form-label">Empresa</label>
+      <select name="company" id="company-sel" class="form-select" onchange="updateProjects()">
+        <option value="">Selecione...</option>
+        {% for c in companies %}
+        <option value="{{ c }}">{{ c }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-12">
+      <label class="form-label">Projeto</label>
+      <select name="project_id" id="project-sel" class="form-select">
+        <option value="">Selecione a empresa primeiro</option>
+      </select>
+    </div>
+    <div class="col-12">
+      <label class="form-label">Splicer</label>
+      <select name="splicer" class="form-select">
+        {% for s in splicer_options %}
+        <option value="{{ s }}">{{ s }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% else %}
+    <input type="hidden" name="company" value="{{ companies[0] if companies else '' }}">
+    {% if projects_by_company %}
+    <div class="col-12">
+      <label class="form-label">Projeto</label>
+      <select name="project_id" class="form-select">
+        <option value="">Nenhum</option>
+        {% for proj in projects_by_company.values() | sum(start=[]) %}
+        <option value="{{ proj.id }}">{{ proj.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
+    {% endif %}
+
+    <div class="col-12">
+      <label class="form-label">Taxa / Tipo de serviço</label>
+      <select name="rate_id" class="form-select" required>
+        <option value="">Selecione...</option>
+        {% for r in hourly_rates %}
+        <option value="{{ r.id }}">
+          {{ r.description or 'Hora trabalhada' }} — ${{ '%.2f'|format(r.rate_usd) }}/h
+          {% if r.billing_code %}[{{ r.billing_code }}]{% endif %}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="col-6">
+      <label class="form-label">Horas trabalhadas</label>
+      <input type="number" name="hours" class="form-control" step="0.25" min="0.25" placeholder="Ex.: 2.5" required>
+    </div>
+
+    <div class="col-6">
+      <label class="form-label">Data</label>
+      <input type="date" name="created" class="form-control" value="{{ today }}">
+    </div>
+
+    <div class="col-12">
+      <label class="form-label">Descrição / Observação <span class="text-muted">(opcional)</span></label>
+      <input type="text" name="description" class="form-control" placeholder="Ex.: Reparo no splice FT22, mapa 2911">
+    </div>
+
+    <div class="col-12">
+      <button type="submit" class="btn btn-primary w-100">Registrar horas</button>
+    </div>
+  </div>
+</form>
+
+{% else %}
+<div class="alert alert-warning">
+  Nenhuma taxa horária configurada. Peça ao Admin para configurar em
+  <strong>Configurações → Projeto → Taxas horárias</strong>.
+</div>
+{% endif %}
+
+<script>
+const projectsByCompany = {{ projects_by_company | tojson }};
+function updateProjects() {
+  const co = document.getElementById('company-sel').value;
+  const sel = document.getElementById('project-sel');
+  sel.innerHTML = '<option value="">Nenhum</option>';
+  (projectsByCompany[co] || []).forEach(p => {
+    const opt = document.createElement('option');
+    opt.value = p.id; opt.textContent = p.name;
+    sel.appendChild(opt);
+  });
+}
+</script>
+{% endblock %}

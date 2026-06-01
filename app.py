@@ -815,6 +815,33 @@ class SpliceTier(db.Model):
     project = db.relationship('Project', backref=db.backref('splice_tiers', lazy=True))
 
 
+class HourlyRate(db.Model):
+    """Valor por hora configurado por projeto/empresa para lancamentos de horas."""
+    id = db.Column(db.Integer, primary_key=True)
+    rate_usd = db.Column(db.Float, default=0.0, nullable=False)
+    billing_code = db.Column(db.String(30), nullable=True)
+    description = db.Column(db.String(120), nullable=True)  # ex: "Reparo / Conserto"
+    company = db.Column(db.String(120), nullable=True)
+    project_id = db.Column(db.Integer, db.ForeignKey('project.id'), nullable=True, index=True)
+    project = db.relationship('Project', backref=db.backref('hourly_rates', lazy=True))
+
+
+class HourRecord(db.Model):
+    """Lancamento de horas trabalhadas (conserto, reparo, etc.)."""
+    id = db.Column(db.Integer, primary_key=True)
+    company = db.Column(db.String(120), nullable=True)
+    project_id = db.Column(db.Integer, db.ForeignKey('project.id'), nullable=True, index=True)
+    project = db.relationship('Project', backref=db.backref('hour_records', lazy=True))
+    splicer = db.Column(db.String(120), nullable=True)
+    created_date = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    hours = db.Column(db.Float, nullable=False, default=0.0)
+    description = db.Column(db.String(255), nullable=True)
+    rate_usd = db.Column(db.Float, default=0.0)
+    total_usd = db.Column(db.Float, default=0.0)
+    billing_code = db.Column(db.String(30), nullable=True)
+
+
 # Associação entre mapas interativos e splicers que podem acessá-los.
 map_splicer_access = db.Table(
     "map_splicer_access",
@@ -1217,6 +1244,12 @@ with app.app_context():
     ensure("device_type", "billing_code_meio", "VARCHAR(30)")
     ensure("device_type", "billing_code_ponta", "VARCHAR(30)")
     ensure("splice_tier", "code_splice", "VARCHAR(30)")
+    # HourlyRate e HourRecord sao criados pelo db.create_all() automaticamente
+    # mas caso as tabelas ja existam precisamos garantir as colunas
+    try:
+        db.create_all()
+    except Exception:
+        pass
     # Garante FALSE como padrão para is_ribbon em registros existentes (NULL -> FALSE)
     try:
         db.session.execute(text('UPDATE device_type SET is_ribbon = FALSE WHERE is_ribbon IS NULL'))
@@ -6886,6 +6919,189 @@ def admin_fix_ribbon():
         msg += " Erros: " + "; ".join(errors)
     flash(msg, "success" if not errors else "warning")
     return redirect(url_for("index"))
+
+
+# ═══════════════════════════════════════════════════════
+# HORAS TRABALHADAS
+# ═══════════════════════════════════════════════════════
+
+@app.route("/hours", methods=["GET", "POST"])
+@login_required
+def hour_entry():
+    """Tela de lancamento de horas trabalhadas."""
+    is_admin = bool(getattr(current_user, "is_admin", False))
+
+    # Carrega empresas e projetos para o seletor
+    companies = []
+    projects_by_company = {}
+    if is_admin:
+        companies = sorted(set(
+            r.company for r in Record.query.with_entities(Record.company).distinct()
+            if r.company
+        ))
+        for proj in Project.query.order_by(Project.name).all():
+            projects_by_company.setdefault(proj.company or "", []).append({
+                "id": proj.id, "name": proj.name
+            })
+    else:
+        company = getattr(current_user, "company_name", None) or ""
+        if company:
+            companies = [company]
+            for proj in Project.query.filter_by(company=company).order_by(Project.name).all():
+                projects_by_company.setdefault(company, []).append({
+                    "id": proj.id, "name": proj.name
+                })
+
+    # Carrega taxas horárias disponíveis
+    hourly_rates = HourlyRate.query.order_by(HourlyRate.company, HourlyRate.description).all()
+
+    errors = []
+    if request.method == "POST":
+        company = (request.form.get("company") or "").strip() or None
+        project_id_raw = (request.form.get("project_id") or "").strip()
+        project_id = int(project_id_raw) if project_id_raw.isdigit() else None
+        splicer = (request.form.get("splicer") or "").strip() or (
+            getattr(current_user, "splicer_name", None) or current_user.username
+        )
+        hours_raw = (request.form.get("hours") or "0").strip()
+        description = (request.form.get("description") or "").strip() or None
+        rate_id_raw = (request.form.get("rate_id") or "").strip()
+        created_raw = (request.form.get("created") or "").strip()
+
+        try:
+            hours = float(hours_raw or 0)
+        except ValueError:
+            hours = 0.0
+            errors.append("Número de horas inválido.")
+
+        rate = HourlyRate.query.get(int(rate_id_raw)) if rate_id_raw.isdigit() else None
+        if not rate:
+            errors.append("Selecione uma taxa horária.")
+
+        try:
+            created_date = datetime.strptime(created_raw, "%Y-%m-%d") if created_raw else datetime.utcnow()
+        except ValueError:
+            created_date = datetime.utcnow()
+
+        if not errors and hours > 0 and rate:
+            total = hours * rate.rate_usd
+            hr = HourRecord(
+                company=company,
+                project_id=project_id,
+                splicer=splicer,
+                created_date=created_date,
+                hours=hours,
+                description=description,
+                rate_usd=rate.rate_usd,
+                total_usd=total,
+                billing_code=rate.billing_code,
+            )
+            db.session.add(hr)
+            db.session.commit()
+            flash(f"Lançamento de {hours}h registrado. Total: ${total:.2f}", "success")
+            return redirect(url_for("hour_entry"))
+        elif not errors:
+            errors.append("Informe um número de horas válido.")
+
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    splicer_options = []
+    if is_admin:
+        splicer_options = [
+            (u.splicer_name or u.username)
+            for u in User.query.order_by(User.username).all()
+            if (u.splicer_name or u.username)
+        ]
+
+    return render_template("hour_entry.html",
+        companies=companies,
+        projects_by_company=projects_by_company,
+        hourly_rates=hourly_rates,
+        splicer_options=splicer_options,
+        errors=errors,
+        today=today,
+        is_admin=is_admin,
+    )
+
+
+@app.route("/hours/list")
+@login_required
+def hour_list():
+    """Lista de lançamentos de horas."""
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    company_filter = request.args.get("company") or None
+    start_raw = request.args.get("start") or None
+    end_raw = request.args.get("end") or None
+
+    q = HourRecord.query
+    if not is_admin:
+        enforced = getattr(current_user, "splicer_name", None) or current_user.username
+        q = q.filter(HourRecord.splicer == enforced)
+    if company_filter:
+        q = q.filter(HourRecord.company == company_filter)
+    if start_raw:
+        try:
+            q = q.filter(HourRecord.created_date >= datetime.fromisoformat(start_raw))
+        except ValueError:
+            pass
+    if end_raw:
+        try:
+            q = q.filter(HourRecord.created_date <= datetime.fromisoformat(end_raw))
+        except ValueError:
+            pass
+
+    records = q.order_by(HourRecord.created_date.desc()).all()
+    total = sum(r.total_usd or 0 for r in records)
+    return render_template("hour_list.html", records=records, total=total,
+                           company_filter=company_filter or "",
+                           start=start_raw or "", end=end_raw or "",
+                           is_admin=is_admin)
+
+
+@app.route("/hours/<int:hid>/delete", methods=["POST"])
+@admin_required
+def hour_delete(hid: int):
+    hr = HourRecord.query.get_or_404(hid)
+    db.session.delete(hr)
+    db.session.commit()
+    flash("Lançamento de horas removido.", "success")
+    return redirect(url_for("hour_list"))
+
+
+# ── Configuração de taxas horárias ─────────────────────
+
+@app.route("/settings/hourly-rate/add", methods=["POST"])
+@admin_required
+def settings_hourly_rate_add():
+    company = (request.form.get("company") or "").strip() or None
+    project_id_raw = (request.form.get("project_id") or "").strip()
+    project_id = int(project_id_raw) if project_id_raw.isdigit() else None
+    next_url = (request.form.get("next") or "").strip() or None
+    try:
+        rate = float(request.form.get("rate_usd") or 0)
+    except ValueError:
+        rate = 0.0
+    description = (request.form.get("description") or "").strip() or None
+    billing_code = (request.form.get("billing_code") or "").strip() or None
+
+    hr = HourlyRate(
+        company=company, project_id=project_id,
+        rate_usd=rate, description=description, billing_code=billing_code,
+    )
+    db.session.add(hr)
+    db.session.commit()
+    flash("Taxa horária salva.", "success")
+    return redirect(next_url or url_for("settings"))
+
+
+@app.route("/settings/hourly-rate/<int:rid>/delete")
+@admin_required
+def settings_hourly_rate_delete(rid: int):
+    next_url = request.args.get("next") or None
+    hr = HourlyRate.query.get_or_404(rid)
+    db.session.delete(hr)
+    db.session.commit()
+    flash("Taxa horária removida.", "success")
+    return redirect(next_url or url_for("settings"))
 
 
 if __name__ == "__main__":
