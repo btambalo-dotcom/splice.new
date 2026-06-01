@@ -840,6 +840,7 @@ class HourRecord(db.Model):
     rate_usd = db.Column(db.Float, default=0.0)
     total_usd = db.Column(db.Float, default=0.0)
     billing_code = db.Column(db.String(30), nullable=True)
+    map_name = db.Column(db.String(200), nullable=True)
 
 
 # Associação entre mapas interativos e splicers que podem acessá-los.
@@ -6955,6 +6956,11 @@ def hour_entry():
     # Carrega taxas horárias disponíveis
     hourly_rates = HourlyRate.query.order_by(HourlyRate.company, HourlyRate.description).all()
 
+    # Carrega mapas disponíveis por projeto
+    maps_by_project = {}
+    for m in CompanyMap.query.order_by(CompanyMap.name).all():
+        maps_by_project.setdefault(str(m.project_id) if m.project_id else m.company or "", []).append(m.name)
+
     errors = []
     if request.method == "POST":
         company = (request.form.get("company") or "").strip() or None
@@ -6965,6 +6971,7 @@ def hour_entry():
         )
         hours_raw = (request.form.get("hours") or "0").strip()
         description = (request.form.get("description") or "").strip() or None
+        map_name = (request.form.get("map_name") or "").strip() or None
         rate_id_raw = (request.form.get("rate_id") or "").strip()
         created_raw = (request.form.get("created") or "").strip()
 
@@ -6992,6 +6999,7 @@ def hour_entry():
                 created_date=created_date,
                 hours=hours,
                 description=description,
+                map_name=map_name,
                 rate_usd=rate.rate_usd,
                 total_usd=total,
                 billing_code=rate.billing_code,
@@ -7015,6 +7023,7 @@ def hour_entry():
     return render_template("hour_entry.html",
         companies=companies,
         projects_by_company=projects_by_company,
+        maps_by_project=maps_by_project,
         hourly_rates=hourly_rates,
         splicer_options=splicer_options,
         errors=errors,

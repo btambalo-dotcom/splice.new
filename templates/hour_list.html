@@ -38,6 +38,7 @@
         <th>Data</th>
         {% if is_admin %}<th>Empresa</th>{% endif %}
         <th>Splicer</th>
+        <th>Mapa</th>
         <th>Horas</th>
         <th>Descrição</th>
         <th>Cód.</th>
@@ -53,6 +54,7 @@
         <td>{{ r.created_date.strftime('%Y-%m-%d') if r.created_date else '-' }}</td>
         {% if is_admin %}<td>{{ r.company or '-' }}</td>{% endif %}
         <td>{{ r.splicer or '-' }}</td>
+        <td>{{ r.map_name or '-' }}</td>
         <td><strong>{{ r.hours }}h</strong></td>
         <td>{{ r.description or '-' }}</td>
         <td>{% if r.billing_code %}<span class="badge bg-info text-dark">{{ r.billing_code }}</span>{% else %}-{% endif %}</td>

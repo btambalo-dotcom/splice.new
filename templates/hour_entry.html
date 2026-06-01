@@ -57,6 +57,13 @@
     {% endif %}
 
     <div class="col-12">
+      <label class="form-label">Mapa <span class="text-muted">(opcional)</span></label>
+      <select name="map_name" id="map-sel" class="form-select">
+        <option value="">Sem mapa específico</option>
+      </select>
+    </div>
+
+    <div class="col-12">
       <label class="form-label">Taxa / Tipo de serviço</label>
       <select name="rate_id" class="form-select" required>
         <option value="">Selecione...</option>
@@ -99,6 +106,8 @@
 
 <script>
 const projectsByCompany = {{ projects_by_company | tojson }};
+const mapsByProject = {{ maps_by_project | tojson }};
+
 function updateProjects() {
   const co = document.getElementById('company-sel').value;
   const sel = document.getElementById('project-sel');
@@ -108,6 +117,23 @@ function updateProjects() {
     opt.value = p.id; opt.textContent = p.name;
     sel.appendChild(opt);
   });
+  updateMaps();
 }
+
+function updateMaps() {
+  const projId = document.getElementById('project-sel') ? document.getElementById('project-sel').value : '';
+  const mapSel = document.getElementById('map-sel');
+  if (!mapSel) return;
+  mapSel.innerHTML = '<option value="">Sem mapa específico</option>';
+  (mapsByProject[projId] || []).forEach(m => {
+    const opt = document.createElement('option');
+    opt.value = m; opt.textContent = m;
+    mapSel.appendChild(opt);
+  });
+}
+
+// Atualiza mapas quando projeto muda
+const projSel = document.getElementById('project-sel');
+if (projSel) projSel.addEventListener('change', updateMaps);
 </script>
 {% endblock %}
