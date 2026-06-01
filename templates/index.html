@@ -150,8 +150,20 @@ mb-3">Registros</h5>
             <td>{{ r.created_date.date() if r.created_date else '' }}</td>
             <td>{{ r.company or '-' }}</td>
             <td>{{ r.map }}</td>
-            <td class="nowrap-cell">{{ r.type }}</td>
-            <td>{{ r.device }}</td>
+            <td class="nowrap-cell">
+              {% if r.type == 'HORAS' %}
+                <span class="badge bg-warning text-dark">HORAS</span>
+              {% else %}
+                {{ r.type }}
+              {% endif %}
+            </td>
+            <td>
+              {% if r.type == 'HORAS' %}
+                {{ (r.device.split('—')[1].strip() if r.device and '—' in r.device else '') or '—' }}
+              {% else %}
+                {{ r.device }}
+              {% endif %}
+            </td>
             <td>{{ r.splicer }}</td>
             <td>
               {% if r.ribbon_count and r.ribbon_count > 0 %}
@@ -204,7 +216,7 @@ mb-3">Registros</h5>
 
 {# Modais de fotos por registro #}
 {% for r in records %}
-  {% if r.photos|length > 0 %}
+  {% if not r.type == 'HORAS' and r.photos|length > 0 %}
   <div class="modal fade" id="photosModal-{{ r.id }}" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-fullscreen modal-dialog-centered">
       <div class="modal-content bg-dark">

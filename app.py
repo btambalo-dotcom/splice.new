@@ -1892,8 +1892,72 @@ def index():
     query = query.filter((Record.splices > 0) | (Record.total_usd > 0) | (Record.price_device_usd > 0) | (Record.price_splices_usd > 0) | (Record.ribbon_count.isnot(None)))
 
     records = query.order_by(Record.created_date.desc().nullslast(), Record.id.desc()).all()
-    total_rows = len(records)
-    total_amount = sum(r.total_usd or 0 for r in records)
+
+    # Busca lançamentos de horas com os mesmos filtros e adiciona à lista
+    hq = HourRecord.query
+    if is_admin:
+        pass
+    elif is_owner:
+        owner_company = getattr(current_user, "company_name", None)
+        if owner_company:
+            hq = hq.filter(HourRecord.company == owner_company)
+    else:
+        hq = hq.filter(HourRecord.splicer == enforced_splicer)
+    if company_filter:
+        hq = hq.filter(HourRecord.company == company_filter)
+    if splicer_filter and (is_admin or is_owner):
+        hq = hq.filter(HourRecord.splicer == splicer_filter)
+    if map_filter:
+        hq = hq.filter(HourRecord.map_name.ilike(f"%{map_filter}%"))
+    if start_raw:
+        try:
+            hq = hq.filter(HourRecord.created_date >= datetime.fromisoformat(start_raw))
+        except ValueError:
+            pass
+    if end_raw:
+        try:
+            hq = hq.filter(HourRecord.created_date <= datetime.fromisoformat(end_raw))
+        except ValueError:
+            pass
+    hour_records = hq.order_by(HourRecord.created_date.desc().nullslast()).all()
+
+    # Cria objetos compatíveis com o template para os lançamentos de horas
+    class HourRow:
+        """Wrapper para HourRecord compatível com o template de Record."""
+        is_hour_record = True
+        def __init__(self, hr):
+            self.id = hr.id
+            self.map = hr.map_name or "-"
+            self.type = "HORAS"
+            self.device = f"{hr.hours}h — {hr.description or ''}"
+            self.splicer = hr.splicer
+            self.company = hr.company
+            self.project_id = hr.project_id
+            self.created_date = hr.created_date
+            self.splices = None
+            self.ribbon_count = None
+            self.map_role = None
+            self.billing_codes_json = f'["{hr.billing_code}"]' if hr.billing_code else None
+            self.price_splices_usd = hr.total_usd  # exibe no campo fusões
+            self.price_device_usd = 0.0
+            self.total_usd = hr.total_usd
+            self.photos = []
+            self.can_view_values = True
+            self.is_placed = False
+            self.test_done = False
+            self._hr = hr  # referência original
+
+    hour_rows = [HourRow(hr) for hr in hour_records]
+
+    # Mescla e ordena por data
+    all_rows = records + hour_rows
+    all_rows.sort(key=lambda r: (r.created_date or datetime.min), reverse=True)
+
+    total_rows = len(all_rows)
+    total_amount = sum((r.total_usd or 0) for r in all_rows)
+
+    # Substitui records pela lista mesclada para o template
+    records = all_rows
 
     companies = [c.name for c in CompanyConfig.query.order_by(CompanyConfig.name).all()]
     companies_from_records = {
