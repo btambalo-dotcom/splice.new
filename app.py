@@ -4559,47 +4559,24 @@ def export_invoice():
         hq = hq.filter(HourRecord.splicer == enforced_splicer)
     hour_records = hq.order_by(HourRecord.created_date.asc().nullslast()).all()
 
-    # Agrupa por mapa + dispositivo + role + inclusas (mesmo comportamento anterior)
+    # Sem agrupamento: cada lancamento = uma linha na invoice
     grouped = {}
     for r in records:
-        key = (
-            (r.map or "").strip(),
-            (r.device or "").strip(),
-            (r.map_role or "").strip(),
-            int(r.included_splices_applied) if r.included_splices_applied is not None else None,
-        )
-        if key not in grouped:
-            grouped[key] = {
-                "map": key[0] or "-",
-                "device": key[1] or "-",
-                "launch_date": None,
-                "map_role": key[2] or "",
-                "role": key[2] or "",
-                "included": key[3],
-                "splices": 0,
-                "price_device_usd": 0.0,
-                "total_usd": 0.0,
-            }
-
-        # Usa diretamente os valores gravados em cada lançamento, para garantir
-        # que a invoice some exatamente o que você vê na tela de Produção.
-                # Data de lançamento (primeiro record do grupo no intervalo)
+        key = r.id  # chave unica por lancamento
+        # Cada record tem sua propria entrada (chave = r.id)
         dt_src = r.created_date or getattr(r, "created_at", None)
-        if dt_src:
-            d_iso = dt_src.date().isoformat()
-            cur = grouped[key].get("launch_date")
-            if (cur is None) or (d_iso < cur):
-                grouped[key]["launch_date"] = d_iso
-
-        grouped[key]["splices"] += int(r.splices or 0)
-
-        device_price = float(getattr(r, "price_device_usd", 0.0) or 0.0)
-        # Usa o maior valor de device encontrado no grupo
-        # (cobre casos onde o primeiro lancamento foi feito antes de configurar o preco)
-        if device_price > grouped[key]["price_device_usd"]:
-            grouped[key]["price_device_usd"] = device_price
-
-        grouped[key]["total_usd"] += float(getattr(r, "total_usd", 0.0) or 0.0)
+        d_iso = dt_src.date().isoformat() if dt_src else "-"
+        grouped[key] = {
+            "map": (r.map or "-").strip(),
+            "device": (r.device or "-").strip(),
+            "launch_date": d_iso,
+            "map_role": (r.map_role or "").strip(),
+            "role": (r.map_role or "").strip(),
+            "included": int(r.included_splices_applied) if r.included_splices_applied is not None else None,
+            "splices": int(r.splices or 0),
+            "price_device_usd": float(getattr(r, "price_device_usd", 0.0) or 0.0),
+            "total_usd": float(getattr(r, "total_usd", 0.0) or 0.0),
+        }
 
         # Coleta codigos de cobranca do registro
         # Se nao estiver salvo, calcula na hora (registros antigos)
@@ -4620,9 +4597,7 @@ def export_invoice():
                 map_role=r.map_role,
                 ribbon_count=getattr(r, "ribbon_count", None),
             )
-        for c in bcodes:
-            if c and c not in grouped[key].setdefault("billing_codes", []):
-                grouped[key]["billing_codes"].append(c)
+        grouped[key]["billing_codes"] = [c for c in bcodes if c]
 
     # lista final de linhas da invoice (um item por grupo mapa/device/tipo)
     # Recalcula total de cada linha com o device_price corrigido
@@ -4738,8 +4713,8 @@ def export_invoice():
     # Com codigos: Date(20) Map(28) Device(42) Tipo(13) Incl(10) Splices(13) Dev$(22) Total(22) Codes(20) = 190
     has_billing = any(l.get("billing_codes") for l in lines)
     if has_billing:
-        # Date(20)+Codes(26)+Map(18)+Device(34)+Tipo(14)+Incl(9)+Splices(12)+Dev$(24)+Total(33)=190
-        col_widths = [20, 26, 18, 34, 14, 9, 12, 24, 33]
+        # Date(20)+Codes(28)+Map(18)+Device(32)+Tipo(14)+Incl(9)+Splices(12)+Dev$(24)+Total(33)=190
+        col_widths = [20, 28, 18, 32, 14, 9, 12, 24, 33]
         headers   = ["Date", "Codes", "Map", "Device", "Tipo", "Incl.", "Spl.", "Dev $", "Total"]
     else:
         col_widths = [22, 30, 50, 14, 10, 14, 24, 26]
