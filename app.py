@@ -4540,7 +4540,26 @@ def export_invoice():
 
     records = query.order_by(Record.created_date.asc().nullslast(), Record.id.asc()).all()
 
-    # agrupar por mapa + dispositivo (+ opcional: MEIO/PONTA + inclusas aplicadas)
+    # Busca lançamentos de horas com os mesmos filtros
+    hq = HourRecord.query.filter(HourRecord.company == company_filter)
+    if splicer_filter and getattr(current_user, "is_admin", False):
+        hq = hq.filter(HourRecord.splicer == splicer_filter)
+    if start_raw:
+        try:
+            hq = hq.filter(HourRecord.created_date >= datetime.fromisoformat(start_raw))
+        except ValueError:
+            pass
+    if end_raw:
+        try:
+            hq = hq.filter(HourRecord.created_date <= datetime.fromisoformat(end_raw))
+        except ValueError:
+            pass
+    if not getattr(current_user, "is_admin", False):
+        enforced_splicer = getattr(current_user, "splicer_name", None) or current_user.username
+        hq = hq.filter(HourRecord.splicer == enforced_splicer)
+    hour_records = hq.order_by(HourRecord.created_date.asc().nullslast()).all()
+
+    # Agrupa por mapa + dispositivo + role + inclusas (mesmo comportamento anterior)
     grouped = {}
     for r in records:
         key = (
@@ -4548,13 +4567,12 @@ def export_invoice():
             (r.device or "").strip(),
             (r.map_role or "").strip(),
             int(r.included_splices_applied) if r.included_splices_applied is not None else None,
-
         )
         if key not in grouped:
             grouped[key] = {
                 "map": key[0] or "-",
                 "device": key[1] or "-",
-                "launch_date": None,  # primeira data de lançamento do device no período
+                "launch_date": None,
                 "map_role": key[2] or "",
                 "role": key[2] or "",
                 "included": key[3],
@@ -4576,8 +4594,9 @@ def export_invoice():
         grouped[key]["splices"] += int(r.splices or 0)
 
         device_price = float(getattr(r, "price_device_usd", 0.0) or 0.0)
-        # Mantém sempre o último valor de device do grupo (todos devem ser iguais).
-        if device_price > 0:
+        # Usa o maior valor de device encontrado no grupo
+        # (cobre casos onde o primeiro lancamento foi feito antes de configurar o preco)
+        if device_price > grouped[key]["price_device_usd"]:
             grouped[key]["price_device_usd"] = device_price
 
         grouped[key]["total_usd"] += float(getattr(r, "total_usd", 0.0) or 0.0)
@@ -4606,13 +4625,38 @@ def export_invoice():
                 grouped[key]["billing_codes"].append(c)
 
     # lista final de linhas da invoice (um item por grupo mapa/device/tipo)
-    # A invoice deve mostrar SOMENTE o que foi realmente lançado/cobrado.
-    # Regra: manter linhas com qualquer valor > 0 (splices, device price ou total).
+    # Recalcula total de cada linha com o device_price corrigido
+    for l in grouped.values():
+        l["total_usd"] = float(l.get("total_usd") or 0.0)
+        stored_device = float(l.get("price_device_usd") or 0.0)
+        if stored_device > 0 and l["total_usd"] == 0.0:
+            l["total_usd"] = stored_device
+
     lines = [
         l for l in grouped.values()
         if (float(l.get("total_usd") or 0.0) > 0.0) or (int(l.get("splices") or 0) > 0) or (float(l.get("price_device_usd") or 0.0) > 0.0)
     ]
 
+    # Adiciona lançamentos de horas como linhas separadas
+    for hr in hour_records:
+        if (hr.total_usd or 0) > 0:
+            lines.append({
+                "launch_date": hr.created_date.date().isoformat() if hr.created_date else "-",
+                "map": hr.map_name or "-",
+                "device": hr.description or "Hora trabalhada",
+                "role": "HORAS",
+                "included": None,
+                "splices": 0,
+                "price_device_usd": 0.0,
+                "total_usd": float(hr.total_usd or 0),
+                "billing_codes": [hr.billing_code] if hr.billing_code else [],
+                "_is_hour": True,
+                "_hours": hr.hours,
+                "_rate": hr.rate_usd,
+            })
+
+    # Ordena todas as linhas por data
+    lines.sort(key=lambda l: l.get("launch_date") or "")
 
     # total geral da invoice (soma de todos os grupos)
     total_invoice = sum(l["total_usd"] for l in lines)
@@ -4694,8 +4738,9 @@ def export_invoice():
     # Com codigos: Date(20) Map(28) Device(42) Tipo(13) Incl(10) Splices(13) Dev$(22) Total(22) Codes(20) = 190
     has_billing = any(l.get("billing_codes") for l in lines)
     if has_billing:
-        col_widths = [20, 18, 28, 38, 13, 10, 13, 22, 28]
-        headers   = ["Date", "Codes", "Map", "Device", "Tipo", "Incl.", "Splices", "Dev $", "Total"]
+        # Date(20)+Codes(26)+Map(18)+Device(34)+Tipo(14)+Incl(9)+Splices(12)+Dev$(24)+Total(33)=190
+        col_widths = [20, 26, 18, 34, 14, 9, 12, 24, 33]
+        headers   = ["Date", "Codes", "Map", "Device", "Tipo", "Incl.", "Spl.", "Dev $", "Total"]
     else:
         col_widths = [22, 30, 50, 14, 10, 14, 24, 26]
         headers   = ["Date", "Map", "Device", "Tipo", "Incl.", "Splices", "Dev $", "Total"]
@@ -4716,15 +4761,26 @@ def export_invoice():
         row = [(line.get("launch_date") or "-")]
         if has_billing:
             row.append(_pdf_safe(", ".join(line.get("billing_codes") or [])))
-        row += [
-            _pdf_safe(line["map"] or "-"),
-            _pdf_safe(line["device"] or "-"),
-            _pdf_safe(line["role"] or "-"),
-            str(line["included"] if line["included"] is not None else "-"),
-            str(line["splices"]),
-            f"${line['price_device_usd']:.2f}",
-            f"${line['total_usd']:.2f}",
-        ]
+        if line.get("_is_hour"):
+            row += [
+                _pdf_safe(line["map"] or "-"),
+                _pdf_safe(line["device"] or "-"),
+                "HORAS",
+                "-",
+                f"{line['_hours']}h",
+                f"${line['_rate']:.2f}/h",
+                f"${line['total_usd']:.2f}",
+            ]
+        else:
+            row += [
+                _pdf_safe(line["map"] or "-"),
+                _pdf_safe(line["device"] or "-"),
+                _pdf_safe(line["role"] or "-"),
+                str(line["included"] if line["included"] is not None else "-"),
+                str(line["splices"]),
+                f"${line['price_device_usd']:.2f}",
+                f"${line['total_usd']:.2f}",
+            ]
 
         # quebra de página manual antes de desenhar a linha
         if pdf.get_y() + line_h > pdf.page_break_trigger:
