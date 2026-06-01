@@ -268,6 +268,8 @@
               <div class="d-flex align-items-center gap-2">
                 <strong>${{ '%.2f'|format(t.price_per_splice_usd) }}/fusão</strong>
                 {% if t.code_splice %}<span class="badge bg-info text-dark ms-1">{{ t.code_splice }}</span>{% endif %}
+                <button type="button" class="btn btn-sm btn-outline-secondary"
+                  onclick="openTierEdit({{ t.id }}, {{ t.min_splices }}, {{ t.max_splices or 'null' }}, {{ t.price_per_splice_usd }}, '{{ t.code_splice or '' }}')">✎</button>
                 <a href="{{ url_for('settings_tier_delete', tid=t.id, next=url_for('settings_project_detail', pid=project.id)) }}"
                    class="btn btn-sm btn-outline-danger" onclick="return confirm('Remover faixa?')">✕</a>
               </div>
