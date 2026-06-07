@@ -7355,6 +7355,7 @@ def auto_photo_launch(map_id):
 
         # 1. Chama Claude para extrair dados da foto
         parsed, ai_error = extract_timestamp_fields_with_ai(raw_bytes)
+        print(f"[AUTO-PHOTO] parsed={parsed} ai_error={ai_error}", flush=True)
         if parsed is None:
             results.append({"file": fname, "ok": False, "error": ai_error or "Claude não conseguiu ler a foto."})
             continue
@@ -7367,17 +7368,32 @@ def auto_photo_launch(map_id):
         if map_role == "PONTA":
             ft_out = None
 
-        # 2. Localiza o Record no banco
+        print(f"[AUTO-PHOTO] device={device_name} splices={splices_val} role={map_role} map={map_name}", flush=True)
+
+        # 2. Localiza o Record no banco — busca flexível (case-insensitive, strip)
         rec = Record.query.filter(
             Record.map == map_name,
-            Record.device == device_name,
             Record.company == company,
+            db.func.lower(db.func.trim(Record.device)) == device_name.strip().lower(),
         ).order_by(Record.id.asc()).first()
 
         if not rec:
+            # Fallback: busca por device contendo o nome lido
+            rec = Record.query.filter(
+                Record.map == map_name,
+                Record.company == company,
+                db.func.lower(Record.device).contains(device_name.strip().lower()),
+            ).order_by(Record.id.asc()).first()
+
+        if not rec:
+            # Lista devices disponíveis para debug
+            available = [r.device for r in Record.query.filter(
+                Record.map == map_name, Record.company == company
+            ).limit(10).all()]
+            print(f"[AUTO-PHOTO] Devices disponíveis no mapa: {available}", flush=True)
             results.append({
                 "file": fname, "ok": False,
-                "error": f"Dispositivo '{device_name}' não encontrado no mapa '{map_name}'."
+                "error": f"Dispositivo '{device_name}' não encontrado no mapa '{map_name}'. Disponíveis: {available[:5]}"
             })
             continue
 
