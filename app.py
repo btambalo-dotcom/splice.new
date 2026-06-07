@@ -1641,23 +1641,37 @@ def extract_timestamp_fields_with_ai(image_bytes: bytes):
             img_b64 = base64.b64encode(image_bytes).decode("ascii")
 
             prompt = (
-                "Você é um especialista em leitura de fotos de splice box de fibra óptica tiradas com o app Timemark.\n\n"
-                "Analise a imagem e extraia as seguintes informações:\n\n"
-                "1. MAP: nome do mapa (ex: 'Gallipolis', '6262E') - geralmente no carimbo Timemark\n"
-                "2. DEVICE: nome do dispositivo (ex: 'FT102', 'FT62') - escrito na splice box ou no carimbo\n"
-                "3. SPLICES: quantidade de fusões visíveis na splice tray\n"
-                "4. TIPO: determine MEIO ou PONTA:\n"
-                "   - PONTA = dispositivo tem apenas cabo de ENTRADA (IN). Só um lado alimentado.\n"
-                "   - MEIO = dispositivo tem cabo de ENTRADA (IN) E cabo de SAÍDA (OUT). Dois lados.\n"
-                "5. FT_IN: número de feet do cabo de entrada, escrito na splice box (ex: '48224')\n"
-                "6. FT_OUT: número de feet do cabo de saída, escrito na splice box (ex: '48224'). null se PONTA.\n"
-                "7. GPS: coordenadas se visíveis no carimbo Timemark (ex: '38.811911,-82.216242')\n"
-                "8. DATETIME: data e hora do carimbo Timemark (ex: '2026-06-05 20:45')\n\n"
-                "IMPORTANTE: Na foto atual, você pode ver escrito 'IN 48224' e 'OUT 48224' na splice box - "
-                "esses são os valores de ft_in e ft_out.\n\n"
-                "Retorne APENAS um JSON válido, sem explicações, sem markdown:\n"
-                "{\"map_name\":\"...\",\"device_name\":\"...\",\"splices\":0,\"map_role\":\"PONTA\","
-                "\"ft_in\":\"48224\",\"ft_out\":null,\"gps\":null,\"photo_datetime\":null}"
+                "Você é um especialista em leitura de fotos de splice box de fibra óptica (field terminals FTTX).\n"
+                "As fotos são tiradas com o app Timemark que adiciona carimbo com nome, data, endereço e GPS.\n\n"
+                "=== REGRAS DE LEITURA ===\n\n"
+                "DEVICE (nome do dispositivo):\n"
+                "  - Leia da ETIQUETA BRANCA dentro da splice box (ex: FT33, FT102, FT62)\n"
+                "  - Confirmação: o mesmo nome aparece no carimbo Timemark embaixo da foto\n"
+                "  - Use SEMPRE a etiqueta dentro da box como fonte primária\n\n"
+                "SPLICES (número de fusões):\n"
+                "  - NÃO conte fibras físicas nem conectores\n"
+                "  - Leia a ETIQUETA NUMERADA na splice tray (ex: #19-20, #1-12, #1-24)\n"
+                "  - Calcule: fim - início + 1 (ex: #19-20 = 20-19+1 = 2 fusões)\n"
+                "  - Se houver múltiplas etiquetas, some todas (ex: #1-12 e #13-24 = 24 fusões)\n"
+                "  - Se não encontrar etiqueta numerada, conte os splices visíveis na tray\n\n"
+                "MAP_ROLE (tipo do dispositivo):\n"
+                "  - PONTA = só tem cabo(s) de ENTRADA. Terminal de rede, cliente final.\n"
+                "  - MEIO = tem cabo de ENTRADA e cabo de SAÍDA. Passagem/repetidor de rota.\n"
+                "  - Observe os cabos externos entrando na caixa para determinar\n\n"
+                "FT_IN / FT_OUT:\n"
+                "  - Números escritos na splice box ou nos cabos (ex: 'IN 48224', 'OUT 48224')\n"
+                "  - null se não visível. ft_out sempre null se PONTA.\n\n"
+                "GPS:\n"
+                "  - Leia do carimbo Timemark: latitude e longitude (ex: '38.823849,-82.229083')\n"
+                "  - Converta graus com símbolo N/W para decimal: W é negativo\n\n"
+                "DATETIME:\n"
+                "  - Data e hora do carimbo Timemark (ex: '2026-06-06 13:13')\n\n"
+                "=== EXEMPLO desta foto ===\n"
+                "Etiqueta dentro da box: FT33, etiqueta tray: #19-20 → splices=2\n"
+                "Carimbo: FT33, 38.823849°N 82.229083°W → gps='38.823849,-82.229083'\n\n"
+                "Retorne APENAS JSON válido, sem explicações, sem markdown:\n"
+                "{\"device_name\":\"FT33\",\"splices\":2,\"map_role\":\"PONTA\","
+                "\"ft_in\":null,\"ft_out\":null,\"gps\":\"38.823849,-82.229083\",\"photo_datetime\":\"2026-06-06 13:13\"}"
             )
 
             payload = {
@@ -1767,8 +1781,9 @@ def extract_timestamp_fields_with_ai(image_bytes: bytes):
         "photo_datetime": photo_datetime,
     }
 
-    if not (result["map_name"] and result["device_name"] and result["splices"] is not None and result["map_role"]):
-        return None, "Claude não retornou todos os campos obrigatórios (map_name, device_name, splices, map_role)."
+    # map_name não é obrigatório — o GPS localiza o mapa automaticamente
+    if not (result["device_name"] and result["splices"] is not None and result["map_role"]):
+        return None, "Claude não retornou os campos obrigatórios (device_name, splices, map_role)."
 
     return result, None
 
@@ -7461,6 +7476,246 @@ def auto_photo_launch(map_id):
             "ft_in": ft_in,
             "ft_out": ft_out,
             "record_id": rec.id,
+        })
+
+    all_ok = all(r["ok"] for r in results)
+    return jsonify({"ok": all_ok, "results": results})
+
+
+# ─────────────────────────────────────────────────────────────
+#  FOTO AUTOMÁTICO GLOBAL — sem precisar abrir mapa
+# ─────────────────────────────────────────────────────────────
+
+@app.route("/auto-photo")
+@login_required
+def auto_photo_page():
+    """Tela dedicada de lançamento automático por foto (acessível da navbar)."""
+    is_owner = bool(getattr(current_user, "is_company_owner", False))
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if is_owner and not is_admin:
+        flash("Dono de empresa só pode visualizar.", "danger")
+        return redirect(url_for("index"))
+    return render_template("auto_photo.html")
+
+
+@app.route("/api/auto-photo-global-launch", methods=["POST"])
+@login_required
+def auto_photo_global_launch():
+    """Recebe fotos Timemark e lança produção automaticamente.
+
+    Fluxo por foto:
+      1. Claude lê: device_name, splices, map_role, ft_in, ft_out, gps
+      2. GPS da foto é comparado com latitude/longitude de todos os Records
+         para encontrar o dispositivo mais próximo (match por nome + proximidade)
+      3. Se o nome do dispositivo bater com algum Record perto do GPS → lança
+      4. Fallback: busca só pelo nome do dispositivo sem filtro GPS
+    """
+    is_owner = bool(getattr(current_user, "is_company_owner", False))
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if is_owner and not is_admin:
+        return jsonify({"ok": False, "error": "Sem permissão."}), 403
+
+    photos = [p for p in request.files.getlist("photos") if getattr(p, "filename", None)]
+    if not photos:
+        return jsonify({"ok": False, "error": "Nenhuma foto enviada."}), 400
+
+    splicer_name = getattr(current_user, "splicer_name", None) or current_user.username
+    user_company = getattr(current_user, "company_name", None) or getattr(current_user, "default_company", None)
+
+    def haversine_m(lat1, lon1, lat2, lon2):
+        """Distância em metros entre dois pontos GPS."""
+        import math
+        R = 6_371_000
+        phi1, phi2 = math.radians(lat1), math.radians(lat2)
+        dphi = math.radians(lat2 - lat1)
+        dlam = math.radians(lon2 - lon1)
+        a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlam/2)**2
+        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    results = []
+
+    for photo_file in photos:
+        fname = photo_file.filename or "foto.jpg"
+        try:
+            raw_bytes = photo_file.read()
+        except Exception as e:
+            results.append({"file": fname, "ok": False, "error": f"Erro ao ler arquivo: {e}"})
+            continue
+
+        # 1. Claude lê a foto
+        parsed, ai_error = extract_timestamp_fields_with_ai(raw_bytes)
+        if parsed is None:
+            results.append({"file": fname, "ok": False, "error": ai_error or "Claude não conseguiu ler a foto."})
+            continue
+
+        device_name  = parsed["device_name"]
+        splices_val  = parsed["splices"]
+        map_role     = parsed["map_role"]
+        ft_in        = (parsed.get("ft_in") or "").strip() or None
+        ft_out       = (parsed.get("ft_out") or "").strip() or None
+        gps_str      = (parsed.get("gps") or "").strip()
+        if map_role == "PONTA":
+            ft_out = None
+
+        # 2. Localiza o Record pelo nome + GPS
+        rec = None
+        gps_distance_m = None
+        photo_lat = None
+        photo_lon = None
+
+        # Parseia GPS da foto se disponível
+        if gps_str:
+            try:
+                # Suporta: "38.823849,-82.229083" ou "38.823849°N, 82.229083°W"
+                gps_clean = gps_str.replace("°N","").replace("°S","-").replace("°W",",-").replace("°E",",").replace(" ","")
+                parts = gps_clean.split(",")
+                photo_lat = float(parts[0])
+                photo_lon = float(parts[1])
+            except Exception:
+                photo_lat = None
+                photo_lon = None
+
+        # Busca candidatos pelo nome do dispositivo
+        q = Record.query.filter(Record.device == device_name)
+        if user_company:
+            q = q.filter(Record.company == user_company)
+        candidates = q.all()
+
+        if candidates and photo_lat is not None:
+            # Calcula distância para cada candidato com coordenadas
+            with_coords = [
+                (r, haversine_m(photo_lat, photo_lon, r.latitude, r.longitude))
+                for r in candidates
+                if r.latitude is not None and r.longitude is not None
+            ]
+            if with_coords:
+                with_coords.sort(key=lambda x: x[1])
+                closest_rec, closest_dist = with_coords[0]
+                rec = closest_rec
+                gps_distance_m = round(closest_dist)
+            else:
+                rec = candidates[0]
+        elif candidates:
+            rec = candidates[0]
+
+        # Fallback: se não achou pelo nome, tenta achar o device mais próximo pelo GPS puro
+        if not rec and photo_lat is not None:
+            all_recs = Record.query.filter(
+                Record.latitude.isnot(None),
+                Record.longitude.isnot(None),
+            )
+            if user_company:
+                all_recs = all_recs.filter(Record.company == user_company)
+            all_recs = all_recs.all()
+
+            if all_recs:
+                with_dist = [
+                    (r, haversine_m(photo_lat, photo_lon, r.latitude, r.longitude))
+                    for r in all_recs
+                ]
+                with_dist.sort(key=lambda x: x[1])
+                closest_rec, closest_dist = with_dist[0]
+                # Aceita fallback GPS puro só se estiver a menos de 50 metros
+                if closest_dist <= 50:
+                    rec = closest_rec
+                    gps_distance_m = round(closest_dist)
+
+        if not rec:
+            results.append({
+                "file": fname, "ok": False,
+                "error": f"Dispositivo '{device_name}' não encontrado."
+                         + (f" GPS: {gps_str}" if gps_str else " (sem GPS na foto)")
+            })
+            continue
+
+        # 3. Calcula preços e billing codes
+        company     = rec.company
+        project_id  = rec.project_id
+        map_name    = rec.map
+        type_val    = (rec.type or "OTE").strip() or "OTE"
+        device_for_price = type_val or device_name
+
+        map_obj = CompanyMap.query.filter(
+            CompanyMap.company == company,
+            CompanyMap.name == map_name,
+            CompanyMap.project_id == project_id,
+        ).order_by(CompanyMap.id.asc()).first()
+
+        included_override, included_applied, map_cfg = resolve_included_override(
+            company=company, project_id=project_id,
+            map_obj=map_obj, map_val=map_name, map_role=map_role,
+        )
+
+        is_rib, _ = device_is_ribbon(device_for_price, company, project_id)
+        ribbon_count = None
+
+        price_splices, price_device, total = compute_prices(
+            splices=splices_val, device_name=device_for_price,
+            company=company, project_id=project_id,
+            included_override=included_override, map_role=map_role, ribbon_count=ribbon_count,
+        )
+        _bcodes = compute_billing_codes(
+            splices_val, device_for_price, company, project_id,
+            map_role=map_role, ribbon_count=ribbon_count,
+        )
+
+        # 4. Atualiza Record
+        rec.splicer                  = splicer_name
+        rec.map_role                 = map_role
+        rec.splices                  = 0 if is_rib else splices_val
+        rec.ribbon_count             = ribbon_count if is_rib else None
+        rec.billing_codes_json       = json.dumps(_bcodes, ensure_ascii=False) if _bcodes else None
+        rec.price_splices_usd        = price_splices
+        rec.price_device_usd         = price_device
+        rec.total_usd                = total
+        rec.included_splices_applied = included_applied
+        rec.ft_in                    = ft_in
+        rec.ft_out                   = ft_out
+
+        # 5. Salva foto
+        try:
+            opt_bytes, opt_ct = optimize_upload_bytes(raw_bytes, photo_file.content_type or "image/jpeg")
+            thumb_b, thumb_ct = None, None
+            try:
+                from PIL import Image as _PILImage
+                import io as _io
+                img_pil = _PILImage.open(_io.BytesIO(opt_bytes))
+                img_pil.thumbnail((480, 480))
+                buf = _io.BytesIO()
+                img_pil.save(buf, format="JPEG", quality=65)
+                thumb_b  = buf.getvalue()
+                thumb_ct = "image/jpeg"
+            except Exception:
+                pass
+
+            photo_rec = RecordPhoto(
+                record_id=rec.id, filename=fname,
+                data=opt_bytes, content_type=opt_ct,
+                thumb_data=thumb_b, thumb_content_type=thumb_ct,
+            )
+            db.session.add(photo_rec)
+            db.session.flush()
+
+            if os.environ.get("R2_BUCKET"):
+                r2_key   = r2_key_for_record_photo(rec.id, fname)
+                thumb_key = r2_key.rsplit(".", 1)[0] + "_thumb.jpg" if thumb_b else None
+                enqueue_r2_upload(photo_rec.id, r2_key, opt_bytes, opt_ct, thumb_key, thumb_b, thumb_ct)
+        except Exception as e:
+            print(f"[AUTO-PHOTO-GLOBAL] Erro ao salvar foto: {e}")
+
+        db.session.commit()
+
+        results.append({
+            "file":           fname,
+            "ok":             True,
+            "device":         device_name,
+            "map_name":       map_name,
+            "map_role":       map_role,
+            "splices":        splices_val,
+            "ft_in":          ft_in,
+            "ft_out":         ft_out,
+            "gps_distance_m": gps_distance_m,
+            "record_id":      rec.id,
         })
 
     all_ok = all(r["ok"] for r in results)

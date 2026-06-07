@@ -1,0 +1,179 @@
+{% extends 'base.html' %}
+{% block title %}📷 Foto Automático · SPLICER{% endblock %}
+{% block content %}
+
+<div class="d-flex align-items-center gap-3 mb-4">
+  <h3 class="mb-0">📷 Foto Automático</h3>
+  <span class="badge bg-success">IA</span>
+</div>
+
+<div class="row g-4">
+  <!-- Coluna esquerda: upload -->
+  <div class="col-lg-5">
+    <div class="card bg-dark border-secondary p-4">
+      <h5 class="mb-3 text-light">Como funciona</h5>
+      <ol class="text-muted small mb-4">
+        <li class="mb-1">Tire a foto da splice box com o <strong class="text-light">Timemark</strong></li>
+        <li class="mb-1">Suba a foto aqui — pode ser várias de uma vez</li>
+        <li class="mb-1">O Claude lê o dispositivo, fusões, feet IN/OUT e MEIO/PONTA</li>
+        <li class="mb-1">O GPS da foto localiza o mapa correto automaticamente</li>
+        <li>O lançamento é feito sozinho ✅</li>
+      </ol>
+
+      <label class="form-label fw-semibold text-light">Selecione as fotos</label>
+      <input type="file" id="photo-input" class="form-control bg-secondary text-light border-0 mb-3"
+             accept="image/*" multiple>
+
+      <!-- Preview miniaturas -->
+      <div id="preview-area" class="d-flex flex-wrap gap-2 mb-3"></div>
+
+      <button id="btn-launch" class="btn btn-success w-100 py-2 fw-semibold" disabled>
+        ⬆ Lançar automaticamente
+      </button>
+    </div>
+  </div>
+
+  <!-- Coluna direita: progresso e resultados -->
+  <div class="col-lg-7">
+    <!-- Progresso -->
+    <div id="progress-area" class="card bg-dark border-secondary p-4 mb-4 d-none">
+      <div class="d-flex align-items-center gap-3 mb-3">
+        <div class="spinner-border text-success" role="status"></div>
+        <span id="progress-status" class="text-light fw-semibold">Enviando fotos para o Claude...</span>
+      </div>
+      <div class="progress" style="height: 8px;">
+        <div id="progress-bar" class="progress-bar bg-success progress-bar-striped progress-bar-animated"
+             style="width: 0%"></div>
+      </div>
+    </div>
+
+    <!-- Resultados -->
+    <div id="results-area"></div>
+  </div>
+</div>
+
+<script>
+const AUTO_LAUNCH_URL = "{{ url_for('auto_photo_global_launch') }}";
+
+const input     = document.getElementById('photo-input');
+const btnLaunch = document.getElementById('btn-launch');
+const preview   = document.getElementById('preview-area');
+const progress  = document.getElementById('progress-area');
+const pBar      = document.getElementById('progress-bar');
+const pStatus   = document.getElementById('progress-status');
+const results   = document.getElementById('results-area');
+
+// Preview ao selecionar fotos
+input.addEventListener('change', () => {
+  preview.innerHTML = '';
+  const files = Array.from(input.files);
+  btnLaunch.disabled = files.length === 0;
+
+  files.forEach(file => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:relative;width:80px;height:80px';
+
+    const img = document.createElement('img');
+    img.src = URL.createObjectURL(file);
+    img.style.cssText = 'width:80px;height:80px;object-fit:cover;border-radius:8px;border:2px solid #444';
+
+    const label = document.createElement('div');
+    label.textContent = file.name.length > 10 ? file.name.slice(0,10)+'…' : file.name;
+    label.style.cssText = 'font-size:10px;color:#aaa;text-align:center;margin-top:2px;word-break:break-all';
+
+    wrap.appendChild(img);
+    preview.appendChild(wrap);
+    preview.insertAdjacentElement('beforeend', label);
+  });
+});
+
+// Envio
+btnLaunch.addEventListener('click', async () => {
+  const files = Array.from(input.files);
+  if (!files.length) return;
+
+  btnLaunch.disabled = true;
+  results.innerHTML = '';
+  progress.classList.remove('d-none');
+  pBar.style.width = '15%';
+  pStatus.textContent = `Enviando ${files.length} foto(s) para o Claude...`;
+
+  const fd = new FormData();
+  files.forEach(f => fd.append('photos', f));
+
+  try {
+    pBar.style.width = '40%';
+    const resp = await fetch(AUTO_LAUNCH_URL, { method: 'POST', body: fd });
+    pBar.style.width = '85%';
+    pStatus.textContent = 'Processando resultados...';
+
+    const data = await resp.json();
+    pBar.style.width = '100%';
+    pStatus.textContent = 'Concluído!';
+
+    renderResults(data.results || []);
+  } catch (e) {
+    pStatus.textContent = 'Erro ao enviar.';
+    results.innerHTML = `<div class="alert alert-danger">Erro de conexão: ${e}</div>`;
+  } finally {
+    btnLaunch.disabled = false;
+  }
+});
+
+function renderResults(items) {
+  if (!items.length) {
+    results.innerHTML = '<div class="alert alert-warning">Nenhum resultado recebido.</div>';
+    return;
+  }
+
+  const ok_count    = items.filter(r => r.ok).length;
+  const fail_count  = items.length - ok_count;
+
+  let html = `
+    <div class="d-flex gap-3 mb-3">
+      <div class="card bg-dark border-success p-3 flex-fill text-center">
+        <div class="fs-2 text-success fw-bold">${ok_count}</div>
+        <div class="text-muted small">Lançados</div>
+      </div>
+      <div class="card bg-dark border-${fail_count > 0 ? 'danger' : 'secondary'} p-3 flex-fill text-center">
+        <div class="fs-2 ${fail_count > 0 ? 'text-danger' : 'text-muted'} fw-bold">${fail_count}</div>
+        <div class="text-muted small">Erros</div>
+      </div>
+    </div>
+    <div class="list-group">`;
+
+  items.forEach(r => {
+    if (r.ok) {
+      html += `
+        <div class="list-group-item bg-dark border-success mb-2" style="border-radius:8px">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <span class="text-success fw-bold">✅ ${r.device}</span>
+              <span class="badge bg-${r.map_role === 'MEIO' ? 'primary' : 'warning text-dark'} ms-2">${r.map_role}</span>
+            </div>
+            <small class="text-muted">${r.file}</small>
+          </div>
+          <div class="mt-1 small text-muted">
+            🗺 <strong class="text-light">${r.map_name}</strong>
+            &nbsp;·&nbsp; 🔗 ${r.splices} fusões
+            ${r.ft_in ? `&nbsp;·&nbsp; IN: <strong class="text-info">${r.ft_in}</strong>` : ''}
+            ${r.ft_out ? `&nbsp;·&nbsp; OUT: <strong class="text-info">${r.ft_out}</strong>` : ''}
+            ${r.gps_distance_m != null ? `&nbsp;·&nbsp; 📍 ${r.gps_distance_m}m do GPS` : ''}
+          </div>
+        </div>`;
+    } else {
+      html += `
+        <div class="list-group-item bg-dark border-danger mb-2" style="border-radius:8px">
+          <div class="d-flex justify-content-between align-items-start">
+            <span class="text-danger fw-bold">❌ ${r.file}</span>
+          </div>
+          <div class="small text-danger mt-1">${r.error}</div>
+        </div>`;
+    }
+  });
+
+  html += '</div>';
+  results.innerHTML = html;
+}
+</script>
+{% endblock %}
