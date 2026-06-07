@@ -1583,119 +1583,194 @@ def parse_timestamp_block_from_text(text: str):
 
 
 def extract_timestamp_fields_with_ai(image_bytes: bytes):
-    """Usa um modelo de IA (via API) para ler MAP / DEVICE / FUSION / T de uma foto.
+    """Usa Claude (Anthropic) para ler dados de uma foto Timemark de splice box.
 
-    Retorna (dict, error_message). Se der certo, error_message = None e o dict contém
-    as chaves: map_name, device_name, splices (int), map_role ('MEIO' ou 'PONTA').
+    Retorna (dict, error_message). Se der certo, error_message = None e o dict contém:
+    map_name, device_name, splices (int), map_role ('MEIO' ou 'PONTA'),
+    ft_in (str|None), ft_out (str|None), gps (str|None), photo_datetime (str|None).
+
+    MEIO  = tem IN e OUT (enclosure do meio da rota)
+    PONTA = tem só IN (enclosure terminal / ponta da rota)
     """
     if not image_bytes:
         return None, "Imagem vazia"
 
-    api_key = os.environ.get("OPENAI_API_KEY")
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        return None, "OPENAI_API_KEY não configurada no servidor."
-
-    # Modelo default pode ser alterado via variável de ambiente
-    model = os.environ.get("OPENAI_VISION_MODEL", "gpt-4o-mini")
-
-    try:
-        # Prepara imagem em base64 para enviar inline
-        img_b64 = base64.b64encode(image_bytes).decode("ascii")
-
-        prompt = (
-            "Você é um assistente que lê fotos do app de câmera com carimbo de texto. "
-            "A imagem sempre terá um bloco com 4 linhas com esse formato, em português ou inglês:\n\n"
-            "MAP: <nome_do_mapa>\n"
-            "DEVICE: <nome_do_dispositivo>\n"
-            "FUSION: <numero_de_fusoes>\n"
-            "T: P ou M (PONTA ou MEIO).\n\n"
-            "Sua tarefa é APENAS devolver um JSON válido, SEM explicações, com este formato exato:\n\n"
-            "{\"map_name\": \"...\", \"device_name\": \"...\", \"splices\": 0, \"map_role\": \"PONTA\"}\n\n"
-            "map_role deve ser 'PONTA' se a letra for P, ou 'MEIO' se a letra for M. "
-            "Se não conseguir ler algum campo, use null nesse campo."
-        )
-
-        payload = {
-            "model": model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{img_b64}",
-                            },
-                        },
-                    ],
-                }
-            ],
-            "max_tokens": 256,
-            "temperature": 0.0,
-        }
-
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-
-        resp = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers=headers,
-            data=json.dumps(payload),
-            timeout=30,
-        )
-        if resp.status_code != 200:
-            return None, f"Erro HTTP {resp.status_code} ao chamar a IA."
-
-        data = resp.json()
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-        if not content:
-            return None, "Resposta vazia da IA."
-
-        # Remove possíveis marcas de bloco de código ```json ... ```
-        if content.startswith("```"):
-            content = content.strip("`\n ")
-            if content.lower().startswith("json"):
-                content = content[4:].lstrip()
-
+        # Fallback: tenta OpenAI se configurado
+        api_key_oai = os.environ.get("OPENAI_API_KEY")
+        if not api_key_oai:
+            return None, "ANTHROPIC_API_KEY não configurada no servidor."
+        # --- Fallback OpenAI (legado) ---
+        model = os.environ.get("OPENAI_VISION_MODEL", "gpt-4o-mini")
         try:
+            img_b64 = base64.b64encode(image_bytes).decode("ascii")
+            prompt = (
+                "Você é um assistente que lê fotos de splice box (fibra óptica) com carimbo Timemark.\n"
+                "Retorne APENAS JSON válido, sem explicações:\n"
+                "{\"map_name\":\"...\",\"device_name\":\"...\",\"splices\":0,\"map_role\":\"PONTA\","
+                "\"ft_in\":null,\"ft_out\":null,\"gps\":null,\"photo_datetime\":null}\n"
+                "map_role: 'PONTA' se só tiver IN, 'MEIO' se tiver IN e OUT.\n"
+                "ft_in/ft_out: números de feet visíveis na splice tray (ex: '48224'). null se não visível.\n"
+                "gps: 'lat,lon' se visível no carimbo. photo_datetime: data/hora do carimbo."
+            )
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+                ]}],
+                "max_tokens": 400, "temperature": 0.0,
+            }
+            headers = {"Authorization": f"Bearer {api_key_oai}", "Content-Type": "application/json"}
+            resp = requests.post("https://api.openai.com/v1/chat/completions", headers=headers,
+                                 data=json.dumps(payload), timeout=30)
+            if resp.status_code != 200:
+                return None, f"Erro HTTP {resp.status_code} ao chamar OpenAI."
+            content = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            if content.startswith("```"):
+                content = content.strip("`\n ")
+                if content.lower().startswith("json"):
+                    content = content[4:].lstrip()
             parsed = json.loads(content)
         except Exception as e:
-            return None, f"Não consegui interpretar o JSON da IA: {e}"
-
-        # Normaliza o resultado em nosso formato padrão
-        map_name = (parsed.get("map_name") or "").strip() or None
-        device_name = (parsed.get("device_name") or "").strip() or None
-
-        splices_val = parsed.get("splices")
+            return None, f"Erro fallback OpenAI: {e}"
+    else:
+        # --- Claude (Anthropic) ---
         try:
-            splices_val = int(splices_val) if splices_val is not None else None
-        except Exception:
-            splices_val = None
+            img_b64 = base64.b64encode(image_bytes).decode("ascii")
 
-        role_raw = (parsed.get("map_role") or "").strip().upper()
-        if role_raw in ("PONTA", "P"):
-            map_role = "PONTA"
-        elif role_raw in ("MEIO", "M"):
-            map_role = "MEIO"
-        else:
-            map_role = None
+            prompt = (
+                "Você é um especialista em leitura de fotos de splice box de fibra óptica tiradas com o app Timemark.\n\n"
+                "Analise a imagem e extraia as seguintes informações:\n\n"
+                "1. MAP: nome do mapa (ex: 'Gallipolis', '6262E') - geralmente no carimbo Timemark\n"
+                "2. DEVICE: nome do dispositivo (ex: 'FT102', 'FT62') - escrito na splice box ou no carimbo\n"
+                "3. SPLICES: quantidade de fusões visíveis na splice tray\n"
+                "4. TIPO: determine MEIO ou PONTA:\n"
+                "   - PONTA = dispositivo tem apenas cabo de ENTRADA (IN). Só um lado alimentado.\n"
+                "   - MEIO = dispositivo tem cabo de ENTRADA (IN) E cabo de SAÍDA (OUT). Dois lados.\n"
+                "5. FT_IN: número de feet do cabo de entrada, escrito na splice box (ex: '48224')\n"
+                "6. FT_OUT: número de feet do cabo de saída, escrito na splice box (ex: '48224'). null se PONTA.\n"
+                "7. GPS: coordenadas se visíveis no carimbo Timemark (ex: '38.811911,-82.216242')\n"
+                "8. DATETIME: data e hora do carimbo Timemark (ex: '2026-06-05 20:45')\n\n"
+                "IMPORTANTE: Na foto atual, você pode ver escrito 'IN 48224' e 'OUT 48224' na splice box - "
+                "esses são os valores de ft_in e ft_out.\n\n"
+                "Retorne APENAS um JSON válido, sem explicações, sem markdown:\n"
+                "{\"map_name\":\"...\",\"device_name\":\"...\",\"splices\":0,\"map_role\":\"PONTA\","
+                "\"ft_in\":\"48224\",\"ft_out\":null,\"gps\":null,\"photo_datetime\":null}"
+            )
 
-        result = {
-            "map_name": map_name,
-            "device_name": device_name,
-            "splices": splices_val,
-            "map_role": map_role,
-        }
+            payload = {
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 500,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/jpeg",
+                                "data": img_b64,
+                            },
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                }],
+            }
 
-        if not (result["map_name"] and result["device_name"] and result["splices"] is not None and result["map_role"]):
-            return None, "IA não retornou todos os campos necessários."
+            headers = {
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            }
 
-        return result, None
-    except Exception as e:
-        return None, f"Erro ao processar IA: {e}"
+            resp = requests.post(
+                "https://api.anthropic.com/v1/messages",
+                headers=headers,
+                data=json.dumps(payload),
+                timeout=40,
+            )
+            if resp.status_code != 200:
+                return None, f"Erro HTTP {resp.status_code} ao chamar Claude."
+
+            data = resp.json()
+            content = ""
+            for block in data.get("content", []):
+                if block.get("type") == "text":
+                    content = block.get("text", "").strip()
+                    break
+
+            if not content:
+                return None, "Resposta vazia do Claude."
+
+            # Remove possíveis marcas de bloco de código
+            if content.startswith("```"):
+                content = content.strip("`\n ")
+                if content.lower().startswith("json"):
+                    content = content[4:].lstrip()
+
+            try:
+                parsed = json.loads(content)
+            except Exception as e:
+                return None, f"Não consegui interpretar o JSON do Claude: {e}"
+
+        except Exception as e:
+            return None, f"Erro ao chamar Claude: {e}"
+
+    # --- Normaliza resultado (comum OpenAI e Claude) ---
+    map_name = (parsed.get("map_name") or "").strip() or None
+    device_name = (parsed.get("device_name") or "").strip() or None
+
+    splices_val = parsed.get("splices")
+    try:
+        splices_val = int(splices_val) if splices_val is not None else None
+    except Exception:
+        splices_val = None
+
+    role_raw = (parsed.get("map_role") or "").strip().upper()
+    if role_raw in ("PONTA", "P"):
+        map_role = "PONTA"
+    elif role_raw in ("MEIO", "M"):
+        map_role = "MEIO"
+    else:
+        # Auto-detecta: se ft_out existe → MEIO, senão → PONTA
+        ft_out_raw = (str(parsed.get("ft_out") or "")).strip()
+        map_role = "MEIO" if ft_out_raw and ft_out_raw.lower() != "null" else "PONTA"
+
+    ft_in = (str(parsed.get("ft_in") or "")).strip() or None
+    if ft_in and ft_in.lower() == "null":
+        ft_in = None
+
+    ft_out = (str(parsed.get("ft_out") or "")).strip() or None
+    if ft_out and ft_out.lower() == "null":
+        ft_out = None
+    if map_role == "PONTA":
+        ft_out = None
+
+    gps = (str(parsed.get("gps") or "")).strip() or None
+    if gps and gps.lower() == "null":
+        gps = None
+
+    photo_datetime = (str(parsed.get("photo_datetime") or "")).strip() or None
+    if photo_datetime and photo_datetime.lower() == "null":
+        photo_datetime = None
+
+    result = {
+        "map_name": map_name,
+        "device_name": device_name,
+        "splices": splices_val,
+        "map_role": map_role,
+        "ft_in": ft_in,
+        "ft_out": ft_out,
+        "gps": gps,
+        "photo_datetime": photo_datetime,
+    }
+
+    if not (result["map_name"] and result["device_name"] and result["splices"] is not None and result["map_role"]):
+        return None, "Claude não retornou todos os campos obrigatórios (map_name, device_name, splices, map_role)."
+
+    return result, None
 
 
 def _best_tier_for(count: int, company: str | None, project_id: int | None = None):
@@ -2855,8 +2930,13 @@ def photo_entry():
         device_name = parsed["device_name"]
         splices_val = parsed["splices"]
         map_role = parsed["map_role"]  # 'MEIO' ou 'PONTA'
-        ft_in = (request.form.get("ft_in") or "").strip()
-        ft_out = (request.form.get("ft_out") or "").strip()
+        # ft_in/ft_out: prioriza leitura do Claude, aceita override manual do form
+        ft_in_ai = (parsed.get("ft_in") or "").strip()
+        ft_out_ai = (parsed.get("ft_out") or "").strip()
+        ft_in_form = (request.form.get("ft_in") or "").strip()
+        ft_out_form = (request.form.get("ft_out") or "").strip()
+        ft_in = ft_in_form or ft_in_ai or ""
+        ft_out = ft_out_form or ft_out_ai or ""
         can_cable_count, can_cables = _parse_can_cables_from_form(request.form)
         photo_is_can = bool(request.form.get("is_can"))
 
@@ -7213,6 +7293,178 @@ if __name__ == "__main__":
     app.run(debug=True)
 
 
+
+
+
+# ─────────────────────────────────────────────────────────────
+#  AUTO PHOTO LAUNCH — lançamento automático via foto do mapa
+# ─────────────────────────────────────────────────────────────
+@app.route("/api/maps/<int:map_id>/auto-photo-launch", methods=["POST"])
+@login_required
+def auto_photo_launch(map_id):
+    """Recebe uma ou mais fotos Timemark do mapa e faz lançamento automático.
+
+    Para cada foto:
+      1. Claude lê a imagem e extrai: device_name, splices, map_role, ft_in, ft_out, gps, datetime
+      2. O sistema localiza o Record no banco pelo device_name + map
+      3. Atualiza o record com os dados extraídos (splices, ft_in, ft_out, map_role, preços)
+      4. Salva a foto no record
+      5. Retorna JSON com resultado por foto
+
+    Não exige que o splicer preencha nada — 100% automático.
+    """
+    mp = CompanyMap.query.get_or_404(map_id)
+
+    is_owner = bool(getattr(current_user, "is_company_owner", False))
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if is_owner and not is_admin:
+        return jsonify({"ok": False, "error": "Dono de empresa não pode lançar produção."}), 403
+
+    photos = [p for p in request.files.getlist("photos") if getattr(p, "filename", None)]
+    if not photos:
+        return jsonify({"ok": False, "error": "Nenhuma foto enviada."}), 400
+
+    results = []
+    company = mp.company
+    project_id = mp.project_id
+    map_name = mp.name
+    splicer_name = getattr(current_user, "splicer_name", None) or current_user.username
+
+    for photo_file in photos:
+        fname = photo_file.filename or "foto.jpg"
+        try:
+            raw_bytes = photo_file.read()
+        except Exception as e:
+            results.append({"file": fname, "ok": False, "error": f"Erro ao ler arquivo: {e}"})
+            continue
+
+        # 1. Chama Claude para extrair dados da foto
+        parsed, ai_error = extract_timestamp_fields_with_ai(raw_bytes)
+        if parsed is None:
+            results.append({"file": fname, "ok": False, "error": ai_error or "Claude não conseguiu ler a foto."})
+            continue
+
+        device_name = parsed["device_name"]
+        splices_val  = parsed["splices"]
+        map_role     = parsed["map_role"]   # 'MEIO' ou 'PONTA'
+        ft_in        = (parsed.get("ft_in") or "").strip() or None
+        ft_out       = (parsed.get("ft_out") or "").strip() or None
+        if map_role == "PONTA":
+            ft_out = None
+
+        # 2. Localiza o Record no banco
+        rec = Record.query.filter(
+            Record.map == map_name,
+            Record.device == device_name,
+            Record.company == company,
+        ).order_by(Record.id.asc()).first()
+
+        if not rec:
+            results.append({
+                "file": fname, "ok": False,
+                "error": f"Dispositivo '{device_name}' não encontrado no mapa '{map_name}'."
+            })
+            continue
+
+        # 3. Resolve preços e billing codes
+        type_val = (rec.type or "OTE").strip() or "OTE"
+        device_for_price = type_val or device_name
+
+        map_obj = CompanyMap.query.filter(
+            CompanyMap.company == company,
+            CompanyMap.name == map_name,
+            CompanyMap.project_id == project_id,
+        ).order_by(CompanyMap.id.asc()).first()
+
+        included_override, included_applied, map_cfg = resolve_included_override(
+            company=company,
+            project_id=project_id,
+            map_obj=map_obj,
+            map_val=map_name,
+            map_role=map_role,
+        )
+
+        is_rib, _ = device_is_ribbon(device_for_price, company, project_id)
+        ribbon_count = None
+
+        price_splices, price_device, total = compute_prices(
+            splices=splices_val,
+            device_name=device_for_price,
+            company=company,
+            project_id=project_id,
+            included_override=included_override,
+            map_role=map_role,
+            ribbon_count=ribbon_count,
+        )
+        _bcodes = compute_billing_codes(
+            splices_val, device_for_price, company, project_id,
+            map_role=map_role, ribbon_count=ribbon_count,
+        )
+
+        # 4. Atualiza o Record — nunca modifica valores já salvos se não vieram da foto
+        rec.splicer               = splicer_name
+        rec.map_role              = map_role
+        rec.splices               = 0 if is_rib else splices_val
+        rec.ribbon_count          = ribbon_count if is_rib else None
+        rec.billing_codes_json    = json.dumps(_bcodes, ensure_ascii=False) if _bcodes else None
+        rec.price_splices_usd     = price_splices
+        rec.price_device_usd      = price_device
+        rec.total_usd             = total
+        rec.included_splices_applied = included_applied
+        rec.ft_in                 = ft_in
+        rec.ft_out                = ft_out
+
+        # 5. Salva a foto no record
+        try:
+            opt_bytes, opt_ct = optimize_upload_bytes(raw_bytes, photo_file.content_type or "image/jpeg")
+            thumb_b, thumb_ct = None, None
+            try:
+                from PIL import Image as _PILImage
+                import io as _io
+                img_pil = _PILImage.open(_io.BytesIO(opt_bytes))
+                img_pil.thumbnail((480, 480))
+                buf = _io.BytesIO()
+                img_pil.save(buf, format="JPEG", quality=65)
+                thumb_b = buf.getvalue()
+                thumb_ct = "image/jpeg"
+            except Exception:
+                pass
+
+            photo_rec = RecordPhoto(
+                record_id=rec.id,
+                filename=fname,
+                data=opt_bytes,
+                content_type=opt_ct,
+                thumb_data=thumb_b,
+                thumb_content_type=thumb_ct,
+            )
+            db.session.add(photo_rec)
+            db.session.flush()
+
+            # Upload para R2 se configurado
+            r2_key = r2_key_for_record_photo(rec.id, fname)
+            thumb_key = r2_key.rsplit(".", 1)[0] + "_thumb.jpg" if thumb_b else None
+            if os.environ.get("R2_BUCKET"):
+                enqueue_r2_upload(photo_rec.id, r2_key, opt_bytes, opt_ct, thumb_key, thumb_b, thumb_ct)
+        except Exception as e:
+            # Foto falhou mas lançamento continua
+            print(f"[AUTO-PHOTO] Erro ao salvar foto: {e}")
+
+        db.session.commit()
+
+        results.append({
+            "file": fname,
+            "ok": True,
+            "device": device_name,
+            "map_role": map_role,
+            "splices": splices_val,
+            "ft_in": ft_in,
+            "ft_out": ft_out,
+            "record_id": rec.id,
+        })
+
+    all_ok = all(r["ok"] for r in results)
+    return jsonify({"ok": all_ok, "results": results})
 
 @app.route('/__version')
 def __version__():

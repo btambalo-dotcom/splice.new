@@ -488,6 +488,7 @@
     const importSpliceReportUrl = "{{ url_for('api_import_splice_report', map_id=map_obj.id) }}";
     const addRecordUrl = "{{ url_for('api_add_record_to_map', map_id=map_obj.id) }}";
     const sectionColorsUrl = "{{ url_for('map_section_colors', map_id=map_obj.id) }}";
+    const autoPhotoLaunchUrl = "{{ url_for('auto_photo_launch', map_id=map_obj.id) }}";
     const initialFocusRecordId = {{ focus_record_id if focus_record_id is not none else "null" }};
     const IS_OWNER_READONLY = false; // owner nao tem permissao de edicao
 const IS_ADMIN = {{ "true" if current_user.is_admin else "false" }};
@@ -1983,6 +1984,170 @@ function openDeviceModalById(id) {
         });
       }
     });
+
+
+
+  /* ═══════════════════════════════════════════════
+     BOTÃO FLUTUANTE: 📷 Foto Automático
+  ═══════════════════════════════════════════════ */
+  (function setupAutoPhoto() {
+    // Cria botão FAB
+    const fab = document.createElement('button');
+    fab.id = 'fab-auto-photo';
+    fab.innerHTML = '📷';
+    fab.title = 'Foto Automático — lançar produção pela foto';
+    fab.style.cssText = `
+      position: fixed;
+      bottom: 28px;
+      right: 22px;
+      z-index: 9999;
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      background: #198754;
+      color: #fff;
+      border: none;
+      font-size: 26px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.2s;
+    `;
+    fab.addEventListener('mouseenter', () => fab.style.background = '#157347');
+    fab.addEventListener('mouseleave', () => fab.style.background = '#198754');
+    document.body.appendChild(fab);
+
+    // Cria modal
+    const modalHtml = `
+    <div class="modal fade" id="autoPhotoModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content bg-dark text-light">
+          <div class="modal-header border-secondary">
+            <h5 class="modal-title">📷 Foto Automático</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <p class="text-muted small mb-3">
+              Suba as fotos Timemark. O sistema usa IA para ler o dispositivo,
+              número de fusões, feet IN/OUT e tipo (MEIO/PONTA) — e lança automaticamente.
+            </p>
+            <div class="mb-3">
+              <label class="form-label fw-semibold">Fotos (pode selecionar várias)</label>
+              <input type="file" id="auto-photo-input" class="form-control bg-secondary text-light border-0"
+                     accept="image/*" multiple>
+            </div>
+            <div id="auto-photo-preview" class="d-flex flex-wrap gap-2 mb-3"></div>
+            <div id="auto-photo-progress" class="d-none">
+              <div class="d-flex align-items-center gap-2 mb-2">
+                <div class="spinner-border spinner-border-sm text-success" role="status"></div>
+                <span id="auto-photo-status">Lendo fotos com IA...</span>
+              </div>
+              <div class="progress" style="height:6px">
+                <div id="auto-photo-bar" class="progress-bar bg-success progress-bar-striped progress-bar-animated"
+                     style="width:0%"></div>
+              </div>
+            </div>
+            <div id="auto-photo-results" class="mt-3"></div>
+          </div>
+          <div class="modal-footer border-secondary">
+            <button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Fechar</button>
+            <button type="button" id="auto-photo-btn-send" class="btn btn-success px-4">
+              ⬆ Lançar automaticamente
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+    const modal = new bootstrap.Modal(document.getElementById('autoPhotoModal'));
+    fab.addEventListener('click', () => {
+      document.getElementById('auto-photo-results').innerHTML = '';
+      document.getElementById('auto-photo-preview').innerHTML = '';
+      document.getElementById('auto-photo-input').value = '';
+      document.getElementById('auto-photo-progress').classList.add('d-none');
+      modal.show();
+    });
+
+    // Preview de miniaturas ao selecionar fotos
+    document.getElementById('auto-photo-input').addEventListener('change', function () {
+      const preview = document.getElementById('auto-photo-preview');
+      preview.innerHTML = '';
+      Array.from(this.files).forEach(file => {
+        const url = URL.createObjectURL(file);
+        const img = document.createElement('img');
+        img.src = url;
+        img.style.cssText = 'width:72px;height:72px;object-fit:cover;border-radius:6px;border:2px solid #444';
+        preview.appendChild(img);
+      });
+    });
+
+    // Envio
+    document.getElementById('auto-photo-btn-send').addEventListener('click', async () => {
+      const input = document.getElementById('auto-photo-input');
+      const files = Array.from(input.files);
+      if (!files.length) {
+        alert('Selecione pelo menos uma foto.');
+        return;
+      }
+
+      const progress = document.getElementById('auto-photo-progress');
+      const bar = document.getElementById('auto-photo-bar');
+      const status = document.getElementById('auto-photo-status');
+      const resultsDiv = document.getElementById('auto-photo-results');
+      const btnSend = document.getElementById('auto-photo-btn-send');
+
+      progress.classList.remove('d-none');
+      resultsDiv.innerHTML = '';
+      btnSend.disabled = true;
+      bar.style.width = '10%';
+      status.textContent = `Enviando ${files.length} foto(s) para o Claude...`;
+
+      const fd = new FormData();
+      files.forEach(f => fd.append('photos', f));
+
+      try {
+        const resp = await fetch(autoPhotoLaunchUrl, { method: 'POST', body: fd });
+        bar.style.width = '90%';
+        const data = await resp.json();
+        bar.style.width = '100%';
+        status.textContent = 'Concluído!';
+
+        let html = '<div class="list-group list-group-flush">';
+        (data.results || []).forEach(r => {
+          const icon = r.ok ? '✅' : '❌';
+          const color = r.ok ? 'success' : 'danger';
+          let detail = '';
+          if (r.ok) {
+            detail = `<span class="text-muted small">
+              ${r.device} · ${r.map_role} · ${r.splices} fusões
+              ${r.ft_in ? ' · IN: ' + r.ft_in : ''}
+              ${r.ft_out ? ' · OUT: ' + r.ft_out : ''}
+            </span>`;
+          } else {
+            detail = `<span class="text-danger small">${r.error}</span>`;
+          }
+          html += `<div class="list-group-item bg-dark border-secondary py-2">
+            ${icon} <strong class="text-${color}">${r.file}</strong><br>${detail}
+          </div>`;
+        });
+        html += '</div>';
+        resultsDiv.innerHTML = html;
+
+        // Recarrega marcadores para mostrar pins atualizados
+        if (data.ok || (data.results || []).some(r => r.ok)) {
+          setTimeout(() => loadMarkers(), 800);
+        }
+      } catch (e) {
+        status.textContent = 'Erro ao enviar.';
+        resultsDiv.innerHTML = `<div class="alert alert-danger">Erro: ${e}</div>`;
+      } finally {
+        btnSend.disabled = false;
+      }
+    });
+  })();
 
   </script>
 {% endblock %}
