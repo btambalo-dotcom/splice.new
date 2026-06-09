@@ -95,26 +95,33 @@ btnLaunch.addEventListener('click', async () => {
   btnLaunch.disabled = true;
   results.innerHTML = '';
   progress.classList.remove('d-none');
-  pBar.style.width = '15%';
-  pStatus.textContent = `Enviando ${files.length} foto(s) para o Claude...`;
+  pBar.style.width = '5%';
 
-  const fd = new FormData();
-  files.forEach(f => fd.append('photos', f));
+  const allResults = [];
 
   try {
-    pBar.style.width = '40%';
-    const resp = await fetch(AUTO_LAUNCH_URL, { method: 'POST', body: fd });
-    pBar.style.width = '85%';
-    pStatus.textContent = 'Processando resultados...';
-
-    const data = await resp.json();
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      const pct = Math.round(((i + 0.5) / files.length) * 90) + 5;
+      pBar.style.width = pct + '%';
+      pStatus.textContent = 'Foto ' + (i + 1) + ' de ' + files.length + ': ' + f.name.slice(0, 30) + '...';
+      try {
+        const fd = new FormData();
+        fd.append('photos', f, f.name);
+        const resp = await fetch(AUTO_LAUNCH_URL, { method: 'POST', body: fd });
+        if (!resp.ok) { allResults.push({ file: f.name, ok: false, error: 'HTTP ' + resp.status }); continue; }
+        const data = await resp.json();
+        (data.results || []).forEach(r => allResults.push(r));
+      } catch (e) {
+        allResults.push({ file: f.name, ok: false, error: 'Erro: ' + e.message });
+      }
+    }
     pBar.style.width = '100%';
-    pStatus.textContent = 'Concluído!';
-
-    renderResults(data.results || []);
+    pStatus.textContent = 'Concluido!';
+    renderResults(allResults);
   } catch (e) {
     pStatus.textContent = 'Erro ao enviar.';
-    results.innerHTML = `<div class="alert alert-danger">Erro de conexão: ${e}</div>`;
+    results.innerHTML = '<div class="alert alert-danger">Erro: ' + e + '</div>';
   } finally {
     btnLaunch.disabled = false;
   }

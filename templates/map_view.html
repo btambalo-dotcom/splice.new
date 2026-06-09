@@ -2102,47 +2102,69 @@ function openDeviceModalById(id) {
       progress.classList.remove('d-none');
       resultsDiv.innerHTML = '';
       btnSend.disabled = true;
-      bar.style.width = '10%';
-      status.textContent = `Enviando ${files.length} foto(s) para o Claude...`;
+      bar.style.width = '5%';
 
-      const fd = new FormData();
-      files.forEach(f => fd.append('photos', f));
+      // Envia uma foto por vez (compatível com iOS Safari)
+      const allResults = [];
+      let anyOk = false;
+
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        const pct = Math.round(((i + 0.5) / files.length) * 90) + 5;
+        bar.style.width = pct + '%';
+        status.textContent = 'Foto ' + (i + 1) + ' de ' + files.length + ': ' + f.name.slice(0, 30) + '...';
+
+        try {
+          const fd = new FormData();
+          fd.append('photos', f, f.name);
+          const resp = await fetch(autoPhotoLaunchUrl, { method: 'POST', body: fd });
+          if (!resp.ok) {
+            allResults.push({ file: f.name, ok: false, error: 'HTTP ' + resp.status });
+            continue;
+          }
+          const data = await resp.json();
+          (data.results || []).forEach(r => {
+            allResults.push(r);
+            if (r.ok) anyOk = true;
+          });
+        } catch (e) {
+          allResults.push({ file: f.name, ok: false, error: 'Erro: ' + e.message });
+        }
+      }
+
+      bar.style.width = '100%';
+      status.textContent = 'Concluído!';
 
       try {
-        const resp = await fetch(autoPhotoLaunchUrl, { method: 'POST', body: fd });
-        bar.style.width = '90%';
-        const data = await resp.json();
-        bar.style.width = '100%';
-        status.textContent = 'Concluído!';
-
         let html = '<div class="list-group list-group-flush">';
-        (data.results || []).forEach(r => {
+        allResults.forEach(r => {
           const icon = r.ok ? '✅' : '❌';
           const color = r.ok ? 'success' : 'danger';
           let detail = '';
           if (r.ok) {
-            detail = `<span class="text-muted small">
-              ${r.device} · ${r.map_role} · ${r.splices} fusões
-              ${r.ft_in ? ' · IN: ' + r.ft_in : ''}
-              ${r.ft_out ? ' · OUT: ' + r.ft_out : ''}
-            </span>`;
+            const action = r.action || 'splice';
+            if (action === 'test') {
+              detail = '<span class="text-muted small">' + r.device + ' · 📊 Teste · ' + (r.power_dbm != null ? r.power_dbm + ' dBm' : '') + '</span>';
+            } else if (action === 'placed') {
+              detail = '<span class="text-muted small">' + r.device + ' · 📍 Subido</span>';
+            } else {
+              detail = '<span class="text-muted small">' + r.device + ' · ' + (r.map_role || '') + ' · ' + (r.splices || 0) + ' fusões' +
+                (r.ft_in ? ' · IN: ' + r.ft_in : '') + (r.ft_out ? ' · OUT: ' + r.ft_out : '') + '</span>';
+            }
           } else {
-            detail = `<span class="text-danger small">${r.error}</span>`;
+            detail = '<span class="text-danger small">' + (r.error || 'Erro desconhecido') + '</span>';
           }
-          html += `<div class="list-group-item bg-dark border-secondary py-2">
-            ${icon} <strong class="text-${color}">${r.file}</strong><br>${detail}
-          </div>`;
+          html += '<div class="list-group-item bg-dark border-secondary py-2">' +
+            icon + ' <strong class="text-' + color + '">' + r.file + '</strong><br>' + detail +
+            '</div>';
         });
         html += '</div>';
         resultsDiv.innerHTML = html;
 
-        // Recarrega marcadores para mostrar pins atualizados
-        if (data.ok || (data.results || []).some(r => r.ok)) {
-          setTimeout(() => loadMarkers(), 800);
-        }
+        if (anyOk) setTimeout(() => loadMarkers(), 800);
       } catch (e) {
-        status.textContent = 'Erro ao enviar.';
-        resultsDiv.innerHTML = `<div class="alert alert-danger">Erro: ${e}</div>`;
+        status.textContent = 'Erro ao exibir resultados.';
+        resultsDiv.innerHTML = '<div class="alert alert-danger">Erro: ' + e + '</div>';
       } finally {
         btnSend.disabled = false;
       }
