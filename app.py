@@ -1820,11 +1820,16 @@ def classify_photo_with_ai(image_bytes: bytes):
             "TIPO 'test': mostra um equipamento de medição óptica (power meter laranja/amarelo, OTDR) com display numérico.\n"
             "  Extraia: device_name (do carimbo Timemark), wavelength_nm (ex: 1550), power_uw (ex: 30.14),\n"
             "  power_dbm (ex: -15.21), gps, photo_datetime\n\n"
-            "TIPO 'placed': mostra o dispositivo já instalado fisicamente (no poste, caixa, parede) sem estar aberto.\n"
-            "  Extraia: device_name (do carimbo), gps, photo_datetime\n\n"
-            "TIPO 'unknown': não se encaixa em nenhum dos anteriores.\n\n"
-            "IMPORTANTE: Se a foto mostrar um MEDIDOR com display numérico mostrando dBm → SEMPRE tipo 'test'.\n"
-            "Se mostrar splice tray com fibras fundidas → SEMPRE tipo 'splice'.\n\n"
+            "TIPO 'placed': qualquer foto de campo que NÃO seja splice box aberta nem power meter.\n"
+            "  Exemplos: poste com caixa, caixa fechada, fio aéreo, rua, dispositivo no campo.\n"
+            "  Extraia: device_name (do carimbo Timemark), gps, photo_datetime\n\n"
+            "TIPO 'unknown': use SOMENTE se não houver carimbo Timemark e não der para identificar nada.\n\n"
+            "REGRAS DE PRIORIDADE (siga nessa ordem):\n"
+            "  1. Power meter/OTDR com display numérico dBm/µW na tela → SEMPRE 'test'\n"
+            "  2. Splice tray aberta com fibras/fusões visíveis → SEMPRE 'splice'\n"
+            "  3. Qualquer outra foto COM carimbo Timemark e nome do dispositivo → 'placed'\n"
+            "  4. Sem carimbo e sem contexto de fibra óptica → 'unknown'\n\n"
+            "NUNCA retorne 'unknown' se a foto tiver carimbo Timemark com nome do dispositivo.\n\n"
             "Retorne APENAS JSON válido sem explicações:\n"
             "{\"photo_type\": \"splice|test|placed|unknown\", \"device_name\": \"...\", "
             "\"splices\": null, \"map_role\": null, \"ft_in\": null, \"ft_out\": null, "
@@ -1864,6 +1869,10 @@ def classify_photo_with_ai(image_bytes: bytes):
         parsed = json.loads(raw)
         photo_type = (parsed.get('photo_type') or 'unknown').strip().lower()
         device_name = (parsed.get('device_name') or '').strip() or None
+
+        # Fallback: se Claude retornou 'unknown' mas tem device_name → trata como 'placed'
+        if photo_type == 'unknown' and device_name:
+            photo_type = 'placed'
 
         result = {'device_name': device_name, 'gps': (parsed.get('gps') or '').strip() or None,
                   'photo_datetime': (parsed.get('photo_datetime') or '').strip() or None}
