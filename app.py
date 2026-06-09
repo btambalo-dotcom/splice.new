@@ -7544,6 +7544,8 @@ def _process_photo_result(rec, raw_bytes, fname, content_type, photo_type, parse
 
     elif photo_type == "test":
         power_dbm  = parsed.get("power_dbm")
+        power_uw   = parsed.get("power_uw")
+        wavelength = parsed.get("wavelength_nm")
 
         # Formato: cada porta é um valor dBm separado por vírgula
         # Ex: "-15.21,-15.46,-15.45" → Porta 1, Porta 2, Porta 3
@@ -7551,7 +7553,6 @@ def _process_photo_result(rec, raw_bytes, fname, content_type, photo_type, parse
             dbm_str = str(power_dbm)
             existing = rec.test_levels or ""
             if existing:
-                # Acumula: adiciona nova porta separada por vírgula
                 rec.test_levels = existing + "," + dbm_str
             else:
                 rec.test_levels = dbm_str
