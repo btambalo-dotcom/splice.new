@@ -1318,7 +1318,10 @@ if (rec.test_levels) {
     const portLines = parsedTests.map(function(v, idx){
       return 'Porta ' + (idx + 1) + ': ' + v;
     }).join('<br>');
-    popupParts.push('<div class="small mb-1"><strong>Testes:</strong><br>' + portLines + '</div>');
+    const adminClearBtn = IS_ADMIN
+      ? ' <button class="btn btn-outline-danger btn-sm py-0 px-1 ms-1" style="font-size:10px" onclick="clearRecordTest(' + rec.id + ')">🗑 Apagar</button>'
+      : '';
+    popupParts.push('<div class="small mb-1"><strong>Testes:</strong>' + adminClearBtn + '<br>' + portLines + '</div>');
   }
 }
 if (rec.test_date) {
@@ -2107,6 +2110,7 @@ function openDeviceModalById(id) {
       // Envia uma foto por vez (compatível com iOS Safari)
       const allResults = [];
       let anyOk = false;
+      let testPhotoCount = 0; // controla reset na 1a foto de teste do lote
 
       for (let i = 0; i < files.length; i++) {
         const f = files[i];
@@ -2117,6 +2121,8 @@ function openDeviceModalById(id) {
         try {
           const fd = new FormData();
           fd.append('photos', f, f.name);
+          // reset_test=1 na primeira foto de teste do lote para sobrescrever anterior
+          if (testPhotoCount === 0) fd.append('reset_test', '1');
           const resp = await fetch(autoPhotoLaunchUrl, { method: 'POST', body: fd });
           if (!resp.ok) {
             allResults.push({ file: f.name, ok: false, error: 'HTTP ' + resp.status });
@@ -2125,7 +2131,10 @@ function openDeviceModalById(id) {
           const data = await resp.json();
           (data.results || []).forEach(r => {
             allResults.push(r);
-            if (r.ok) anyOk = true;
+            if (r.ok) {
+              anyOk = true;
+              if (r.action === 'test') testPhotoCount++;
+            }
           });
         } catch (e) {
           allResults.push({ file: f.name, ok: false, error: 'Erro: ' + e.message });
@@ -2170,6 +2179,23 @@ function openDeviceModalById(id) {
       }
     });
   })();
+
+
+  /* ── Admin: apagar teste de um dispositivo ── */
+  function clearRecordTest(recordId) {
+    if (!confirm('Apagar TODOS os testes deste dispositivo? Esta ação não pode ser desfeita.')) return;
+    fetch('/api/records/' + recordId + '/clear-test', { method: 'POST' })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) {
+          alert('Teste apagado com sucesso.');
+          loadMarkers();
+        } else {
+          alert('Erro: ' + (d.error || 'desconhecido'));
+        }
+      })
+      .catch(e => alert('Erro de conexão: ' + e));
+  }
 
   </script>
 {% endblock %}

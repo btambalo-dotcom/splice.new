@@ -98,6 +98,7 @@ btnLaunch.addEventListener('click', async () => {
   pBar.style.width = '5%';
 
   const allResults = [];
+  let testPhotoCount = 0;
 
   try {
     for (let i = 0; i < files.length; i++) {
@@ -108,10 +109,11 @@ btnLaunch.addEventListener('click', async () => {
       try {
         const fd = new FormData();
         fd.append('photos', f, f.name);
+        if (testPhotoCount === 0) fd.append('reset_test', '1');
         const resp = await fetch(AUTO_LAUNCH_URL, { method: 'POST', body: fd });
         if (!resp.ok) { allResults.push({ file: f.name, ok: false, error: 'HTTP ' + resp.status }); continue; }
         const data = await resp.json();
-        (data.results || []).forEach(r => allResults.push(r));
+        (data.results || []).forEach(r => { allResults.push(r); if (r.ok && r.action === 'test') testPhotoCount++; });
       } catch (e) {
         allResults.push({ file: f.name, ok: false, error: 'Erro: ' + e.message });
       }

@@ -7547,15 +7547,21 @@ def _process_photo_result(rec, raw_bytes, fname, content_type, photo_type, parse
         power_uw   = parsed.get("power_uw")
         wavelength = parsed.get("wavelength_nm")
 
+        # reset_test=1 na primeira foto do lote → apaga teste anterior
+        reset = request.form.get("reset_test") == "1"
+        if reset:
+            rec.test_levels = None
+            # Remove fotos de teste antigas
+            old_test_photos = RecordPhoto.query.filter_by(record_id=rec.id, is_test=True).all()
+            for p in old_test_photos:
+                db.session.delete(p)
+            db.session.flush()
+
         # Formato: cada porta é um valor dBm separado por vírgula
-        # Ex: "-15.21,-15.46,-15.45" → Porta 1, Porta 2, Porta 3
         if power_dbm is not None:
             dbm_str = str(power_dbm)
             existing = rec.test_levels or ""
-            if existing:
-                rec.test_levels = existing + "," + dbm_str
-            else:
-                rec.test_levels = dbm_str
+            rec.test_levels = (existing + "," + dbm_str) if existing else dbm_str
 
         rec.test_done = True
         rec.test_date = datetime.utcnow()
@@ -7837,6 +7843,40 @@ def fix_test_levels(record_id):
 
     rec.test_levels = new_levels or None
     rec.test_done = bool(new_levels)
+    if rec.test_done and not rec.test_date:
+        rec.test_date = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"ok": True, "test_levels": rec.test_levels})
+
+
+@app.route("/api/records/<int:record_id>/clear-test", methods=["POST"])
+@login_required
+def clear_record_test(record_id):
+    """Admin: apaga todo o teste de um dispositivo (test_levels, test_done, fotos de teste)."""
+    if not bool(getattr(current_user, "is_admin", False)):
+        return jsonify({"ok": False, "error": "Apenas admin pode apagar testes."}), 403
+    rec = Record.query.get_or_404(record_id)
+    rec.test_levels = None
+    rec.test_done   = False
+    rec.test_date   = None
+    old_photos = RecordPhoto.query.filter_by(record_id=rec.id, is_test=True).all()
+    for p in old_photos:
+        db.session.delete(p)
+    db.session.commit()
+    return jsonify({"ok": True, "record_id": rec.id})
+
+
+@app.route("/api/records/<int:record_id>/set-test-levels", methods=["POST"])
+@login_required
+def set_test_levels(record_id):
+    """Admin: edita manualmente o test_levels (formato: -15.21,-15.46,-15.45)."""
+    if not bool(getattr(current_user, "is_admin", False)):
+        return jsonify({"ok": False, "error": "Apenas admin pode editar testes."}), 403
+    rec = Record.query.get_or_404(record_id)
+    data = request.get_json(silent=True) or {}
+    levels = (data.get("levels") or "").strip()
+    rec.test_levels = levels or None
+    rec.test_done   = bool(levels)
     if rec.test_done and not rec.test_date:
         rec.test_date = datetime.utcnow()
     db.session.commit()
