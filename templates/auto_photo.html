@@ -126,14 +126,18 @@ function renderResults(items) {
     return;
   }
 
-  const ok_count    = items.filter(r => r.ok).length;
-  const fail_count  = items.length - ok_count;
+  const ok_count   = items.filter(r => r.ok).length;
+  const fail_count = items.length - ok_count;
+
+  const actionIcon = { splice: '🔗', test: '📊', placed: '📍' };
+  const actionLabel = { splice: 'Lançado', test: 'Teste', placed: 'Subido' };
+  const actionColor = { splice: 'success', test: 'info', placed: 'warning' };
 
   let html = `
     <div class="d-flex gap-3 mb-3">
       <div class="card bg-dark border-success p-3 flex-fill text-center">
         <div class="fs-2 text-success fw-bold">${ok_count}</div>
-        <div class="text-muted small">Lançados</div>
+        <div class="text-muted small">Processados</div>
       </div>
       <div class="card bg-dark border-${fail_count > 0 ? 'danger' : 'secondary'} p-3 flex-fill text-center">
         <div class="fs-2 ${fail_count > 0 ? 'text-danger' : 'text-muted'} fw-bold">${fail_count}</div>
@@ -144,22 +148,37 @@ function renderResults(items) {
 
   items.forEach(r => {
     if (r.ok) {
+      const icon  = actionIcon[r.action]  || '✅';
+      const label = actionLabel[r.action] || r.action;
+      const color = actionColor[r.action] || 'success';
+      let detail = '';
+
+      if (r.action === 'splice') {
+        detail = `🗺 <strong class="text-light">${r.map_name}</strong>
+          &nbsp;·&nbsp; ${r.map_role}
+          &nbsp;·&nbsp; ${r.splices} fusões
+          ${r.ft_in  ? `&nbsp;·&nbsp; IN: <strong class="text-info">${r.ft_in}</strong>`  : ''}
+          ${r.ft_out ? `&nbsp;·&nbsp; OUT: <strong class="text-info">${r.ft_out}</strong>` : ''}
+          ${r.gps_distance_m != null ? `&nbsp;·&nbsp; 📍 ${r.gps_distance_m}m` : ''}`;
+      } else if (r.action === 'test') {
+        detail = `🗺 <strong class="text-light">${r.map_name}</strong>
+          ${r.wavelength_nm ? `&nbsp;·&nbsp; ${r.wavelength_nm}nm` : ''}
+          ${r.power_uw  != null ? `&nbsp;·&nbsp; ${r.power_uw}µW`  : ''}
+          ${r.power_dbm != null ? `&nbsp;·&nbsp; <strong class="text-info">${r.power_dbm} dBm</strong>` : ''}`;
+      } else if (r.action === 'placed') {
+        detail = `🗺 <strong class="text-light">${r.map_name}</strong> &nbsp;·&nbsp; Marcado como subido`;
+      }
+
       html += `
-        <div class="list-group-item bg-dark border-success mb-2" style="border-radius:8px">
+        <div class="list-group-item bg-dark border-${color} mb-2" style="border-radius:8px">
           <div class="d-flex justify-content-between align-items-start">
             <div>
-              <span class="text-success fw-bold">✅ ${r.device}</span>
-              <span class="badge bg-${r.map_role === 'MEIO' ? 'primary' : 'warning text-dark'} ms-2">${r.map_role}</span>
+              <span class="text-${color} fw-bold">${icon} ${r.device}</span>
+              <span class="badge bg-${color} ms-2 text-dark">${label}</span>
             </div>
             <small class="text-muted">${r.file}</small>
           </div>
-          <div class="mt-1 small text-muted">
-            🗺 <strong class="text-light">${r.map_name}</strong>
-            &nbsp;·&nbsp; 🔗 ${r.splices} fusões
-            ${r.ft_in ? `&nbsp;·&nbsp; IN: <strong class="text-info">${r.ft_in}</strong>` : ''}
-            ${r.ft_out ? `&nbsp;·&nbsp; OUT: <strong class="text-info">${r.ft_out}</strong>` : ''}
-            ${r.gps_distance_m != null ? `&nbsp;·&nbsp; 📍 ${r.gps_distance_m}m do GPS` : ''}
-          </div>
+          <div class="mt-1 small text-muted">${detail}</div>
         </div>`;
     } else {
       html += `

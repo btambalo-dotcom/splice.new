@@ -1788,6 +1788,107 @@ def extract_timestamp_fields_with_ai(image_bytes: bytes):
     return result, None
 
 
+
+def classify_photo_with_ai(image_bytes: bytes):
+    """Classifica o tipo de foto Timemark usando Claude.
+
+    Retorna (tipo, dict, error):
+      tipo = 'splice'   → foto de splice box (lança produção)
+      tipo = 'test'     → foto de power meter / OTDR (lança teste)
+      tipo = 'placed'   → foto de dispositivo instalado no poste/caixa (marca subida)
+      tipo = 'unknown'  → não reconhecido
+
+    O dict contém os campos extraídos dependendo do tipo.
+    """
+    if not image_bytes:
+        return 'unknown', {}, 'Imagem vazia'
+
+    api_key = os.environ.get('ANTHROPIC_API_KEY')
+    if not api_key:
+        return 'unknown', {}, 'ANTHROPIC_API_KEY não configurada.'
+
+    try:
+        img_b64 = base64.b64encode(image_bytes).decode('ascii')
+
+        prompt = (
+            "Você é um especialista em fotos de campo de instalação de fibra óptica (FTTX).\n"
+            "As fotos são tiradas com o app Timemark que adiciona carimbo com nome, data, endereço e GPS.\n\n"
+            "Analise a imagem e determine o TIPO da foto:\n\n"
+            "TIPO 'splice': mostra o interior de uma splice box aberta com splice tray, fibras e fusões.\n"
+            "  Extraia: device_name (da etiqueta dentro da box ou carimbo), splices (da etiqueta numerada ex: #1-12 = 12),\n"
+            "  map_role ('PONTA' se só IN, 'MEIO' se IN e OUT), ft_in, ft_out, gps, photo_datetime\n\n"
+            "TIPO 'test': mostra um equipamento de medição óptica (power meter laranja/amarelo, OTDR) com display numérico.\n"
+            "  Extraia: device_name (do carimbo Timemark), wavelength_nm (ex: 1550), power_uw (ex: 30.14),\n"
+            "  power_dbm (ex: -15.21), gps, photo_datetime\n\n"
+            "TIPO 'placed': mostra o dispositivo já instalado fisicamente (no poste, caixa, parede) sem estar aberto.\n"
+            "  Extraia: device_name (do carimbo), gps, photo_datetime\n\n"
+            "TIPO 'unknown': não se encaixa em nenhum dos anteriores.\n\n"
+            "IMPORTANTE: Se a foto mostrar um MEDIDOR com display numérico mostrando dBm → SEMPRE tipo 'test'.\n"
+            "Se mostrar splice tray com fibras fundidas → SEMPRE tipo 'splice'.\n\n"
+            "Retorne APENAS JSON válido sem explicações:\n"
+            "{\"photo_type\": \"splice|test|placed|unknown\", \"device_name\": \"...\", "
+            "\"splices\": null, \"map_role\": null, \"ft_in\": null, \"ft_out\": null, "
+            "\"wavelength_nm\": null, \"power_uw\": null, \"power_dbm\": null, "
+            "\"gps\": null, \"photo_datetime\": null}"
+        )
+
+        payload = {
+            'model': 'claude-sonnet-4-6',
+            'max_tokens': 400,
+            'messages': [{
+                'role': 'user',
+                'content': [
+                    {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/jpeg', 'data': img_b64}},
+                    {'type': 'text', 'text': prompt},
+                ],
+            }],
+        }
+        headers = {'x-api-key': api_key, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json'}
+        resp = requests.post('https://api.anthropic.com/v1/messages', headers=headers,
+                             data=json.dumps(payload), timeout=40)
+        if resp.status_code != 200:
+            return 'unknown', {}, f'Erro HTTP {resp.status_code} ao chamar Claude.'
+
+        content_blocks = resp.json().get('content', [])
+        raw = ''
+        for block in content_blocks:
+            if block.get('type') == 'text':
+                raw = block.get('text', '').strip()
+                break
+
+        if raw.startswith('```'):
+            raw = raw.strip('`\n ')
+            if raw.lower().startswith('json'):
+                raw = raw[4:].lstrip()
+
+        parsed = json.loads(raw)
+        photo_type = (parsed.get('photo_type') or 'unknown').strip().lower()
+        device_name = (parsed.get('device_name') or '').strip() or None
+
+        result = {'device_name': device_name, 'gps': (parsed.get('gps') or '').strip() or None,
+                  'photo_datetime': (parsed.get('photo_datetime') or '').strip() or None}
+
+        if photo_type == 'splice':
+            result['splices'] = parsed.get('splices')
+            result['map_role'] = (parsed.get('map_role') or '').strip().upper() or None
+            result['ft_in'] = (str(parsed.get('ft_in') or '')).strip() or None
+            result['ft_out'] = (str(parsed.get('ft_out') or '')).strip() or None
+            if result.get('map_role') == 'PONTA':
+                result['ft_out'] = None
+        elif photo_type == 'test':
+            try: result['wavelength_nm'] = int(parsed.get('wavelength_nm') or 0) or None
+            except: result['wavelength_nm'] = None
+            try: result['power_uw'] = float(parsed.get('power_uw') or 0) or None
+            except: result['power_uw'] = None
+            try: result['power_dbm'] = float(parsed.get('power_dbm') or 0) or None
+            except: result['power_dbm'] = None
+
+        return photo_type, result, None
+
+    except Exception as e:
+        return 'unknown', {}, f'Erro ao classificar foto: {e}'
+
+
 def _best_tier_for(count: int, company: str | None, project_id: int | None = None):
     """Retorna o objeto SpliceTier que corresponde ao count, com prioridade projeto > empresa > global."""
     def _best(q):
@@ -7312,6 +7413,181 @@ if __name__ == "__main__":
 
 
 # ─────────────────────────────────────────────────────────────
+#  HELPERS compartilhados — Auto Photo
+# ─────────────────────────────────────────────────────────────
+
+def _save_photo_to_record(rec, raw_bytes, fname, content_type, is_test=False, is_placed=False):
+    """Otimiza e salva uma foto em um Record. Retorna True se ok."""
+    try:
+        opt_bytes, opt_ct = optimize_upload_bytes(raw_bytes, content_type or "image/jpeg")
+        thumb_b, thumb_ct = None, None
+        try:
+            from PIL import Image as _PILImage
+            import io as _io
+            img_pil = _PILImage.open(_io.BytesIO(opt_bytes))
+            img_pil.thumbnail((480, 480))
+            buf = _io.BytesIO()
+            img_pil.save(buf, format="JPEG", quality=65)
+            thumb_b = buf.getvalue()
+            thumb_ct = "image/jpeg"
+        except Exception:
+            pass
+
+        safe_fname = fname
+        if is_placed and not safe_fname.startswith("placed__"):
+            safe_fname = "placed__" + safe_fname
+
+        photo_rec = RecordPhoto(
+            record_id=rec.id,
+            filename=safe_fname[:255],
+            data=opt_bytes,
+            content_type=opt_ct,
+            thumb_data=thumb_b,
+            thumb_content_type=thumb_ct,
+            is_test=is_test,
+        )
+        db.session.add(photo_rec)
+        db.session.flush()
+
+        if os.environ.get("R2_BUCKET"):
+            r2_key = r2_key_for_record_photo(rec.id, safe_fname)
+            thumb_key = r2_key.rsplit(".", 1)[0] + "_thumb.jpg" if thumb_b else None
+            enqueue_r2_upload(photo_rec.id, r2_key, opt_bytes, opt_ct, thumb_key, thumb_b, thumb_ct)
+        return True
+    except Exception as e:
+        print(f"[AUTO-PHOTO] Erro ao salvar foto: {e}", flush=True)
+        return False
+
+
+def _find_record_by_name(device_name, map_name, company):
+    """Localiza Record pelo nome do device no mapa (case-insensitive)."""
+    rec = Record.query.filter(
+        Record.map == map_name,
+        Record.company == company,
+        db.func.lower(db.func.trim(Record.device)) == device_name.strip().lower(),
+    ).order_by(Record.id.asc()).first()
+    if not rec:
+        rec = Record.query.filter(
+            Record.map == map_name,
+            Record.company == company,
+            db.func.lower(Record.device).contains(device_name.strip().lower()),
+        ).order_by(Record.id.asc()).first()
+    return rec
+
+
+def _process_photo_result(rec, raw_bytes, fname, content_type, photo_type, parsed, splicer_name,
+                           company, project_id, map_name):
+    """Aplica resultado do Claude (splice/test/placed) no Record. Retorna dict de resultado."""
+
+    if photo_type == "splice":
+        splices_val = parsed.get("splices") or 0
+        map_role    = (parsed.get("map_role") or "PONTA").strip().upper()
+        ft_in       = (str(parsed.get("ft_in") or "")).strip() or None
+        ft_out      = (str(parsed.get("ft_out") or "")).strip() or None
+        if map_role == "PONTA":
+            ft_out = None
+
+        type_val         = (rec.type or "OTE").strip() or "OTE"
+        device_for_price = type_val or rec.device
+
+        map_obj = CompanyMap.query.filter(
+            CompanyMap.company == company,
+            CompanyMap.name == map_name,
+            CompanyMap.project_id == project_id,
+        ).order_by(CompanyMap.id.asc()).first()
+
+        included_override, included_applied, _ = resolve_included_override(
+            company=company, project_id=project_id,
+            map_obj=map_obj, map_val=map_name, map_role=map_role,
+        )
+        is_rib, _ = device_is_ribbon(device_for_price, company, project_id)
+        price_splices, price_device, total = compute_prices(
+            splices=splices_val, device_name=device_for_price, company=company,
+            project_id=project_id, included_override=included_override,
+            map_role=map_role, ribbon_count=None,
+        )
+        _bcodes = compute_billing_codes(
+            splices_val, device_for_price, company, project_id,
+            map_role=map_role, ribbon_count=None,
+        )
+
+        rec.splicer                  = splicer_name
+        rec.map_role                 = map_role
+        rec.splices                  = 0 if is_rib else splices_val
+        rec.ribbon_count             = None
+        rec.billing_codes_json       = json.dumps(_bcodes, ensure_ascii=False) if _bcodes else None
+        rec.price_splices_usd        = price_splices
+        rec.price_device_usd         = price_device
+        rec.total_usd                = total
+        rec.included_splices_applied = included_applied
+        rec.ft_in                    = ft_in
+        rec.ft_out                   = ft_out
+
+        _save_photo_to_record(rec, raw_bytes, fname, content_type, is_test=False, is_placed=False)
+        db.session.commit()
+
+        return {
+            "file": fname, "ok": True, "action": "splice",
+            "device": rec.device, "map_name": map_name,
+            "map_role": map_role, "splices": splices_val,
+            "ft_in": ft_in, "ft_out": ft_out, "record_id": rec.id,
+        }
+
+    elif photo_type == "test":
+        power_dbm  = parsed.get("power_dbm")
+        power_uw   = parsed.get("power_uw")
+        wavelength = parsed.get("wavelength_nm")
+
+        # Monta string de níveis no formato existente
+        parts = []
+        if wavelength:
+            parts.append(f"{wavelength}nm")
+        if power_uw is not None:
+            parts.append(f"{power_uw}µW")
+        if power_dbm is not None:
+            parts.append(f"{power_dbm}dBm")
+        levels_str = " | ".join(parts) if parts else None
+
+        # Acumula leituras: não sobrescreve, concatena
+        existing = rec.test_levels or ""
+        if levels_str:
+            if existing:
+                rec.test_levels = existing + "\n" + levels_str
+            else:
+                rec.test_levels = levels_str
+
+        rec.test_done = True
+        rec.test_date = datetime.utcnow()
+
+        _save_photo_to_record(rec, raw_bytes, fname, content_type, is_test=True, is_placed=False)
+        db.session.commit()
+
+        return {
+            "file": fname, "ok": True, "action": "test",
+            "device": rec.device, "map_name": map_name,
+            "power_dbm": power_dbm, "power_uw": power_uw,
+            "wavelength_nm": wavelength, "record_id": rec.id,
+        }
+
+    elif photo_type == "placed":
+        if not rec.is_placed:
+            rec.is_placed  = True
+            rec.placed_by  = splicer_name
+            rec.placed_at  = datetime.utcnow()
+
+        _save_photo_to_record(rec, raw_bytes, fname, content_type, is_test=False, is_placed=True)
+        db.session.commit()
+
+        return {
+            "file": fname, "ok": True, "action": "placed",
+            "device": rec.device, "map_name": map_name, "record_id": rec.id,
+        }
+
+    else:
+        return {"file": fname, "ok": False, "error": f"Tipo de foto não reconhecido: {photo_type}"}
+
+
+# ─────────────────────────────────────────────────────────────
 #  AUTO PHOTO LAUNCH — lançamento automático via foto do mapa
 # ─────────────────────────────────────────────────────────────
 @app.route("/api/maps/<int:map_id>/auto-photo-launch", methods=["POST"])
@@ -7319,9 +7595,10 @@ if __name__ == "__main__":
 def auto_photo_launch(map_id):
     """Recebe uma ou mais fotos Timemark do mapa e faz lançamento automático.
 
-    Para cada foto:
-      1. Claude lê a imagem e extrai: device_name, splices, map_role, ft_in, ft_out, gps, datetime
-      2. O sistema localiza o Record no banco pelo device_name + map
+    Detecta automaticamente o tipo de cada foto:
+      splice  → lança produção (splices, ft_in, ft_out, map_role)
+      test    → registra teste (power_dbm, power_uw) — múltiplas fotos acumulam
+      placed  → marca dispositivo como subido
       3. Atualiza o record com os dados extraídos (splices, ft_in, ft_out, map_role, preços)
       4. Salva a foto no record
       5. Retorna JSON com resultado por foto
@@ -7353,146 +7630,38 @@ def auto_photo_launch(map_id):
             results.append({"file": fname, "ok": False, "error": f"Erro ao ler arquivo: {e}"})
             continue
 
-        # 1. Chama Claude para extrair dados da foto
-        parsed, ai_error = extract_timestamp_fields_with_ai(raw_bytes)
-        print(f"[AUTO-PHOTO] parsed={parsed} ai_error={ai_error}", flush=True)
-        if parsed is None:
-            results.append({"file": fname, "ok": False, "error": ai_error or "Claude não conseguiu ler a foto."})
+        # 1. Claude classifica e extrai dados da foto
+        photo_type, parsed, ai_error = classify_photo_with_ai(raw_bytes)
+        print(f"[AUTO-PHOTO] type={photo_type} device={parsed.get('device_name')} error={ai_error}", flush=True)
+
+        if photo_type == "unknown" or ai_error:
+            results.append({"file": fname, "ok": False, "error": ai_error or "Tipo de foto não reconhecido."})
             continue
 
-        device_name = parsed["device_name"]
-        splices_val  = parsed["splices"]
-        map_role     = parsed["map_role"]   # 'MEIO' ou 'PONTA'
-        ft_in        = (parsed.get("ft_in") or "").strip() or None
-        ft_out       = (parsed.get("ft_out") or "").strip() or None
-        if map_role == "PONTA":
-            ft_out = None
+        device_name = parsed.get("device_name") or ""
+        if not device_name:
+            results.append({"file": fname, "ok": False, "error": "Claude não identificou o dispositivo."})
+            continue
 
-        print(f"[AUTO-PHOTO] device={device_name} splices={splices_val} role={map_role} map={map_name}", flush=True)
-
-        # 2. Localiza o Record no banco — busca flexível (case-insensitive, strip)
-        rec = Record.query.filter(
-            Record.map == map_name,
-            Record.company == company,
-            db.func.lower(db.func.trim(Record.device)) == device_name.strip().lower(),
-        ).order_by(Record.id.asc()).first()
-
+        # 2. Localiza o Record no banco
+        rec = _find_record_by_name(device_name, map_name, company)
         if not rec:
-            # Fallback: busca por device contendo o nome lido
-            rec = Record.query.filter(
-                Record.map == map_name,
-                Record.company == company,
-                db.func.lower(Record.device).contains(device_name.strip().lower()),
-            ).order_by(Record.id.asc()).first()
-
-        if not rec:
-            # Lista devices disponíveis para debug
             available = [r.device for r in Record.query.filter(
                 Record.map == map_name, Record.company == company
             ).limit(10).all()]
-            print(f"[AUTO-PHOTO] Devices disponíveis no mapa: {available}", flush=True)
+            print(f"[AUTO-PHOTO] Devices disponíveis: {available}", flush=True)
             results.append({
                 "file": fname, "ok": False,
-                "error": f"Dispositivo '{device_name}' não encontrado no mapa '{map_name}'. Disponíveis: {available[:5]}"
+                "error": f"'{device_name}' não encontrado no mapa '{map_name}'. Disponíveis: {available[:5]}"
             })
             continue
 
-        # 3. Resolve preços e billing codes
-        type_val = (rec.type or "OTE").strip() or "OTE"
-        device_for_price = type_val or device_name
-
-        map_obj = CompanyMap.query.filter(
-            CompanyMap.company == company,
-            CompanyMap.name == map_name,
-            CompanyMap.project_id == project_id,
-        ).order_by(CompanyMap.id.asc()).first()
-
-        included_override, included_applied, map_cfg = resolve_included_override(
-            company=company,
-            project_id=project_id,
-            map_obj=map_obj,
-            map_val=map_name,
-            map_role=map_role,
+        # 3. Processa conforme tipo
+        result = _process_photo_result(
+            rec, raw_bytes, fname, photo_file.content_type or "image/jpeg",
+            photo_type, parsed, splicer_name, company, project_id, map_name,
         )
-
-        is_rib, _ = device_is_ribbon(device_for_price, company, project_id)
-        ribbon_count = None
-
-        price_splices, price_device, total = compute_prices(
-            splices=splices_val,
-            device_name=device_for_price,
-            company=company,
-            project_id=project_id,
-            included_override=included_override,
-            map_role=map_role,
-            ribbon_count=ribbon_count,
-        )
-        _bcodes = compute_billing_codes(
-            splices_val, device_for_price, company, project_id,
-            map_role=map_role, ribbon_count=ribbon_count,
-        )
-
-        # 4. Atualiza o Record — nunca modifica valores já salvos se não vieram da foto
-        rec.splicer               = splicer_name
-        rec.map_role              = map_role
-        rec.splices               = 0 if is_rib else splices_val
-        rec.ribbon_count          = ribbon_count if is_rib else None
-        rec.billing_codes_json    = json.dumps(_bcodes, ensure_ascii=False) if _bcodes else None
-        rec.price_splices_usd     = price_splices
-        rec.price_device_usd      = price_device
-        rec.total_usd             = total
-        rec.included_splices_applied = included_applied
-        rec.ft_in                 = ft_in
-        rec.ft_out                = ft_out
-
-        # 5. Salva a foto no record
-        try:
-            opt_bytes, opt_ct = optimize_upload_bytes(raw_bytes, photo_file.content_type or "image/jpeg")
-            thumb_b, thumb_ct = None, None
-            try:
-                from PIL import Image as _PILImage
-                import io as _io
-                img_pil = _PILImage.open(_io.BytesIO(opt_bytes))
-                img_pil.thumbnail((480, 480))
-                buf = _io.BytesIO()
-                img_pil.save(buf, format="JPEG", quality=65)
-                thumb_b = buf.getvalue()
-                thumb_ct = "image/jpeg"
-            except Exception:
-                pass
-
-            photo_rec = RecordPhoto(
-                record_id=rec.id,
-                filename=fname,
-                data=opt_bytes,
-                content_type=opt_ct,
-                thumb_data=thumb_b,
-                thumb_content_type=thumb_ct,
-            )
-            db.session.add(photo_rec)
-            db.session.flush()
-
-            # Upload para R2 se configurado
-            r2_key = r2_key_for_record_photo(rec.id, fname)
-            thumb_key = r2_key.rsplit(".", 1)[0] + "_thumb.jpg" if thumb_b else None
-            if os.environ.get("R2_BUCKET"):
-                enqueue_r2_upload(photo_rec.id, r2_key, opt_bytes, opt_ct, thumb_key, thumb_b, thumb_ct)
-        except Exception as e:
-            # Foto falhou mas lançamento continua
-            print(f"[AUTO-PHOTO] Erro ao salvar foto: {e}")
-
-        db.session.commit()
-
-        results.append({
-            "file": fname,
-            "ok": True,
-            "device": device_name,
-            "map_role": map_role,
-            "splices": splices_val,
-            "ft_in": ft_in,
-            "ft_out": ft_out,
-            "record_id": rec.id,
-        })
+        results.append(result)
 
     all_ok = all(r["ok"] for r in results)
     return jsonify({"ok": all_ok, "results": results})
@@ -7558,181 +7727,90 @@ def auto_photo_global_launch():
             results.append({"file": fname, "ok": False, "error": f"Erro ao ler arquivo: {e}"})
             continue
 
-        # 1. Claude lê a foto
-        parsed, ai_error = extract_timestamp_fields_with_ai(raw_bytes)
-        if parsed is None:
-            results.append({"file": fname, "ok": False, "error": ai_error or "Claude não conseguiu ler a foto."})
+        # 1. Claude classifica e extrai dados da foto
+        photo_type, parsed, ai_error = classify_photo_with_ai(raw_bytes)
+        print(f"[AUTO-PHOTO-GLOBAL] type={photo_type} device={parsed.get('device_name')} error={ai_error}", flush=True)
+
+        if photo_type == "unknown" or ai_error:
+            results.append({"file": fname, "ok": False, "error": ai_error or "Tipo de foto não reconhecido."})
             continue
 
-        device_name  = parsed["device_name"]
-        splices_val  = parsed["splices"]
-        map_role     = parsed["map_role"]
-        ft_in        = (parsed.get("ft_in") or "").strip() or None
-        ft_out       = (parsed.get("ft_out") or "").strip() or None
-        gps_str      = (parsed.get("gps") or "").strip()
-        if map_role == "PONTA":
-            ft_out = None
+        device_name = parsed.get("device_name") or ""
+        gps_str     = (parsed.get("gps") or "").strip()
 
-        # 2. Localiza o Record pelo nome + GPS
+        # 2. Localiza Record pelo nome + GPS
         rec = None
         gps_distance_m = None
-        photo_lat = None
-        photo_lon = None
+        photo_lat = photo_lon = None
 
-        # Parseia GPS da foto se disponível
         if gps_str:
             try:
-                # Suporta: "38.823849,-82.229083" ou "38.823849°N, 82.229083°W"
                 gps_clean = gps_str.replace("°N","").replace("°S","-").replace("°W",",-").replace("°E",",").replace(" ","")
                 parts = gps_clean.split(",")
                 photo_lat = float(parts[0])
                 photo_lon = float(parts[1])
             except Exception:
-                photo_lat = None
-                photo_lon = None
+                pass
 
-        # Busca candidatos pelo nome do dispositivo
-        q = Record.query.filter(Record.device == device_name)
+        if not device_name:
+            results.append({"file": fname, "ok": False, "error": "Claude não identificou o dispositivo."})
+            continue
+
+        # Busca por nome (case-insensitive)
+        q = Record.query.filter(db.func.lower(db.func.trim(Record.device)) == device_name.strip().lower())
         if user_company:
             q = q.filter(Record.company == user_company)
         candidates = q.all()
 
+        if not candidates:
+            # fallback contains
+            q2 = Record.query.filter(db.func.lower(Record.device).contains(device_name.strip().lower()))
+            if user_company:
+                q2 = q2.filter(Record.company == user_company)
+            candidates = q2.all()
+
         if candidates and photo_lat is not None:
-            # Calcula distância para cada candidato com coordenadas
-            with_coords = [
-                (r, haversine_m(photo_lat, photo_lon, r.latitude, r.longitude))
-                for r in candidates
-                if r.latitude is not None and r.longitude is not None
-            ]
+            with_coords = [(r, haversine_m(photo_lat, photo_lon, r.latitude, r.longitude))
+                           for r in candidates if r.latitude is not None and r.longitude is not None]
             if with_coords:
                 with_coords.sort(key=lambda x: x[1])
-                closest_rec, closest_dist = with_coords[0]
-                rec = closest_rec
-                gps_distance_m = round(closest_dist)
+                rec, gps_distance_m = with_coords[0][0], round(with_coords[0][1])
             else:
                 rec = candidates[0]
         elif candidates:
             rec = candidates[0]
 
-        # Fallback: se não achou pelo nome, tenta achar o device mais próximo pelo GPS puro
+        # GPS fallback — device mais próximo a <50m
         if not rec and photo_lat is not None:
-            all_recs = Record.query.filter(
-                Record.latitude.isnot(None),
-                Record.longitude.isnot(None),
-            )
+            all_recs = Record.query.filter(Record.latitude.isnot(None), Record.longitude.isnot(None))
             if user_company:
                 all_recs = all_recs.filter(Record.company == user_company)
             all_recs = all_recs.all()
-
             if all_recs:
-                with_dist = [
-                    (r, haversine_m(photo_lat, photo_lon, r.latitude, r.longitude))
-                    for r in all_recs
-                ]
+                with_dist = [(r, haversine_m(photo_lat, photo_lon, r.latitude, r.longitude)) for r in all_recs]
                 with_dist.sort(key=lambda x: x[1])
-                closest_rec, closest_dist = with_dist[0]
-                # Aceita fallback GPS puro só se estiver a menos de 50 metros
-                if closest_dist <= 50:
-                    rec = closest_rec
-                    gps_distance_m = round(closest_dist)
+                if with_dist[0][1] <= 50:
+                    rec, gps_distance_m = with_dist[0][0], round(with_dist[0][1])
 
         if not rec:
             results.append({
                 "file": fname, "ok": False,
-                "error": f"Dispositivo '{device_name}' não encontrado."
-                         + (f" GPS: {gps_str}" if gps_str else " (sem GPS na foto)")
+                "error": f"'{device_name}' não encontrado." + (f" GPS: {gps_str}" if gps_str else "")
             })
             continue
 
-        # 3. Calcula preços e billing codes
-        company     = rec.company
-        project_id  = rec.project_id
-        map_name    = rec.map
-        type_val    = (rec.type or "OTE").strip() or "OTE"
-        device_for_price = type_val or device_name
+        company    = rec.company
+        project_id = rec.project_id
+        map_name   = rec.map
 
-        map_obj = CompanyMap.query.filter(
-            CompanyMap.company == company,
-            CompanyMap.name == map_name,
-            CompanyMap.project_id == project_id,
-        ).order_by(CompanyMap.id.asc()).first()
-
-        included_override, included_applied, map_cfg = resolve_included_override(
-            company=company, project_id=project_id,
-            map_obj=map_obj, map_val=map_name, map_role=map_role,
+        # 3. Processa conforme tipo
+        result = _process_photo_result(
+            rec, raw_bytes, fname, photo_file.content_type or "image/jpeg",
+            photo_type, parsed, splicer_name, company, project_id, map_name,
         )
-
-        is_rib, _ = device_is_ribbon(device_for_price, company, project_id)
-        ribbon_count = None
-
-        price_splices, price_device, total = compute_prices(
-            splices=splices_val, device_name=device_for_price,
-            company=company, project_id=project_id,
-            included_override=included_override, map_role=map_role, ribbon_count=ribbon_count,
-        )
-        _bcodes = compute_billing_codes(
-            splices_val, device_for_price, company, project_id,
-            map_role=map_role, ribbon_count=ribbon_count,
-        )
-
-        # 4. Atualiza Record
-        rec.splicer                  = splicer_name
-        rec.map_role                 = map_role
-        rec.splices                  = 0 if is_rib else splices_val
-        rec.ribbon_count             = ribbon_count if is_rib else None
-        rec.billing_codes_json       = json.dumps(_bcodes, ensure_ascii=False) if _bcodes else None
-        rec.price_splices_usd        = price_splices
-        rec.price_device_usd         = price_device
-        rec.total_usd                = total
-        rec.included_splices_applied = included_applied
-        rec.ft_in                    = ft_in
-        rec.ft_out                   = ft_out
-
-        # 5. Salva foto
-        try:
-            opt_bytes, opt_ct = optimize_upload_bytes(raw_bytes, photo_file.content_type or "image/jpeg")
-            thumb_b, thumb_ct = None, None
-            try:
-                from PIL import Image as _PILImage
-                import io as _io
-                img_pil = _PILImage.open(_io.BytesIO(opt_bytes))
-                img_pil.thumbnail((480, 480))
-                buf = _io.BytesIO()
-                img_pil.save(buf, format="JPEG", quality=65)
-                thumb_b  = buf.getvalue()
-                thumb_ct = "image/jpeg"
-            except Exception:
-                pass
-
-            photo_rec = RecordPhoto(
-                record_id=rec.id, filename=fname,
-                data=opt_bytes, content_type=opt_ct,
-                thumb_data=thumb_b, thumb_content_type=thumb_ct,
-            )
-            db.session.add(photo_rec)
-            db.session.flush()
-
-            if os.environ.get("R2_BUCKET"):
-                r2_key   = r2_key_for_record_photo(rec.id, fname)
-                thumb_key = r2_key.rsplit(".", 1)[0] + "_thumb.jpg" if thumb_b else None
-                enqueue_r2_upload(photo_rec.id, r2_key, opt_bytes, opt_ct, thumb_key, thumb_b, thumb_ct)
-        except Exception as e:
-            print(f"[AUTO-PHOTO-GLOBAL] Erro ao salvar foto: {e}")
-
-        db.session.commit()
-
-        results.append({
-            "file":           fname,
-            "ok":             True,
-            "device":         device_name,
-            "map_name":       map_name,
-            "map_role":       map_role,
-            "splices":        splices_val,
-            "ft_in":          ft_in,
-            "ft_out":         ft_out,
-            "gps_distance_m": gps_distance_m,
-            "record_id":      rec.id,
-        })
+        if gps_distance_m is not None:
+            result["gps_distance_m"] = gps_distance_m
+        results.append(result)
 
     all_ok = all(r["ok"] for r in results)
     return jsonify({"ok": all_ok, "results": results})
