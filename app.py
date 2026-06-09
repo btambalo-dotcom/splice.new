@@ -7544,26 +7544,17 @@ def _process_photo_result(rec, raw_bytes, fname, content_type, photo_type, parse
 
     elif photo_type == "test":
         power_dbm  = parsed.get("power_dbm")
-        power_uw   = parsed.get("power_uw")
-        wavelength = parsed.get("wavelength_nm")
 
-        # Monta string de níveis no formato existente
-        parts = []
-        if wavelength:
-            parts.append(f"{wavelength}nm")
-        if power_uw is not None:
-            parts.append(f"{power_uw}µW")
+        # Formato: cada porta é um valor dBm separado por vírgula
+        # Ex: "-15.21,-15.46,-15.45" → Porta 1, Porta 2, Porta 3
         if power_dbm is not None:
-            parts.append(f"{power_dbm}dBm")
-        levels_str = " | ".join(parts) if parts else None
-
-        # Acumula leituras: não sobrescreve, concatena
-        existing = rec.test_levels or ""
-        if levels_str:
+            dbm_str = str(power_dbm)
+            existing = rec.test_levels or ""
             if existing:
-                rec.test_levels = existing + "\n" + levels_str
+                # Acumula: adiciona nova porta separada por vírgula
+                rec.test_levels = existing + "," + dbm_str
             else:
-                rec.test_levels = levels_str
+                rec.test_levels = dbm_str
 
         rec.test_done = True
         rec.test_date = datetime.utcnow()
@@ -7823,6 +7814,32 @@ def auto_photo_global_launch():
 
     all_ok = all(r["ok"] for r in results)
     return jsonify({"ok": all_ok, "results": results})
+
+
+@app.route("/api/records/<int:record_id>/fix-test-levels", methods=["POST"])
+@login_required
+def fix_test_levels(record_id):
+    """Corrige ou redefine o test_levels de um record.
+    Body JSON: {"levels": "-15.21,-15.46,-15.45"}  ou {"levels": ""} para limpar.
+    """
+    rec = Record.query.get_or_404(record_id)
+    data = request.get_json(silent=True) or {}
+    new_levels = (data.get("levels") or "").strip()
+
+    # Normaliza: extrai só os valores dBm de qualquer formato antigo
+    if new_levels and ("nm" in new_levels or "µW" in new_levels or "|" in new_levels or "\n" in new_levels):
+        import re
+        dbm_values = re.findall(r"(-\d+\.\d+)\s*dBm", new_levels)
+        if not dbm_values:
+            dbm_values = re.findall(r"(-\d+\.\d+)", new_levels)
+        new_levels = ",".join(dbm_values)
+
+    rec.test_levels = new_levels or None
+    rec.test_done = bool(new_levels)
+    if rec.test_done and not rec.test_date:
+        rec.test_date = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"ok": True, "test_levels": rec.test_levels})
 
 @app.route('/__version')
 def __version__():
