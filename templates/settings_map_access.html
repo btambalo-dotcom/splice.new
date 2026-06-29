@@ -23,6 +23,24 @@
       </div>
     </div>
 
+    <!-- Toggle: Auto-criar dispositivos via Foto Auto -->
+    <div class="card bg-dark border-secondary p-3 mb-4 mt-2">
+      <h6 class="text-light mb-2">📷 Foto Automático — Auto-criar dispositivos</h6>
+      <p class="text-muted small mb-2">
+        Quando ativado, o sistema cria automaticamente um novo dispositivo no mapa
+        ao receber uma foto de splice box de um device ainda não cadastrado.
+        O GPS da foto define a posição do pin.
+      </p>
+      <div class="form-check form-switch">
+        <input class="form-check-input" type="checkbox" name="photo_create_enabled"
+               id="photo_create_enabled" role="switch"
+               {% if mp.photo_create_enabled %}checked{% endif %}>
+        <label class="form-check-label text-light" for="photo_create_enabled">
+          Ativar auto-criação de dispositivos neste mapa
+        </label>
+      </div>
+    </div>
+
     <button class="btn btn-primary" type="submit">Salvar acesso</button>
     <a href="{{ url_for('settings_project_detail', pid=project.id) }}" class="btn btn-outline-light ms-2">
       Voltar para configuração do projeto

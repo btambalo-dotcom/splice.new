@@ -865,6 +865,9 @@ class CompanyMap(db.Model):
     # Cores personalizadas por seção (JSON: { "SEC A": "#ff0000", ... })
     section_colors_json = db.Column(db.Text, nullable=True)
 
+    # Permite criação automática de dispositivos via foto (Foto Auto)
+    photo_create_enabled = db.Column(db.Boolean, nullable=False, default=False)
+
     # Splicers com permissão explícita para acessar esse mapa no módulo interativo.
     allowed_splicers = db.relationship(
         "User",
@@ -1291,6 +1294,7 @@ with app.app_context():
     ensure("company_map", "included_splices_meio", "INTEGER")
     ensure("company_map", "included_splices_ponta", "INTEGER")
     ensure("company_map", "section_colors_json", "TEXT")
+    ensure("company_map", "photo_create_enabled", "BOOLEAN")
     ensure("record_photo", "thumb_data", "BYTEA")
     ensure("record_photo", "thumb_content_type", "VARCHAR(100)")
     ensure("record_photo", "is_test", "BOOLEAN")
@@ -4157,6 +4161,7 @@ def settings_map_access(map_id):
             if u and not u.is_admin:
                 new_users.append(u)
         mp.allowed_splicers = new_users
+        mp.photo_create_enabled = bool(request.form.get("photo_create_enabled"))
         db.session.commit()
         flash("Splicers com acesso ao mapa atualizados.", "success")
         return redirect(url_for("settings_map_access", map_id=mp.id))
@@ -7657,16 +7662,91 @@ def auto_photo_launch(map_id):
 
         # 2. Localiza o Record no banco
         rec = _find_record_by_name(device_name, map_name, company)
+
         if not rec:
-            available = [r.device for r in Record.query.filter(
-                Record.map == map_name, Record.company == company
-            ).limit(10).all()]
-            print(f"[AUTO-PHOTO] Devices disponíveis: {available}", flush=True)
-            results.append({
-                "file": fname, "ok": False,
-                "error": f"'{device_name}' não encontrado no mapa '{map_name}'. Disponíveis: {available[:5]}"
-            })
-            continue
+            # Se o mapa tem photo_create_enabled e a foto é splice box → cria o device
+            if mp.photo_create_enabled and photo_type == "splice":
+                gps_str = (parsed.get("gps") or "").strip()
+                lat, lon = None, None
+                if gps_str:
+                    try:
+                        gps_clean = gps_str.replace("°N","").replace("°S","-").replace("°W",",-").replace("°E",",").replace(" ","")
+                        parts = gps_clean.split(",")
+                        lat = float(parts[0])
+                        lon = float(parts[1])
+                    except Exception:
+                        pass
+
+                map_role = (parsed.get("map_role") or "PONTA").strip().upper()
+                splices_val = parsed.get("splices") or 0
+                ft_in  = (str(parsed.get("ft_in") or "")).strip() or None
+                ft_out = (str(parsed.get("ft_out") or "")).strip() or None
+                if map_role == "PONTA":
+                    ft_out = None
+
+                # Calcula preços
+                included_override, included_applied, _ = resolve_included_override(
+                    company=company, project_id=project_id,
+                    map_obj=mp, map_val=map_name, map_role=map_role,
+                )
+                is_rib, _ = device_is_ribbon("OTE", company, project_id)
+                price_splices, price_device, total = compute_prices(
+                    splices=splices_val, device_name="OTE", company=company,
+                    project_id=project_id, included_override=included_override,
+                    map_role=map_role, ribbon_count=None,
+                )
+                _bcodes = compute_billing_codes(
+                    splices_val, "OTE", company, project_id,
+                    map_role=map_role, ribbon_count=None,
+                )
+
+                rec = Record(
+                    map=map_name,
+                    device=device_name,
+                    type="OTE",
+                    company=company,
+                    project_id=project_id,
+                    splicer=splicer_name,
+                    map_role=map_role,
+                    splices=splices_val,
+                    ft_in=ft_in,
+                    ft_out=ft_out,
+                    latitude=lat,
+                    longitude=lon,
+                    price_splices_usd=price_splices,
+                    price_device_usd=price_device,
+                    total_usd=total,
+                    billing_codes_json=json.dumps(_bcodes, ensure_ascii=False) if _bcodes else None,
+                    included_splices_applied=included_applied,
+                    created_date=datetime.utcnow(),
+                )
+                db.session.add(rec)
+                db.session.flush()
+                print(f"[AUTO-PHOTO] Criado novo device: {device_name} lat={lat} lon={lon}", flush=True)
+
+                _save_photo_to_record(rec, raw_bytes, fname, photo_file.content_type or "image/jpeg")
+                db.session.commit()
+
+                results.append({
+                    "file": fname, "ok": True, "action": "created",
+                    "device": device_name, "map_name": map_name,
+                    "map_role": map_role, "splices": splices_val,
+                    "ft_in": ft_in, "ft_out": ft_out,
+                    "lat": lat, "lon": lon, "record_id": rec.id,
+                })
+                continue
+            else:
+                available = [r.device for r in Record.query.filter(
+                    Record.map == map_name, Record.company == company
+                ).limit(10).all()]
+                print(f"[AUTO-PHOTO] Devices disponíveis: {available}", flush=True)
+                msg = f"'{device_name}' não encontrado no mapa '{map_name}'."
+                if not mp.photo_create_enabled:
+                    msg += " (Auto-criação desativada neste mapa)"
+                elif photo_type != "splice":
+                    msg += " (Auto-criação só funciona com foto de splice box)"
+                results.append({"file": fname, "ok": False, "error": msg})
+                continue
 
         # 3. Processa conforme tipo
         result = _process_photo_result(

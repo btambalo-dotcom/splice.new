@@ -2156,6 +2156,10 @@ function openDeviceModalById(id) {
               detail = '<span class="text-muted small">' + r.device + ' · 📊 Teste · ' + (r.power_dbm != null ? r.power_dbm + ' dBm' : '') + '</span>';
             } else if (action === 'placed') {
               detail = '<span class="text-muted small">' + r.device + ' · 📍 Subido</span>';
+            } else if (action === 'created') {
+              detail = '<span class="text-success small">✨ Novo dispositivo criado · ' + (r.map_role || '') + ' · ' + (r.splices || 0) + ' fusões' +
+                (r.ft_in ? ' · IN: ' + r.ft_in : '') +
+                (r.lat ? ' · 📍 ' + r.lat.toFixed(5) + ',' + r.lon.toFixed(5) : '') + '</span>';
             } else {
               detail = '<span class="text-muted small">' + r.device + ' · ' + (r.map_role || '') + ' · ' + (r.splices || 0) + ' fusões' +
                 (r.ft_in ? ' · IN: ' + r.ft_in : '') + (r.ft_out ? ' · OUT: ' + r.ft_out : '') + '</span>';
