@@ -7444,6 +7444,38 @@ if __name__ == "__main__":
 #  HELPERS compartilhados — Auto Photo
 # ─────────────────────────────────────────────────────────────
 
+
+def _parse_gps_str(gps_str):
+    """Converte string GPS do Claude para (lat, lon) floats.
+
+    Suporta formatos:
+      "38.811911,-82.216242"          → lat=38.811911 lon=-82.216242
+      "38.811911°N, 82.216242°W"      → lat=38.811911 lon=-82.216242
+      "28.800409N, 81.635749W"        → lat=28.800409 lon=-81.635749
+      "38.811911, -82.216242"         → lat=38.811911 lon=-82.216242
+    """
+    import re as _re
+    if not gps_str:
+        return None, None
+    s = gps_str.strip()
+    # Tenta extrair com regex: dois números com direções opcionais
+    pat = _re.compile(
+        r'([+-]?\d+\.?\d*)\s*°?\s*([NSns])?\s*[,\s]+\s*([+-]?\d+\.?\d*)\s*°?\s*([EWew])?'
+    )
+    m = pat.search(s)
+    if not m:
+        return None, None
+    lat = float(m.group(1))
+    lat_dir = (m.group(2) or '').upper()
+    lon = float(m.group(3))
+    lon_dir = (m.group(4) or '').upper()
+    if lat_dir == 'S':
+        lat = -abs(lat)
+    if lon_dir == 'W':
+        lon = -abs(lon)
+    # Garante que lon negativo se já vier negativo no string
+    return lat, lon
+
 def _save_photo_to_record(rec, raw_bytes, fname, content_type, is_test=False, is_placed=False):
     """Otimiza e salva uma foto em um Record. Retorna True se ok."""
     try:
@@ -7676,6 +7708,23 @@ def auto_photo_launch(map_id):
         # 2. Localiza o Record no banco
         rec = _find_record_by_name(device_name, map_name, company)
 
+        # Verifica duplicação por hash da foto (evita lançar a mesma foto duas vezes)
+        import hashlib as _hashlib
+        photo_hash = _hashlib.md5(raw_bytes).hexdigest()
+        if rec:
+            # Checa se já existe foto com o mesmo hash neste record
+            existing_hashes = [
+                _hashlib.md5(p.data).hexdigest()
+                for p in RecordPhoto.query.filter_by(record_id=rec.id).all()
+                if p.data
+            ]
+            if photo_hash in existing_hashes:
+                results.append({
+                    "file": fname, "ok": False,
+                    "error": f"Foto já lançada anteriormente para '{device_name}'. Ignorado."
+                })
+                continue
+
         if not rec:
             # Se o mapa tem photo_create_enabled e a foto é splice box → cria o device
             if mp.photo_create_enabled and photo_type == "splice":
@@ -7683,10 +7732,9 @@ def auto_photo_launch(map_id):
                 lat, lon = None, None
                 if gps_str:
                     try:
-                        gps_clean = gps_str.replace("°N","").replace("°S","-").replace("°W",",-").replace("°E",",").replace(" ","")
-                        parts = gps_clean.split(",")
-                        lat = float(parts[0])
-                        lon = float(parts[1])
+                        lat, lon = _parse_gps_str(gps_str)
+                        if lat is None:
+                            raise ValueError('GPS inválido')
                     except Exception:
                         pass
 
@@ -7853,10 +7901,9 @@ def auto_photo_global_launch():
 
         if gps_str:
             try:
-                gps_clean = gps_str.replace("°N","").replace("°S","-").replace("°W",",-").replace("°E",",").replace(" ","")
-                parts = gps_clean.split(",")
-                photo_lat = float(parts[0])
-                photo_lon = float(parts[1])
+                photo_lat, photo_lon = _parse_gps_str(gps_str)
+                if photo_lat is None:
+                    raise ValueError('GPS inválido')
             except Exception:
                 pass
 
@@ -7904,6 +7951,21 @@ def auto_photo_global_launch():
             results.append({
                 "file": fname, "ok": False,
                 "error": f"'{device_name}' não encontrado." + (f" GPS: {gps_str}" if gps_str else "")
+            })
+            continue
+
+        # Verifica duplicata por hash MD5 da foto
+        import hashlib as _hashlib
+        photo_hash = _hashlib.md5(raw_bytes).hexdigest()
+        existing_hashes = [
+            _hashlib.md5(p.data).hexdigest()
+            for p in RecordPhoto.query.filter_by(record_id=rec.id).all()
+            if p.data
+        ]
+        if photo_hash in existing_hashes:
+            results.append({
+                "file": fname, "ok": False,
+                "error": f"Foto já lançada anteriormente para '{device_name}'. Ignorado."
             })
             continue
 
