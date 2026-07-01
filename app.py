@@ -1818,8 +1818,13 @@ def classify_photo_with_ai(image_bytes: bytes):
             "Você é um especialista em fotos de campo de instalação de fibra óptica (FTTX).\n"
             "As fotos são tiradas com o app Timemark que adiciona carimbo com nome, data, endereço e GPS.\n\n"
             "Analise a imagem e determine o TIPO da foto:\n\n"
-            "TIPO 'splice': mostra o interior de uma splice box aberta com splice tray, fibras e fusões.\n"
-            "  Extraia: device_name (da etiqueta dentro da box ou carimbo), splices (da etiqueta numerada ex: #1-12 = 12),\n"
+            "TIPO 'splice': mostra o interior de um dispositivo de fibra óptica aberto com splice tray e fusões.\n"
+            "  Há dois subtipos — determine o device_type:\n"
+            "  device_type='OTE': splice box PEQUENA (tipo field terminal FT), bandeja compacta, poucos conectores.\n"
+            "  device_type='CAN': splice box GRANDE (tipo MDC, closure, manifold), bandeja LONGA e LARGA com\n"
+            "    MUITAS fileiras de fusões/splices (tipicamente 48, 72, 96, 144, 288+). Geralmente nome MDC-xx.\n"
+            "  Extraia: device_name (da etiqueta dentro da box ou carimbo), device_type ('OTE' ou 'CAN'),\n"
+            "  splices (total de fusões — some todas as fileiras visíveis na bandeja),\n"
             "  map_role ('PONTA' se só IN, 'MEIO' se IN e OUT), ft_in, ft_out, gps, photo_datetime\n\n"
             "TIPO 'test': mostra um equipamento de medição óptica (power meter laranja/amarelo, OTDR) com display numérico.\n"
             "  Extraia: device_name (do carimbo Timemark), wavelength_nm (ex: 1550), power_uw (ex: 30.14),\n"
@@ -1841,7 +1846,8 @@ def classify_photo_with_ai(image_bytes: bytes):
             "NUNCA retorne 'unknown' se a foto tiver carimbo Timemark com nome do dispositivo.\n\n"
             "Retorne APENAS JSON válido sem explicações:\n"
             "{\"photo_type\": \"splice|test|placed|unknown\", \"device_name\": \"...\", "
-            "\"splices\": null, \"map_role\": null, \"ft_in\": null, \"ft_out\": null, "
+            "\"device_type\": \"OTE|CAN\", \"splices\": null, \"map_role\": null, "
+            "\"ft_in\": null, \"ft_out\": null, "
             "\"wavelength_nm\": null, \"power_uw\": null, \"power_dbm\": null, "
             "\"gps\": null, \"photo_datetime\": null}"
         )
@@ -1893,6 +1899,9 @@ def classify_photo_with_ai(image_bytes: bytes):
             result['ft_out'] = (str(parsed.get('ft_out') or '')).strip() or None
             if result.get('map_role') == 'PONTA':
                 result['ft_out'] = None
+            # device_type: CAN (bandeja grande) ou OTE (field terminal pequeno)
+            dt_raw = (parsed.get('device_type') or 'OTE').strip().upper()
+            result['device_type'] = 'CAN' if dt_raw == 'CAN' else 'OTE'
         elif photo_type == 'test':
             try: result['wavelength_nm'] = int(parsed.get('wavelength_nm') or 0) or None
             except: result['wavelength_nm'] = None
@@ -7505,6 +7514,10 @@ def _process_photo_result(rec, raw_bytes, fname, content_type, photo_type, parse
         ft_out      = (str(parsed.get("ft_out") or "")).strip() or None
         if map_role == "PONTA":
             ft_out = None
+        # Usa device_type da foto se disponível, senão mantém o tipo do record
+        photo_device_type = (parsed.get("device_type") or "").strip().upper()
+        if photo_device_type in ("OTE", "CAN") and rec.type != photo_device_type:
+            rec.type = photo_device_type
 
         type_val         = (rec.type or "OTE").strip() or "OTE"
         device_for_price = type_val or rec.device
@@ -7683,27 +7696,30 @@ def auto_photo_launch(map_id):
                 ft_out = (str(parsed.get("ft_out") or "")).strip() or None
                 if map_role == "PONTA":
                     ft_out = None
+                # Detecta CAN ou OTE pela foto
+                photo_device_type = (parsed.get("device_type") or "OTE").strip().upper()
+                auto_type = "CAN" if photo_device_type == "CAN" else "OTE"
 
                 # Calcula preços
                 included_override, included_applied, _ = resolve_included_override(
                     company=company, project_id=project_id,
                     map_obj=mp, map_val=map_name, map_role=map_role,
                 )
-                is_rib, _ = device_is_ribbon("OTE", company, project_id)
+                is_rib, _ = device_is_ribbon(auto_type, company, project_id)
                 price_splices, price_device, total = compute_prices(
-                    splices=splices_val, device_name="OTE", company=company,
+                    splices=splices_val, device_name=auto_type, company=company,
                     project_id=project_id, included_override=included_override,
                     map_role=map_role, ribbon_count=None,
                 )
                 _bcodes = compute_billing_codes(
-                    splices_val, "OTE", company, project_id,
+                    splices_val, auto_type, company, project_id,
                     map_role=map_role, ribbon_count=None,
                 )
 
                 rec = Record(
                     map=map_name,
                     device=device_name,
-                    type="OTE",
+                    type=auto_type,
                     company=company,
                     project_id=project_id,
                     splicer=splicer_name,
