@@ -872,6 +872,8 @@ class CompanyMap(db.Model):
 
     # Permite criação automática de dispositivos via foto (Foto Auto)
     photo_create_enabled = db.Column(db.Boolean, nullable=False, default=False)
+    # Mapa ativo = aparece na lista principal; inativo = colapsado
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
 
     # Splicers com permissão explícita para acessar esse mapa no módulo interativo.
     allowed_splicers = db.relationship(
@@ -1301,6 +1303,7 @@ with app.app_context():
     ensure("company_map", "included_splices_ponta", "INTEGER")
     ensure("company_map", "section_colors_json", "TEXT")
     ensure("company_map", "photo_create_enabled", "BOOLEAN")
+    ensure("company_map", "is_active", "BOOLEAN DEFAULT TRUE")
     ensure("user", "is_master_owner", "BOOLEAN")
     ensure("splice_tier", "owner_price_per_splice_usd", "DOUBLE PRECISION")
     ensure("device_type", "owner_value_usd", "DOUBLE PRECISION")
@@ -3689,11 +3692,14 @@ def my_maps():
                 )
             )
 
-    maps = query.order_by(CompanyMap.company, CompanyMap.name).all()
+    all_maps = query.order_by(CompanyMap.company, CompanyMap.name).all()
+    active_maps   = [m for m in all_maps if getattr(m, "is_active", True) is not False]
+    inactive_maps = [m for m in all_maps if getattr(m, "is_active", True) is False]
 
     return render_template(
         "my_maps.html",
-        maps=maps,
+        active_maps=active_maps,
+        inactive_maps=inactive_maps,
         user_company=user_company,
     )
 
@@ -4193,6 +4199,7 @@ def settings_map_access(map_id):
                 new_users.append(u)
         mp.allowed_splicers = new_users
         mp.photo_create_enabled = bool(request.form.get("photo_create_enabled"))
+        mp.is_active = bool(request.form.get("map_is_active", True))
         db.session.commit()
         flash("Splicers com acesso ao mapa atualizados.", "success")
         return redirect(url_for("settings_map_access", map_id=mp.id))
