@@ -25,6 +25,10 @@
             <a href="{{ url_for('entry') }}" class="btn btn-sm btn-outline-light me-2" data-i18n="entry">Lançar</a>
             <a href="{{ url_for('photo_entry') }}" class="btn btn-sm btn-outline-info me-2" data-i18n="photo_entry">Lançar (foto)</a>
             <a href="{{ url_for('auto_photo_page') }}" class="btn btn-sm btn-success me-2">📷 Foto Auto</a>
+            <a href="{{ url_for('service_entry') }}" class="btn btn-sm btn-outline-info me-2">📋 Serviços</a>
+            {% if current_user.is_admin %}
+            <a href="{{ url_for('service_codes') }}" class="btn btn-sm btn-outline-secondary me-2">⚙️ Cód.</a>
+            {% endif %}
             {% if current_user.is_master_owner %}
             <a href="{{ url_for('owner_report') }}" class="btn btn-sm btn-warning me-2">🔐 Owner</a>
             {% endif %}

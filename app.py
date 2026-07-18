@@ -848,6 +848,41 @@ class HourRecord(db.Model):
     map_name = db.Column(db.String(200), nullable=True)
 
 
+
+class ServiceCode(db.Model):
+    """Cadastro de códigos de serviço (SHH01, SHS02, OHE15, etc.)."""
+    __tablename__ = "service_code"
+    id            = db.Column(db.Integer, primary_key=True)
+    code          = db.Column(db.String(30), nullable=False)        # ex: SHH01
+    description   = db.Column(db.String(255), nullable=False)       # ex: Splicer per hour
+    unit_price    = db.Column(db.Float, default=0.0, nullable=False) # preço ADM
+    owner_price   = db.Column(db.Float, nullable=True)              # preço owner (só master vê)
+    by_quantity   = db.Column(db.Boolean, default=True, nullable=False) # True=qty×price, False=fixo
+    company       = db.Column(db.String(120), nullable=True)
+    project_id    = db.Column(db.Integer, db.ForeignKey("project.id"), nullable=True, index=True)
+    project       = db.relationship("Project", backref=db.backref("service_codes", lazy=True))
+
+
+class ServiceEntry(db.Model):
+    """Lançamento de um código de serviço (por dia)."""
+    __tablename__ = "service_entry"
+    id            = db.Column(db.Integer, primary_key=True)
+    company       = db.Column(db.String(120), nullable=True)
+    project_id    = db.Column(db.Integer, db.ForeignKey("project.id"), nullable=True, index=True)
+    project       = db.relationship("Project", backref=db.backref("service_entries", lazy=True))
+    map_name      = db.Column(db.String(200), nullable=True)
+    splicer       = db.Column(db.String(120), nullable=True)
+    entry_date    = db.Column(db.DateTime, nullable=True)           # data do serviço
+    created_at    = db.Column(db.DateTime, default=datetime.utcnow)
+    service_code_id = db.Column(db.Integer, db.ForeignKey("service_code.id"), nullable=True)
+    service_code  = db.relationship("ServiceCode")
+    code          = db.Column(db.String(30), nullable=True)         # cópia do código
+    description   = db.Column(db.String(255), nullable=True)        # cópia da descrição
+    quantity      = db.Column(db.Float, default=1.0, nullable=False)
+    unit_price    = db.Column(db.Float, default=0.0, nullable=False)
+    total_usd     = db.Column(db.Float, default=0.0, nullable=False)
+    notes         = db.Column(db.String(255), nullable=True)        # observação opcional
+
 # Associação entre mapas interativos e splicers que podem acessá-los.
 map_splicer_access = db.Table(
     "map_splicer_access",
@@ -1304,6 +1339,41 @@ with app.app_context():
     ensure("company_map", "section_colors_json", "TEXT")
     ensure("company_map", "photo_create_enabled", "BOOLEAN")
     ensure("company_map", "is_active", "BOOLEAN DEFAULT TRUE")
+    # Tabelas novas — criadas pelo db.create_all() mas ensure garante colunas extras
+    try:
+        db.session.execute(text('''
+            CREATE TABLE IF NOT EXISTS service_code (
+                id SERIAL PRIMARY KEY,
+                code VARCHAR(30) NOT NULL,
+                description VARCHAR(255) NOT NULL,
+                unit_price FLOAT DEFAULT 0.0,
+                owner_price FLOAT,
+                by_quantity BOOLEAN DEFAULT TRUE,
+                company VARCHAR(120),
+                project_id INTEGER REFERENCES project(id)
+            )
+        '''))
+        db.session.execute(text('''
+            CREATE TABLE IF NOT EXISTS service_entry (
+                id SERIAL PRIMARY KEY,
+                company VARCHAR(120),
+                project_id INTEGER REFERENCES project(id),
+                map_name VARCHAR(200),
+                splicer VARCHAR(120),
+                entry_date TIMESTAMP,
+                created_at TIMESTAMP DEFAULT NOW(),
+                service_code_id INTEGER REFERENCES service_code(id),
+                code VARCHAR(30),
+                description VARCHAR(255),
+                quantity FLOAT DEFAULT 1.0,
+                unit_price FLOAT DEFAULT 0.0,
+                total_usd FLOAT DEFAULT 0.0,
+                notes VARCHAR(255)
+            )
+        '''))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
     ensure("user", "is_master_owner", "BOOLEAN")
     ensure("splice_tier", "owner_price_per_splice_usd", "DOUBLE PRECISION")
     ensure("device_type", "owner_value_usd", "DOUBLE PRECISION")
@@ -8273,6 +8343,170 @@ def toggle_map_active(map_id):
     mp.is_active = not bool(getattr(mp, "is_active", True))
     db.session.commit()
     return jsonify({"ok": True, "is_active": mp.is_active, "map_id": mp.id})
+
+
+# ═══════════════════════════════════════════════════════════
+#  CÓDIGOS DE SERVIÇO — cadastro e lançamento
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/service-codes")
+@login_required
+@admin_required
+def service_codes():
+    """Lista todos os códigos de serviço cadastrados."""
+    company  = request.args.get("company") or None
+    proj_id  = request.args.get("project_id") or None
+    q = ServiceCode.query
+    if company:  q = q.filter(ServiceCode.company == company)
+    if proj_id:  q = q.filter(ServiceCode.project_id == int(proj_id))
+    codes = q.order_by(ServiceCode.code).all()
+    projects  = Project.query.order_by(Project.name).all()
+    companies = [r[0] for r in db.session.query(ServiceCode.company).distinct().all() if r[0]]
+    return render_template("service_codes.html", codes=codes, projects=projects,
+                           companies=companies, company=company, proj_id=proj_id)
+
+
+@app.route("/service-codes/add", methods=["POST"])
+@login_required
+@admin_required
+def service_code_add():
+    """Cadastra ou atualiza um código de serviço."""
+    code        = (request.form.get("code") or "").strip().upper()
+    description = (request.form.get("description") or "").strip()
+    company     = (request.form.get("company") or "").strip() or None
+    proj_id_raw = request.form.get("project_id") or None
+    project_id  = int(proj_id_raw) if proj_id_raw else None
+    by_quantity = request.form.get("by_quantity") == "1"
+    is_mo       = bool(getattr(current_user, "is_master_owner", False))
+
+    try: unit_price = float(request.form.get("unit_price") or 0)
+    except: unit_price = 0.0
+    try: owner_price = float(request.form.get("owner_price") or 0) if is_mo else None
+    except: owner_price = None
+
+    if not code or not description:
+        flash("Código e descrição são obrigatórios.", "danger")
+        return redirect(url_for("service_codes"))
+
+    sc = ServiceCode.query.filter_by(code=code, company=company, project_id=project_id).first()
+    if sc:
+        sc.description = description
+        sc.unit_price  = unit_price
+        sc.by_quantity = by_quantity
+        if is_mo: sc.owner_price = owner_price
+    else:
+        sc = ServiceCode(code=code, description=description, unit_price=unit_price,
+                         owner_price=owner_price if is_mo else None,
+                         by_quantity=by_quantity, company=company, project_id=project_id)
+        db.session.add(sc)
+    db.session.commit()
+    flash(f"Código {code} salvo.", "success")
+    return redirect(url_for("service_codes"))
+
+
+@app.route("/service-codes/<int:sc_id>/delete", methods=["POST"])
+@login_required
+@admin_required
+def service_code_delete(sc_id):
+    sc = ServiceCode.query.get_or_404(sc_id)
+    db.session.delete(sc)
+    db.session.commit()
+    flash("Código removido.", "success")
+    return redirect(url_for("service_codes"))
+
+
+@app.route("/service-entry", methods=["GET", "POST"])
+@login_required
+def service_entry():
+    """Tela de lançamento de códigos de serviço por dia."""
+    is_owner = bool(getattr(current_user, "is_company_owner", False))
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if is_owner and not is_admin:
+        flash("Sem permissão.", "danger")
+        return redirect(url_for("index"))
+
+    user_company = getattr(current_user, "company_name", None) or None
+
+    if request.method == "POST":
+        sc_id      = request.form.get("service_code_id")
+        quantity   = float(request.form.get("quantity") or 1)
+        notes      = (request.form.get("notes") or "").strip() or None
+        map_name   = (request.form.get("map_name") or "").strip() or None
+        date_str   = (request.form.get("entry_date") or "").strip()
+        company    = (request.form.get("company") or user_company or "").strip() or None
+        proj_id_raw = request.form.get("project_id") or None
+        project_id = int(proj_id_raw) if proj_id_raw else None
+
+        try: entry_date = datetime.strptime(date_str, "%Y-%m-%d") if date_str else datetime.utcnow()
+        except: entry_date = datetime.utcnow()
+
+        sc = ServiceCode.query.get(sc_id) if sc_id else None
+        if not sc:
+            flash("Selecione um código de serviço.", "danger")
+        else:
+            unit_price = sc.unit_price
+            total = unit_price * quantity if sc.by_quantity else unit_price
+
+            entry = ServiceEntry(
+                company=company, project_id=project_id, map_name=map_name,
+                splicer=getattr(current_user, "splicer_name", None) or current_user.username,
+                entry_date=entry_date,
+                service_code_id=sc.id, code=sc.code, description=sc.description,
+                quantity=quantity, unit_price=unit_price, total_usd=total, notes=notes,
+            )
+            db.session.add(entry)
+            db.session.commit()
+            flash(f"Lançamento {sc.code} salvo — ${total:.2f}", "success")
+            return redirect(url_for("service_entry"))
+
+    # GET — lista lançamentos recentes
+    q = ServiceEntry.query
+    if not is_admin and user_company:
+        q = q.filter(ServiceEntry.company == user_company)
+    recent = q.order_by(ServiceEntry.entry_date.desc(), ServiceEntry.id.desc()).limit(50).all()
+
+    # Códigos disponíveis para o usuário
+    sc_q = ServiceCode.query
+    if user_company and not is_admin:
+        sc_q = sc_q.filter(db.or_(ServiceCode.company == user_company, ServiceCode.company.is_(None)))
+    service_codes_list = sc_q.order_by(ServiceCode.code).all()
+
+    projects  = Project.query.order_by(Project.name).all()
+    companies = [r[0] for r in db.session.query(ServiceEntry.company).distinct().all() if r[0]]
+    maps      = [r[0] for r in db.session.query(ServiceEntry.map_name).distinct().all() if r[0]]
+
+    return render_template("service_entry.html",
+        recent=recent, service_codes=service_codes_list,
+        projects=projects, companies=companies, maps=maps,
+        user_company=user_company, is_admin=is_admin,
+        today=date.today().isoformat(),
+    )
+
+
+@app.route("/service-entry/<int:entry_id>/delete", methods=["POST"])
+@login_required
+@admin_required
+def service_entry_delete(entry_id):
+    e = ServiceEntry.query.get_or_404(entry_id)
+    db.session.delete(e)
+    db.session.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/service-codes-by-project")
+@login_required
+def api_service_codes_by_project():
+    """Retorna códigos filtrados por projeto/empresa para o form de lançamento."""
+    company    = request.args.get("company") or None
+    project_id = request.args.get("project_id") or None
+    q = ServiceCode.query
+    if company:    q = q.filter(db.or_(ServiceCode.company == company, ServiceCode.company.is_(None)))
+    if project_id: q = q.filter(db.or_(ServiceCode.project_id == int(project_id), ServiceCode.project_id.is_(None)))
+    codes = q.order_by(ServiceCode.code).all()
+    return jsonify([{
+        "id": sc.id, "code": sc.code, "description": sc.description,
+        "unit_price": sc.unit_price, "by_quantity": sc.by_quantity,
+    } for sc in codes])
 
 @app.route('/__version')
 def __version__():
