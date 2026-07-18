@@ -8262,6 +8262,18 @@ def owner_set_master():
     db.session.commit()
     return jsonify({"ok": True, "username": u.username, "is_master_owner": u.is_master_owner})
 
+
+@app.route("/api/maps/<int:map_id>/toggle-active", methods=["POST"])
+@login_required
+def toggle_map_active(map_id):
+    """Admin: ativa ou desativa um mapa direto da lista."""
+    if not bool(getattr(current_user, "is_admin", False)):
+        return jsonify({"ok": False, "error": "Apenas admin."}), 403
+    mp = CompanyMap.query.get_or_404(map_id)
+    mp.is_active = not bool(getattr(mp, "is_active", True))
+    db.session.commit()
+    return jsonify({"ok": True, "is_active": mp.is_active, "map_id": mp.id})
+
 @app.route('/__version')
 def __version__():
     return 'PHOTO-REMOVE-V49 2026-02-12'

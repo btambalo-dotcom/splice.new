@@ -6,8 +6,10 @@
   <div>
     <h3 class="mb-0">Meus mapas</h3>
     <small class="text-muted">
-      Selecione o mapa do projeto em que você vai trabalhar.
-      Clique em <b>Abrir mapa</b> para lançar diretamente pelo mapa interativo.
+      Selecione o mapa em que você vai trabalhar.
+      {% if current_user.is_admin %}
+      <span class="text-info">— Como admin você pode ativar/desativar mapas clicando no botão de status.</span>
+      {% endif %}
     </small>
   </div>
 </div>
@@ -30,22 +32,23 @@
             <th>Mapa</th>
             <th>Projeto</th>
             <th>Empresa</th>
-            <th style="width: 160px;">Ações</th>
+            <th style="width:200px;">Ações</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody id="active-maps-body">
         {% for m in active_maps %}
-          <tr>
+          <tr id="map-row-{{ m.id }}">
             <td class="fw-semibold">{{ m.name }}</td>
-            <td>
-              {% if m.project %}{{ m.project.name }}
-              {% else %}<span class="text-muted">—</span>{% endif %}
-            </td>
+            <td>{% if m.project %}{{ m.project.name }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
             <td>{{ m.company }}</td>
-            <td>
-              <a href="{{ url_for('map_view', map_id=m.id) }}" class="btn btn-sm btn-primary">
-                Abrir mapa
-              </a>
+            <td class="d-flex gap-1">
+              <a href="{{ url_for('map_view', map_id=m.id) }}" class="btn btn-sm btn-primary">Abrir</a>
+              {% if current_user.is_admin %}
+              <button class="btn btn-sm btn-outline-success toggle-map-btn"
+                      data-map-id="{{ m.id }}" data-active="1" title="Clique para desativar">
+                ✅ Ativo
+              </button>
+              {% endif %}
             </td>
           </tr>
         {% endfor %}
@@ -57,7 +60,7 @@
   <div class="alert alert-info mb-3">Nenhum mapa ativo no momento.</div>
   {% endif %}
 
-  <!-- MAPAS INATIVOS (colapsado) -->
+  <!-- MAPAS INATIVOS -->
   {% if inactive_maps %}
   <div class="mb-2">
     <button class="btn btn-outline-secondary btn-sm w-100 text-start d-flex justify-content-between align-items-center"
@@ -74,22 +77,23 @@
                 <th>Mapa</th>
                 <th>Projeto</th>
                 <th>Empresa</th>
-                <th style="width: 160px;">Ações</th>
+                <th style="width:200px;">Ações</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody id="inactive-maps-body">
             {% for m in inactive_maps %}
-              <tr class="opacity-75">
+              <tr id="map-row-{{ m.id }}" class="opacity-75">
                 <td class="text-muted">{{ m.name }}</td>
-                <td>
-                  {% if m.project %}{{ m.project.name }}
-                  {% else %}<span class="text-muted">—</span>{% endif %}
-                </td>
+                <td>{% if m.project %}{{ m.project.name }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
                 <td class="text-muted">{{ m.company }}</td>
-                <td>
-                  <a href="{{ url_for('map_view', map_id=m.id) }}" class="btn btn-sm btn-outline-secondary">
-                    Abrir mapa
-                  </a>
+                <td class="d-flex gap-1">
+                  <a href="{{ url_for('map_view', map_id=m.id) }}" class="btn btn-sm btn-outline-secondary">Abrir</a>
+                  {% if current_user.is_admin %}
+                  <button class="btn btn-sm btn-outline-danger toggle-map-btn"
+                          data-map-id="{{ m.id }}" data-active="0" title="Clique para ativar">
+                    ⭕ Inativo
+                  </button>
+                  {% endif %}
                 </td>
               </tr>
             {% endfor %}
@@ -102,4 +106,33 @@
   {% endif %}
 
 {% endif %}
+
+{% if current_user.is_admin %}
+<script>
+document.querySelectorAll('.toggle-map-btn').forEach(btn => {
+  btn.addEventListener('click', async function() {
+    const mapId = this.dataset.mapId;
+    const wasActive = this.dataset.active === '1';
+    this.disabled = true;
+    this.textContent = '...';
+
+    try {
+      const resp = await fetch('/api/maps/' + mapId + '/toggle-active', { method: 'POST' });
+      const data = await resp.json();
+      if (data.ok) {
+        // Recarrega a página para mover o mapa entre as listas
+        location.reload();
+      } else {
+        alert(data.error || 'Erro ao alterar status.');
+        this.disabled = false;
+      }
+    } catch(e) {
+      alert('Erro de conexão.');
+      this.disabled = false;
+    }
+  });
+});
+</script>
+{% endif %}
+
 {% endblock %}
