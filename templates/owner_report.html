@@ -1,0 +1,108 @@
+{% extends 'base.html' %}
+{% block title %}Owner Report · SPLICER{% endblock %}
+{% block content %}
+
+<div class="d-flex align-items-center gap-3 mb-4">
+  <h3 class="mb-0">🔐 Owner Report</h3>
+  <span class="badge bg-warning text-dark">MASTER ONLY</span>
+</div>
+
+<!-- Filtros -->
+<form method="get" class="row g-2 mb-4">
+  <div class="col-auto">
+    <select name="company" class="form-select bg-dark text-light border-secondary">
+      <option value="">Todas empresas</option>
+      {% for c in companies %}
+        <option value="{{ c }}" {% if c == company_filter %}selected{% endif %}>{{ c }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-auto">
+    <select name="map" class="form-select bg-dark text-light border-secondary">
+      <option value="">Todos mapas</option>
+      {% for m in maps %}
+        <option value="{{ m }}" {% if m == map_filter %}selected{% endif %}>{{ m }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-auto">
+    <input type="date" name="date_from" value="{{ date_from or '' }}"
+           class="form-control bg-dark text-light border-secondary">
+  </div>
+  <div class="col-auto">
+    <input type="date" name="date_to" value="{{ date_to or '' }}"
+           class="form-control bg-dark text-light border-secondary">
+  </div>
+  <div class="col-auto">
+    <button class="btn btn-outline-warning" type="submit">Filtrar</button>
+    <a href="{{ url_for('owner_report') }}" class="btn btn-outline-secondary ms-1">Limpar</a>
+  </div>
+</form>
+
+<!-- Totais -->
+<div class="row g-3 mb-4">
+  <div class="col-md-4">
+    <div class="card bg-dark border-secondary p-3 text-center">
+      <div class="text-muted small">Total ADM (o que veem)</div>
+      <div class="fs-3 text-light fw-bold">${{ "%.2f"|format(total_admin) }}</div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card bg-dark border-warning p-3 text-center">
+      <div class="text-muted small">Total OWNER (seu valor real)</div>
+      <div class="fs-3 text-warning fw-bold">${{ "%.2f"|format(total_owner) }}</div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card bg-dark border-{% if total_margin >= 0 %}success{% else %}danger{% endif %} p-3 text-center">
+      <div class="text-muted small">Margem (owner − adm)</div>
+      <div class="fs-3 text-{% if total_margin >= 0 %}success{% else %}danger{% endif %} fw-bold">
+        ${{ "%.2f"|format(total_margin) }}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Tabela -->
+<div class="table-responsive">
+  <table class="table table-dark table-sm table-hover align-middle">
+    <thead class="table-secondary">
+      <tr>
+        <th>ID</th>
+        <th>Data</th>
+        <th>Mapa</th>
+        <th>Device</th>
+        <th>Tipo</th>
+        <th>Splicer</th>
+        <th>Fusões</th>
+        <th>Role</th>
+        <th class="text-end">$ ADM</th>
+        <th class="text-end text-warning">$ OWNER</th>
+        <th class="text-end">Margem</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="text-muted">{{ r.id }}</td>
+        <td class="text-muted small">{{ r.date.strftime('%Y-%m-%d') if r.date else '-' }}</td>
+        <td>{{ r.map }}</td>
+        <td class="fw-semibold">{{ r.device }}</td>
+        <td><span class="badge bg-secondary">{{ r.type }}</span></td>
+        <td>{{ r.splicer or '-' }}</td>
+        <td>{{ r.splices }}</td>
+        <td><span class="badge bg-{% if r.map_role == 'MEIO' %}primary{% else %}warning text-dark{% endif %}">{{ r.map_role }}</span></td>
+        <td class="text-end">${{ "%.2f"|format(r.admin_total) }}</td>
+        <td class="text-end text-warning fw-bold">${{ "%.2f"|format(r.owner_total) }}</td>
+        <td class="text-end text-{% if r.margin >= 0 %}success{% else %}danger{% endif %}">
+          ${{ "%.2f"|format(r.margin) }}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="11" class="text-center text-muted py-4">Nenhum registro encontrado.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% endblock %}

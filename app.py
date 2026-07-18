@@ -713,6 +713,7 @@ class User(UserMixin, db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     password = db.Column(db.String(120), nullable=False)  # simples, sem hash, uso local
     is_admin = db.Column(db.Boolean, default=False)
+    is_master_owner = db.Column(db.Boolean, default=False, nullable=False)  # dono master: vê preços reais
     splicer_name = db.Column(db.String(120), nullable=True)  # nome que aparece como Splicer nos lançamentos
     is_company_owner = db.Column(db.Boolean, default=False, nullable=False)  # dono de empresa: vê registros da própria empresa
     company_name = db.Column(db.String(120), nullable=True)  # nome da empresa a que o usuário pertence
@@ -785,6 +786,9 @@ class DeviceType(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False)
     value_usd = db.Column(db.Float, default=0.0, nullable=False)
+    owner_value_usd = db.Column(db.Float, nullable=True)  # preço real do owner
+    owner_value_meio_usd = db.Column(db.Float, nullable=True)
+    owner_value_ponta_usd = db.Column(db.Float, nullable=True)
     # Valores específicos para MEIO/PONTA (quando mid_end_enabled no mapa).
     # Se NULL, cai no value_usd padrão.
     value_meio_usd = db.Column(db.Float, nullable=True)
@@ -808,6 +812,7 @@ class SpliceTier(db.Model):
     min_splices = db.Column(db.Integer, nullable=False)
     max_splices = db.Column(db.Integer, nullable=True)
     price_per_splice_usd = db.Column(db.Float, default=0.0, nullable=False)
+    owner_price_per_splice_usd = db.Column(db.Float, nullable=True)  # preço real do owner
     # Codigo de cobranca (opcional): codigo unico por faixa de fusoes (ex: FS01)
     code_splice = db.Column(db.String(30), nullable=True)
     company = db.Column(db.String(120), nullable=True)
@@ -1295,6 +1300,11 @@ with app.app_context():
     ensure("company_map", "included_splices_ponta", "INTEGER")
     ensure("company_map", "section_colors_json", "TEXT")
     ensure("company_map", "photo_create_enabled", "BOOLEAN")
+    ensure("user", "is_master_owner", "BOOLEAN")
+    ensure("splice_tier", "owner_price_per_splice_usd", "DOUBLE PRECISION")
+    ensure("device_type", "owner_value_usd", "DOUBLE PRECISION")
+    ensure("device_type", "owner_value_meio_usd", "DOUBLE PRECISION")
+    ensure("device_type", "owner_value_ponta_usd", "DOUBLE PRECISION")
     ensure("record_photo", "thumb_data", "BYTEA")
     ensure("record_photo", "thumb_content_type", "VARCHAR(100)")
     ensure("record_photo", "is_test", "BOOLEAN")
@@ -4223,6 +4233,12 @@ def settings_device_add():
         flash("Nome do dispositivo é obrigatório.", "danger")
         return redirect(next_url or url_for("settings"))
 
+    # Owner prices (só master_owner pode salvar)
+    is_mo = bool(getattr(current_user, "is_master_owner", False))
+    owner_value      = _opt_float("owner_value_usd")      if is_mo else None
+    owner_value_meio = _opt_float("owner_value_meio_usd") if is_mo else None
+    owner_value_pont = _opt_float("owner_value_ponta_usd")if is_mo else None
+
     dt = DeviceType.query.filter_by(name=name, company=company, project_id=project_id).first()
     if dt:
         dt.value_usd = value
@@ -4233,10 +4249,17 @@ def settings_device_add():
         dt.billing_code = billing_code
         dt.billing_code_meio = billing_code_meio
         dt.billing_code_ponta = billing_code_ponta
+        if is_mo:
+            dt.owner_value_usd = owner_value
+            dt.owner_value_meio_usd = owner_value_meio
+            dt.owner_value_ponta_usd = owner_value_pont
     else:
         dt = DeviceType(
             name=name, company=company, project_id=project_id,
             value_usd=value, value_meio_usd=value_meio, value_ponta_usd=value_ponta,
+            owner_value_usd=owner_value if is_mo else None,
+            owner_value_meio_usd=owner_value_meio if is_mo else None,
+            owner_value_ponta_usd=owner_value_pont if is_mo else None,
             is_ribbon=is_ribbon,
             ribbon_price_usd=(ribbon_price if is_ribbon else None),
             billing_code=billing_code,
@@ -4289,12 +4312,19 @@ def settings_tier_add():
         v = (request.form.get(field) or "").strip()
         return v if v else None
 
+    is_mo = bool(getattr(current_user, "is_master_owner", False))
+    try:
+        owner_price = float((request.form.get("owner_price") or "").strip() or 0)
+    except ValueError:
+        owner_price = None
+
     tier = SpliceTier(
         company=company,
         project_id=project_id,
         min_splices=min_s,
         max_splices=max_s,
         price_per_splice_usd=price,
+        owner_price_per_splice_usd=owner_price if is_mo else None,
         code_splice=_strip_code("code_splice"),
     )
     db.session.add(tier)
@@ -8048,6 +8078,135 @@ def set_test_levels(record_id):
         rec.test_date = datetime.utcnow()
     db.session.commit()
     return jsonify({"ok": True, "test_levels": rec.test_levels})
+
+
+# ─────────────────────────────────────────────────────────────
+#  MASTER OWNER — preços reais e invoice exclusivo
+# ─────────────────────────────────────────────────────────────
+
+def compute_owner_prices(splices, device_name, company, project_id, map_role="PONTA", ribbon_count=None):
+    """Calcula preços reais do owner (usa owner_price quando configurado, senão cai no preço normal)."""
+    # Preço por splice (owner)
+    tier = _best_tier_for(splices, company, project_id)
+    if tier:
+        owner_splice_price = float(tier.owner_price_per_splice_usd or tier.price_per_splice_usd or 0)
+    else:
+        owner_splice_price = 0.0
+
+    # Preço do device (owner)
+    dt = DeviceType.query.filter(
+        db.func.lower(DeviceType.name) == device_name.strip().lower()
+    ).filter(
+        db.or_(DeviceType.company == company, DeviceType.company.is_(None))
+    ).order_by(DeviceType.company.desc()).first()
+
+    owner_device_price = 0.0
+    if dt:
+        if map_role == "MEIO" and dt.owner_value_meio_usd is not None:
+            owner_device_price = float(dt.owner_value_meio_usd)
+        elif map_role == "PONTA" and dt.owner_value_ponta_usd is not None:
+            owner_device_price = float(dt.owner_value_ponta_usd)
+        elif dt.owner_value_usd is not None:
+            owner_device_price = float(dt.owner_value_usd)
+        elif map_role == "MEIO" and dt.value_meio_usd is not None:
+            owner_device_price = float(dt.value_meio_usd)
+        elif map_role == "PONTA" and dt.value_ponta_usd is not None:
+            owner_device_price = float(dt.value_ponta_usd)
+        else:
+            owner_device_price = float(dt.value_usd or 0)
+
+    if ribbon_count:
+        owner_total_splices = 0.0
+    else:
+        owner_total_splices = splices * owner_splice_price
+
+    owner_total = owner_total_splices + owner_device_price
+    return owner_splice_price, owner_device_price, owner_total
+
+
+@app.route("/owner/report")
+@login_required
+def owner_report():
+    """Relatório exclusivo do master owner com preços reais."""
+    if not bool(getattr(current_user, "is_master_owner", False)):
+        return "Acesso negado.", 403
+
+    company_filter = request.args.get("company") or None
+    map_filter     = request.args.get("map") or None
+    date_from      = request.args.get("date_from") or None
+    date_to        = request.args.get("date_to") or None
+
+    q = Record.query
+    if company_filter:
+        q = q.filter(Record.company == company_filter)
+    if map_filter:
+        q = q.filter(Record.map == map_filter)
+    if date_from:
+        try:
+            q = q.filter(Record.created_date >= datetime.strptime(date_from, "%Y-%m-%d"))
+        except Exception:
+            pass
+    if date_to:
+        try:
+            q = q.filter(Record.created_date <= datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1))
+        except Exception:
+            pass
+
+    records = q.order_by(Record.created_date.desc()).all()
+
+    rows = []
+    total_admin = 0.0
+    total_owner = 0.0
+
+    for rec in records:
+        if not rec.splices and not rec.price_device_usd:
+            continue
+        splices = rec.splices or 0
+        device_type = (rec.type or "OTE").strip()
+        map_role = rec.map_role or "PONTA"
+
+        _, owner_device, owner_total = compute_owner_prices(
+            splices, device_type, rec.company, rec.project_id, map_role
+        )
+        admin_total = float(rec.total_usd or 0)
+        margin = owner_total - admin_total
+
+        rows.append({
+            "id": rec.id, "date": rec.created_date, "map": rec.map,
+            "device": rec.device, "type": device_type,
+            "splicer": rec.splicer, "splices": splices,
+            "map_role": map_role,
+            "admin_total": admin_total,
+            "owner_total": owner_total,
+            "margin": margin,
+        })
+        total_admin += admin_total
+        total_owner += owner_total
+
+    companies = [r[0] for r in db.session.query(Record.company).distinct().all() if r[0]]
+    maps = [r[0] for r in db.session.query(Record.map).distinct().all() if r[0]]
+
+    return render_template("owner_report.html",
+        rows=rows, total_admin=total_admin, total_owner=total_owner,
+        total_margin=total_owner - total_admin,
+        companies=companies, maps=maps,
+        company_filter=company_filter, map_filter=map_filter,
+        date_from=date_from, date_to=date_to,
+    )
+
+
+@app.route("/owner/set-master", methods=["POST"])
+@login_required
+def owner_set_master():
+    """Promove ou rebaixa um usuário para master_owner (só master_owner pode fazer isso)."""
+    if not bool(getattr(current_user, "is_master_owner", False)):
+        return jsonify({"ok": False, "error": "Acesso negado."}), 403
+    user_id = request.json.get("user_id")
+    value   = bool(request.json.get("value", False))
+    u = User.query.get_or_404(user_id)
+    u.is_master_owner = value
+    db.session.commit()
+    return jsonify({"ok": True, "username": u.username, "is_master_owner": u.is_master_owner})
 
 @app.route('/__version')
 def __version__():
