@@ -1196,6 +1196,7 @@ with app.app_context():
         _ensure_user_col("is_active",          "BOOLEAN", "TRUE")
         _ensure_user_col("can_access_expenses", "BOOLEAN", "FALSE")
         _ensure_user_col("can_view_values",     "BOOLEAN", "TRUE")
+        _ensure_user_col("is_master_owner",     "BOOLEAN", "FALSE")
     except Exception:
         pass
 
