@@ -122,6 +122,7 @@
       <button id="deviceSearchBtn" class="btn btn-outline-light btn-sm" data-i18n="search">Buscar</button>
       <button id="showAllBtn" class="btn btn-outline-secondary btn-sm" data-i18n="show_all">Mostrar tudo</button>
       {% if current_user.is_admin %}<a href="{{ url_for('export_map_tests_report', map_id=map_obj.id) }}" class="btn btn-outline-success btn-sm" data-i18n="tests_report">Relatório testes</a>{% endif %}
+      <a href="{{ url_for('map_services', map_id=map_obj.id) }}" class="btn btn-outline-info btn-sm">📋 Serviços</a>
       <span id="deviceSearchHint" class="small text-muted"></span>
     </div>
     <div id="map"></div>
@@ -271,6 +272,7 @@
       <button id="deviceSearchBtn" class="btn btn-outline-light btn-sm" data-i18n="search">Buscar</button>
       <button id="showAllBtn" class="btn btn-outline-secondary btn-sm" data-i18n="show_all">Mostrar tudo</button>
       {% if current_user.is_admin %}<a href="{{ url_for('export_map_tests_report', map_id=map_obj.id) }}" class="btn btn-outline-success btn-sm" data-i18n="tests_report">Relatório testes</a>{% endif %}
+      <a href="{{ url_for('map_services', map_id=map_obj.id) }}" class="btn btn-outline-info btn-sm">📋 Serviços</a>
       <span id="deviceSearchHint" class="small text-muted"></span>
     </div>
     <div id="map"></div>

@@ -8508,6 +8508,140 @@ def api_service_codes_by_project():
         "unit_price": sc.unit_price, "by_quantity": sc.by_quantity,
     } for sc in codes])
 
+
+# ═══════════════════════════════════════════════════════════
+#  SERVIÇOS POR MAPA/PROJETO
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/maps/<int:map_id>/services", methods=["GET", "POST"])
+@login_required
+def map_services(map_id):
+    """Tela de serviços vinculada ao mapa — lançamento por projeto."""
+    mp = CompanyMap.query.get_or_404(map_id)
+    ensure_map_access(mp)
+
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    is_mo    = bool(getattr(current_user, "is_master_owner", False))
+    is_owner = bool(getattr(current_user, "is_company_owner", False))
+    company  = mp.company
+    project_id = mp.project_id
+
+    if request.method == "POST":
+        action = request.form.get("action") or "entry"
+
+        # ── Admin: adicionar código ao projeto ──
+        if action == "add_code" and is_admin:
+            code        = (request.form.get("code") or "").strip().upper()
+            description = (request.form.get("description") or "").strip()
+            by_quantity = request.form.get("by_quantity") == "1"
+            try: unit_price  = float(request.form.get("unit_price") or 0)
+            except: unit_price = 0.0
+            try: owner_price = float(request.form.get("owner_price") or 0) if is_mo else None
+            except: owner_price = None
+
+            if code and description:
+                sc = ServiceCode.query.filter_by(
+                    code=code, company=company, project_id=project_id
+                ).first()
+                if sc:
+                    sc.description = description
+                    sc.unit_price  = unit_price
+                    sc.by_quantity = by_quantity
+                    if is_mo: sc.owner_price = owner_price
+                else:
+                    sc = ServiceCode(
+                        code=code, description=description,
+                        unit_price=unit_price,
+                        owner_price=owner_price if is_mo else None,
+                        by_quantity=by_quantity,
+                        company=company, project_id=project_id,
+                    )
+                    db.session.add(sc)
+                db.session.commit()
+                flash(f"Código {code} salvo.", "success")
+            else:
+                flash("Código e descrição obrigatórios.", "danger")
+            return redirect(url_for("map_services", map_id=map_id))
+
+        # ── Admin: remover código ──
+        if action == "delete_code" and is_admin:
+            sc_id = request.form.get("sc_id")
+            sc = ServiceCode.query.get(sc_id)
+            if sc:
+                db.session.delete(sc)
+                db.session.commit()
+                flash("Código removido.", "success")
+            return redirect(url_for("map_services", map_id=map_id))
+
+        # ── Lançamento de serviço ──
+        if action == "entry":
+            if is_owner and not is_admin:
+                flash("Sem permissão para lançar.", "danger")
+                return redirect(url_for("map_services", map_id=map_id))
+
+            sc_id    = request.form.get("service_code_id")
+            quantity = float(request.form.get("quantity") or 1)
+            notes    = (request.form.get("notes") or "").strip() or None
+            date_str = (request.form.get("entry_date") or "").strip()
+
+            try: entry_date = datetime.strptime(date_str, "%Y-%m-%d") if date_str else datetime.utcnow()
+            except: entry_date = datetime.utcnow()
+
+            sc = ServiceCode.query.get(sc_id) if sc_id else None
+            if not sc:
+                flash("Selecione um código.", "danger")
+            else:
+                total = sc.unit_price * quantity if sc.by_quantity else sc.unit_price
+                entry = ServiceEntry(
+                    company=company, project_id=project_id,
+                    map_name=mp.name,
+                    splicer=getattr(current_user, "splicer_name", None) or current_user.username,
+                    entry_date=entry_date,
+                    service_code_id=sc.id, code=sc.code,
+                    description=sc.description,
+                    quantity=quantity, unit_price=sc.unit_price,
+                    total_usd=total, notes=notes,
+                )
+                db.session.add(entry)
+                db.session.commit()
+                flash(f"{sc.code} lançado — ${total:.2f}", "success")
+            return redirect(url_for("map_services", map_id=map_id))
+
+        # ── Admin: apagar lançamento ──
+        if action == "delete_entry" and is_admin:
+            entry_id = request.form.get("entry_id")
+            e = ServiceEntry.query.get(entry_id)
+            if e:
+                db.session.delete(e)
+                db.session.commit()
+            return redirect(url_for("map_services", map_id=map_id))
+
+    # GET
+    # Códigos do projeto
+    codes = ServiceCode.query.filter_by(
+        company=company, project_id=project_id
+    ).order_by(ServiceCode.code).all()
+
+    # Lançamentos do projeto neste mapa
+    entries = ServiceEntry.query.filter_by(
+        company=company, project_id=project_id, map_name=mp.name
+    ).order_by(ServiceEntry.entry_date.desc(), ServiceEntry.id.desc()).all()
+
+    total_adm   = sum(e.total_usd for e in entries)
+    total_owner = 0.0
+    if is_mo:
+        for e in entries:
+            sc = ServiceCode.query.get(e.service_code_id) if e.service_code_id else None
+            op = (sc.owner_price if sc and sc.owner_price else e.unit_price) if sc else e.unit_price
+            total_owner += op * e.quantity if (sc and sc.by_quantity) else op
+
+    return render_template("map_services.html",
+        mp=mp, codes=codes, entries=entries,
+        total_adm=total_adm, total_owner=total_owner,
+        is_admin=is_admin, is_mo=is_mo,
+        today=date.today().isoformat(),
+    )
+
 @app.route('/__version')
 def __version__():
     return 'PHOTO-REMOVE-V49 2026-02-12'
