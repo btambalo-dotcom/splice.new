@@ -1839,7 +1839,13 @@ def classify_photo_with_ai(image_bytes: bytes):
             "  ATENÇÃO: o nome MDC no carimbo NÃO significa CAN automaticamente.\n"
             "    Olhe o TAMANHO FÍSICO da bandeja na foto para decidir.\n"
             "  Extraia: device_name (da etiqueta dentro da box ou carimbo), device_type ('OTE' ou 'CAN'),\n"
-            "  splices (total de fusões — some todas as fileiras visíveis na bandeja),\n"
+            "  splices (total de fusões) e splices_confirmed (true/false):\n"
+            "  REGRA PRINCIPAL: leia o número de fusões do CARIMBO TIMEMARK (legenda da foto).\n"
+            "    O usuário escreve na legenda: '12 F', '12 Fusions', '1 F', '8 Fusion', etc.\n"
+            "    Se encontrar esse padrão (número + F ou Fusion/Fusions) → splices=esse número, splices_confirmed=true.\n"
+            "    REGRA SECUNDÁRIA: se não tiver no carimbo, procure etiqueta NUMERADA na splice tray (#1-12, #19-20).\n"
+            "    Se nenhum dos dois → splices=0, splices_confirmed=false.\n"
+            "    NUNCA conte fibras físicas nem conectores para determinar fusões.\n"
             "  map_role ('PONTA' se só IN, 'MEIO' se IN e OUT), ft_in, ft_out, gps, photo_datetime\n\n"
             "TIPO 'test': mostra um equipamento de medição óptica (power meter laranja/amarelo, OTDR) com display numérico.\n"
             "  Extraia: device_name (do carimbo Timemark), wavelength_nm (ex: 1550), power_uw (ex: 30.14),\n"
@@ -1861,8 +1867,8 @@ def classify_photo_with_ai(image_bytes: bytes):
             "NUNCA retorne 'unknown' se a foto tiver carimbo Timemark com nome do dispositivo.\n\n"
             "Retorne APENAS JSON válido sem explicações:\n"
             "{\"photo_type\": \"splice|test|placed|unknown\", \"device_name\": \"...\", "
-            "\"device_type\": \"OTE|CAN\", \"splices\": null, \"map_role\": null, "
-            "\"ft_in\": null, \"ft_out\": null, "
+            "\"device_type\": \"OTE|CAN\", \"splices\": 0, \"splices_confirmed\": false, "
+            "\"map_role\": null, \"ft_in\": null, \"ft_out\": null, "
             "\"wavelength_nm\": null, \"power_uw\": null, \"power_dbm\": null, "
             "\"gps\": null, \"photo_datetime\": null}"
         )
@@ -1909,6 +1915,7 @@ def classify_photo_with_ai(image_bytes: bytes):
 
         if photo_type == 'splice':
             result['splices'] = parsed.get('splices')
+            result['splices_confirmed'] = bool(parsed.get('splices_confirmed', False))
             result['map_role'] = (parsed.get('map_role') or '').strip().upper() or None
             result['ft_in'] = (str(parsed.get('ft_in') or '')).strip() or None
             result['ft_out'] = (str(parsed.get('ft_out') or '')).strip() or None
@@ -7570,12 +7577,40 @@ def _find_record_by_name(device_name, map_name, company):
     return rec
 
 
+
+def _parse_photo_datetime(photo_datetime_str):
+    if not photo_datetime_str:
+        return None
+    import re as _re
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d",
+                "%m/%d/%Y %H:%M", "%d/%m/%Y %H:%M",
+                "%a, %b %d, %Y", "%a, %b %d, %Y %H:%M"):
+        try:
+            return datetime.strptime(photo_datetime_str.strip(), fmt)
+        except ValueError:
+            continue
+    try:
+        m = _re.search(r'(\d{4}-\d{2}-\d{2})', photo_datetime_str)
+        if m:
+            return datetime.strptime(m.group(1), "%Y-%m-%d")
+    except Exception:
+        pass
+    return None
+
 def _process_photo_result(rec, raw_bytes, fname, content_type, photo_type, parsed, splicer_name,
                            company, project_id, map_name):
     """Aplica resultado do Claude (splice/test/placed) no Record. Retorna dict de resultado."""
 
     if photo_type == "splice":
-        splices_val = parsed.get("splices") or 0
+        # Fusões: só conta se Claude detectou etiqueta numerada (#1-12 etc.)
+        # Se splices_confirmed=False, o Claude não viu etiqueta → lança 0
+        splices_raw = parsed.get("splices")
+        splices_confirmed = parsed.get("splices_confirmed", False)
+        if splices_confirmed and splices_raw:
+            splices_val = int(splices_raw)
+        else:
+            splices_val = 0
+
         map_role    = (parsed.get("map_role") or "PONTA").strip().upper()
         ft_in       = (str(parsed.get("ft_in") or "")).strip() or None
         ft_out      = (str(parsed.get("ft_out") or "")).strip() or None
@@ -7610,6 +7645,9 @@ def _process_photo_result(rec, raw_bytes, fname, content_type, photo_type, parse
             map_role=map_role, ribbon_count=None,
         )
 
+        # Data do lançamento = data da foto (não data do servidor)
+        photo_dt = _parse_photo_datetime(parsed.get("photo_datetime"))
+
         rec.splicer                  = splicer_name
         rec.map_role                 = map_role
         rec.splices                  = 0 if is_rib else splices_val
@@ -7621,6 +7659,7 @@ def _process_photo_result(rec, raw_bytes, fname, content_type, photo_type, parse
         rec.included_splices_applied = included_applied
         rec.ft_in                    = ft_in
         rec.ft_out                   = ft_out
+        rec.created_date             = photo_dt or rec.created_date or datetime.utcnow()
 
         _save_photo_to_record(rec, raw_bytes, fname, content_type, is_test=False, is_placed=False)
         db.session.commit()
@@ -7629,6 +7668,7 @@ def _process_photo_result(rec, raw_bytes, fname, content_type, photo_type, parse
             "file": fname, "ok": True, "action": "splice",
             "device": rec.device, "map_name": map_name,
             "map_role": map_role, "splices": splices_val,
+            "splices_confirmed": splices_confirmed,
             "ft_in": ft_in, "ft_out": ft_out, "record_id": rec.id,
         }
 
@@ -7799,6 +7839,12 @@ def auto_photo_launch(map_id):
                     map_role=map_role, ribbon_count=None,
                 )
 
+                # Data do novo device = data da foto
+                auto_photo_dt = _parse_photo_datetime(parsed.get('photo_datetime'))
+                # Fusões: só se confirmadas
+                auto_splices_confirmed = bool(parsed.get('splices_confirmed', False))
+                auto_splices = int(parsed.get('splices') or 0) if auto_splices_confirmed else 0
+
                 rec = Record(
                     map=map_name,
                     device=device_name,
@@ -7807,7 +7853,7 @@ def auto_photo_launch(map_id):
                     project_id=project_id,
                     splicer=splicer_name,
                     map_role=map_role,
-                    splices=splices_val,
+                    splices=auto_splices,
                     ft_in=ft_in,
                     ft_out=ft_out,
                     latitude=lat,
@@ -7817,7 +7863,7 @@ def auto_photo_launch(map_id):
                     total_usd=total,
                     billing_codes_json=json.dumps(_bcodes, ensure_ascii=False) if _bcodes else None,
                     included_splices_applied=included_applied,
-                    created_date=datetime.utcnow(),
+                    created_date=auto_photo_dt or datetime.utcnow(),
                 )
                 db.session.add(rec)
                 db.session.flush()
