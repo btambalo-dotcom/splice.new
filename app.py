@@ -8691,51 +8691,49 @@ def map_services(map_id):
 @login_required
 @admin_required
 def export_service_report():
-    """Gera o relatório Excel de serviços no formato Summit/Wire3.
-
-    Parâmetros GET:
-      - project_id: ID do projeto
-      - date_from:  data inicial (YYYY-MM-DD)
-      - date_to:    data final   (YYYY-MM-DD)
-      - map_name:   filtrar por mapa (opcional)
-    """
+    """Gera o relatório Excel no formato exato Summit/Wire3."""
     import openpyxl
-    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side, GradientFill
     from openpyxl.utils import get_column_letter
+    from openpyxl.styles.numbers import FORMAT_DATE_DATETIME
     import io
+    from datetime import timedelta
 
     project_id_raw = request.args.get("project_id") or None
     date_from_str  = request.args.get("date_from") or None
     date_to_str    = request.args.get("date_to") or None
     map_filter     = request.args.get("map_name") or None
 
-    # Valida datas
     try:
         dt_from = datetime.strptime(date_from_str, "%Y-%m-%d") if date_from_str else None
         dt_to   = datetime.strptime(date_to_str,   "%Y-%m-%d") if date_to_str else None
     except Exception:
         return "Datas inválidas.", 400
-
     if not dt_from or not dt_to:
-        return "Informe data_from e date_to.", 400
+        return "Informe date_from e date_to.", 400
     if dt_to < dt_from:
         return "date_to deve ser >= date_from.", 400
 
-    # Limita a 15 colunas de dias (igual ao template original C→Q)
-    from datetime import timedelta
+    # Gera lista de dias (max 15)
     days = []
     d = dt_from
     while d <= dt_to and len(days) < 15:
         days.append(d)
         d += timedelta(days=1)
 
-    # Busca service_codes do projeto
+    # Dados do projeto
+    project_name = map_filter or ""
+    if project_id_raw:
+        pr = Project.query.get(int(project_id_raw))
+        if pr: project_name = pr.name
+
+    # Códigos do projeto
     sc_q = ServiceCode.query
     if project_id_raw:
         sc_q = sc_q.filter(ServiceCode.project_id == int(project_id_raw))
     service_codes = sc_q.order_by(ServiceCode.code).all()
 
-    # Busca lançamentos no período
+    # Lançamentos no período
     entries_q = ServiceEntry.query.filter(
         ServiceEntry.entry_date >= dt_from,
         ServiceEntry.entry_date <= dt_to + timedelta(days=1),
@@ -8746,125 +8744,158 @@ def export_service_report():
         entries_q = entries_q.filter(ServiceEntry.map_name == map_filter)
     entries = entries_q.all()
 
-    # Agrupa: {code: {date_str: qty}}
+    # Agrupa {code: {date_str: qty}}
     from collections import defaultdict
     data = defaultdict(lambda: defaultdict(float))
     for e in entries:
         if e.entry_date and e.code:
-            day_str = e.entry_date.strftime("%Y-%m-%d")
-            data[e.code][day_str] += e.quantity
+            data[e.code][e.entry_date.strftime("%Y-%m-%d")] += e.quantity
 
-    # ── Constrói o workbook ──
+    # Nomes dos mapas por dia (ou project_name)
+    map_by_day = {}
+    for e in entries:
+        if e.entry_date:
+            ds = e.entry_date.strftime("%Y-%m-%d")
+            if ds not in map_by_day and e.map_name:
+                map_by_day[ds] = e.map_name
+
+    # ── Workbook ──
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "Report"
+    ws.title = "Sheet1"
 
     # Estilos
-    red_bold   = Font(color="FF0000", bold=True)
-    bold       = Font(bold=True)
-    gray_fill  = PatternFill("solid", fgColor="D9D9D9")
-    yellow_fill= PatternFill("solid", fgColor="FFFF00")
-    thin       = Side(style="thin")
-    border_all = Border(left=thin, right=thin, top=thin, bottom=thin)
+    RED        = "FF0000"
+    red_bold   = Font(name="Arial", size=14, bold=True, color=RED)
+    bold_arial = Font(name="Arial", bold=True)
+    normal     = Font(name="Arial")
+    center     = Alignment(horizontal="center", vertical="center")
+    left       = Alignment(horizontal="left",   vertical="center")
+    thin_side  = Side(style="thin", color="000000")
+    border     = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
 
-    def cell(row, col, value=None, font=None, fill=None, align=None, number_format=None):
-        c = ws.cell(row=row, column=col, value=value)
-        if font:   c.font   = font
-        if fill:   c.fill   = fill
-        if align:  c.alignment = align
-        if number_format: c.number_format = number_format
-        return c
-
-    center = Alignment(horizontal="center")
-
-    # Linha 1: LOCATION #
-    cell(1, 1, "  LOCATION #", font=bold)
-
-    # Linha 2: UNIT / PRICE / TOTAL headers
-    UNIT_COL  = 2 + 15 + 1  # coluna R (18)
+    # Colunas fixas
+    # A=1, B=2, dias=3..3+len(days)-1, UNIT, PRICE, TOTAL
+    N = len(days)
+    UNIT_COL  = 3 + N        # coluna R quando N=15
     PRICE_COL = UNIT_COL + 1
     TOTAL_COL = PRICE_COL + 1
-    cell(2, UNIT_COL,  "UNIT",  font=bold, align=center)
-    cell(2, PRICE_COL, "PRICE", font=bold, align=center)
-    cell(2, TOTAL_COL, "TOTAL", font=bold, align=center)
 
-    # Linha 3: JOB # + nomes dos mapas por coluna
-    cell(3, 1, "JOB #", font=bold)
-    # Pega mapas únicos por dia (simplificado: usa map_filter ou "PROJECT")
-    project_name = ""
-    if project_id_raw:
-        pr = Project.query.get(int(project_id_raw))
-        if pr: project_name = pr.name
-    for i, day in enumerate(days):
-        col = 3 + i
-        cell(3, col, map_filter or project_name, align=center)
+    # ── Linha 1: LOCATION # ──
+    ws.row_dimensions[1].height = 40
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=2)
+    c = ws.cell(1, 1, "  LOCATION #")
+    c.font = red_bold
+    c.alignment = left
 
-    # Linha 4: DATE + datas
-    cell(4, 1, "DATE", font=bold)
+    # ── Linha 2: UNIT / PRICE / TOTAL ──
+    ws.row_dimensions[2].height = 16
+    for col, label in [(UNIT_COL, "UNIT"), (PRICE_COL, "PRICE"), (TOTAL_COL, "TOTAL")]:
+        c = ws.cell(2, col, label)
+        c.font = bold_arial
+        c.alignment = center
+
+    # ── Linha 3: JOB # + projeto por dia ──
+    ws.row_dimensions[3].height = 20
+    c = ws.cell(3, 1, "JOB #")
+    c.font = Font(name="Arial", bold=True, color=RED)
+    c.alignment = left
     for i, day in enumerate(days):
-        col = 3 + i
-        c = cell(4, col, day, align=center)
+        ds = day.strftime("%Y-%m-%d")
+        name = map_by_day.get(ds, project_name)
+        c = ws.cell(3, 3 + i, name)
+        c.font = bold_arial
+        c.alignment = center
+
+    # ── Linha 4: DATE + datas ──
+    ws.row_dimensions[4].height = 20
+    c = ws.cell(4, 1, "DATE")
+    c.font = Font(name="Arial", bold=True, color=RED)
+    c.alignment = left
+    for i, day in enumerate(days):
+        c = ws.cell(4, 3 + i, day)
         c.number_format = "M/D"
+        c.font = bold_arial
+        c.alignment = center
 
-    # Linhas 5+: códigos de serviço
-    row = 5
-    total_col_refs = []
-    for sc in service_codes:
-        cell(row, 1, sc.code, font=Font(bold=True))
-        cell(row, 2, sc.description)
+    # ── Linhas de dados ──
+    total_refs = []
+    for row_idx, sc in enumerate(service_codes):
+        row = 5 + row_idx
+        ws.row_dimensions[row].height = 16
+
+        # Código
+        c = ws.cell(row, 1, sc.code)
+        c.font = bold_arial
+
+        # Descrição
+        c = ws.cell(row, 2, sc.description)
+        c.font = normal
+
         # Quantidades por dia
         for i, day in enumerate(days):
-            col = 3 + i
-            day_str = day.strftime("%Y-%m-%d")
-            qty = data[sc.code].get(day_str)
+            ds = day.strftime("%Y-%m-%d")
+            qty = data[sc.code].get(ds)
             if qty:
-                cell(row, col, qty, align=center)
+                c = ws.cell(row, 3 + i, qty)
+                c.alignment = center
+                c.font = normal
 
-        # Coluna UNIT (soma)
+        # UNIT = SUM das colunas de dias
         first_col = get_column_letter(3)
-        last_col  = get_column_letter(3 + len(days) - 1)
-        sum_cell = ws.cell(row=row, column=UNIT_COL)
-        sum_cell.value = f"=SUM({first_col}{row}:{last_col}{row})"
+        last_col  = get_column_letter(3 + N - 1)
+        c = ws.cell(row, UNIT_COL)
+        c.value = f"=SUM({first_col}{row}:{last_col}{row})"
+        c.alignment = center
+        c.font = normal
 
-        # Coluna PRICE
-        cell(row, PRICE_COL, sc.unit_price, number_format='"$"#,##0.00')
+        # PRICE
+        c = ws.cell(row, PRICE_COL, sc.unit_price)
+        c.number_format = '"$"#,##0.00'
+        c.font = normal
+        c.alignment = center
 
-        # Coluna TOTAL
-        unit_ref  = f"{get_column_letter(UNIT_COL)}{row}"
-        price_ref = f"{get_column_letter(PRICE_COL)}{row}"
-        total_cell = ws.cell(row=row, column=TOTAL_COL)
-        total_cell.value = f"={unit_ref}*{price_ref}"
-        total_cell.number_format = '"$"#,##0.00'
-        total_col_refs.append(f"{get_column_letter(TOTAL_COL)}{row}")
+        # TOTAL
+        ur = f"{get_column_letter(UNIT_COL)}{row}"
+        pr = f"{get_column_letter(PRICE_COL)}{row}"
+        c = ws.cell(row, TOTAL_COL)
+        c.value = f"={ur}*{pr}"
+        c.number_format = '"$"#,##0.00'
+        c.font = normal
+        c.alignment = center
+        total_refs.append(f"{get_column_letter(TOTAL_COL)}{row}")
 
-        row += 1
+    # ── Linha de TOTAL ──
+    total_row = 5 + len(service_codes)
+    ws.row_dimensions[total_row].height = 16
+    c = ws.cell(total_row, PRICE_COL, "TOTAL")
+    c.font = bold_arial
+    c.alignment = center
+    if total_refs:
+        c = ws.cell(total_row, TOTAL_COL)
+        c.value = f"=SUM({','.join(total_refs)})"
+        c.number_format = '"$"#,##0.00'
+        c.font = bold_arial
+        c.alignment = center
 
-    # Linha de TOTAL geral
-    cell(row, UNIT_COL,  "TOTAL", font=bold, align=center)
-    if total_col_refs:
-        total_sum = ws.cell(row=row, column=TOTAL_COL)
-        total_sum.value = f"=SUM({','.join(total_col_refs)})"
-        total_sum.number_format = '"$"#,##0.00'
-        total_sum.font = bold
+    # ── Larguras ──
+    ws.column_dimensions["A"].width = 12
+    ws.column_dimensions["B"].width = 44
+    for i in range(N):
+        ws.column_dimensions[get_column_letter(3 + i)].width = 9
+    ws.column_dimensions[get_column_letter(UNIT_COL)].width  = 9
+    ws.column_dimensions[get_column_letter(PRICE_COL)].width = 11
+    ws.column_dimensions[get_column_letter(TOTAL_COL)].width = 13
 
-    # Ajusta largura das colunas
-    ws.column_dimensions["A"].width = 10
-    ws.column_dimensions["B"].width = 42
-    for i in range(len(days)):
-        ws.column_dimensions[get_column_letter(3 + i)].width = 8
-    ws.column_dimensions[get_column_letter(UNIT_COL)].width  = 8
-    ws.column_dimensions[get_column_letter(PRICE_COL)].width = 10
-    ws.column_dimensions[get_column_letter(TOTAL_COL)].width = 12
-
-    # Salva em memória
+    # Envia
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
-
     fname = f"service_report_{date_from_str}_to_{date_to_str}.xlsx"
     from flask import send_file
-    return send_file(buf, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                     as_attachment=True, download_name=fname)
+    return send_file(buf,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True, download_name=fname)
 
 @app.route('/__version')
 def __version__():
