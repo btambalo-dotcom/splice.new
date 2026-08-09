@@ -56,39 +56,8 @@ document.getElementById('btn-production-report')?.addEventListener('click', asyn
   document.getElementById('prod-report-error').classList.add('d-none');
 
   try {
-    // Obtém token Gmail via Google Identity Services (OAuth implícito)
-    let gmailToken = sessionStorage.getItem('gmail_access_token') || '';
-
-    const runReport = async (token) => {
-      const params = new URLSearchParams({ company, map, start, end, gmail_token: token });
-      const resp = await fetch('/export/production-report?' + params.toString());
-      return await resp.json();
-    };
-
-    // Se não tem token, pede via OAuth popup
-    if (!gmailToken) {
-      await new Promise((resolve, reject) => {
-        if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) {
-          resolve(); // Continua sem Gmail
-          return;
-        }
-        const client = window.google.accounts.oauth2.initTokenClient({
-          client_id: '{{GOOGLE_CLIENT_ID}}',
-          scope: 'https://www.googleapis.com/auth/gmail.readonly',
-          callback: (tokenResponse) => {
-            if (tokenResponse.access_token) {
-              gmailToken = tokenResponse.access_token;
-              sessionStorage.setItem('gmail_access_token', gmailToken);
-            }
-            resolve();
-          },
-          error_callback: () => resolve(), // Continua sem Gmail se falhar
-        });
-        client.requestAccessToken({ prompt: 'consent' });
-      });
-    }
-
-    const data = await runReport(gmailToken);
+    const params = new URLSearchParams({ company, map, start, end, gmail_token: '' });
+    const data = await fetch('/export/production-report?' + params.toString()).then(r => r.json());
 
     document.getElementById('prod-report-loading').classList.add('d-none');
 
@@ -105,6 +74,10 @@ document.getElementById('btn-production-report')?.addEventListener('click', asyn
     document.getElementById('prod-report-error').textContent = 'Erro de conexão: ' + e.message;
     document.getElementById('prod-report-error').classList.remove('d-none');
   }
+});
+
+document.getElementById('btn-production-report-2')?.addEventListener('click', function() {
+  document.getElementById('btn-production-report')?.click();
 });
 
 document.getElementById('btn-copy-report')?.addEventListener('click', function() {
@@ -223,7 +196,7 @@ mb-3">Registros</h5>
        href="{{ url_for('export_summit_report', company=company_filter, map=map_filter, start=start, end=end) }}">
       📊 Export Summit
     </a>
-    <button class="btn btn-sm btn-outline-info me-2" id="btn-production-report"
+    <button class="btn btn-sm btn-outline-info me-2" id="btn-production-report-2"
             data-company="{{ company_filter or '' }}"
             data-map="{{ map_filter or '' }}"
             data-start="{{ start or '' }}"
