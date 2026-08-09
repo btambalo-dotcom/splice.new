@@ -8831,6 +8831,166 @@ def export_service_report():
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         as_attachment=True, download_name=fname)
 
+
+@app.route("/export/summit-report")
+@login_required
+@admin_required
+def export_summit_report():
+    """Preenche o template Summit/Wire3 com dados dos Records de produção.
+
+    Lê billing_codes_json de cada Record, agrupa por código e por dia,
+    e preenche o template Excel exatamente como o contratante espera.
+    """
+    import openpyxl, io, os, json
+    from datetime import timedelta
+    from collections import defaultdict
+
+    company_filter = request.args.get("company") or None
+    map_filter     = request.args.get("map") or None
+    start_raw      = request.args.get("start") or None
+    end_raw        = request.args.get("end") or None
+
+    if not company_filter:
+        flash("Selecione uma empresa no filtro antes de exportar.", "danger")
+        return redirect(url_for("index"))
+
+    # Busca Records
+    q = Record.query.filter(Record.company == company_filter)
+    if map_filter:
+        q = q.filter(Record.map == map_filter)
+
+    dt_from = dt_to = None
+    if start_raw:
+        try:
+            dt_from = datetime.fromisoformat(start_raw)
+            q = q.filter(Record.created_date >= dt_from)
+        except ValueError:
+            pass
+    if end_raw:
+        try:
+            dt_to = datetime.fromisoformat(end_raw)
+            q = q.filter(Record.created_date <= dt_to + timedelta(days=1))
+        except ValueError:
+            pass
+
+    records = q.order_by(Record.created_date.asc().nullslast()).all()
+
+    # Agrupa {code: {date_str: qty}}
+    # Para SHS02 (single splice), qty = número de splices
+    # Para outros, qty = 1 por device (ou valor específico se houver)
+    data = defaultdict(lambda: defaultdict(float))
+    map_names_by_day = defaultdict(set)
+
+    for rec in records:
+        if not rec.created_date:
+            continue
+        day_str = rec.created_date.strftime("%Y-%m-%d")
+        map_names_by_day[day_str].add(rec.map or "")
+
+        # Lê os billing codes do record
+        codes = []
+        if rec.billing_codes_json:
+            try:
+                codes = json.loads(rec.billing_codes_json)
+            except Exception:
+                pass
+
+        for code in codes:
+            code = str(code).strip()
+            if not code:
+                continue
+            # SHS02 = single splice → qty = número de splices
+            if code == "SHS02":
+                data[code][day_str] += float(rec.splices or 0)
+            else:
+                # Outros códigos = 1 por device lançado
+                data[code][day_str] += 1.0
+
+    # Gera lista de dias no período
+    if dt_from and dt_to:
+        days = []
+        d = dt_from.date()
+        end_d = dt_to.date()
+        while d <= end_d and len(days) < 15:
+            days.append(d)
+            d += timedelta(days=1)
+    else:
+        # Infere dos dados
+        all_dates = sorted(set(
+            ds for code_data in data.values() for ds in code_data.keys()
+        ))
+        from datetime import date as date_cls
+        days = [date_cls.fromisoformat(ds) for ds in all_dates[:15]]
+
+    # Carrega template
+    template_path = os.path.join(
+        os.path.dirname(__file__), "static", "templates", "service_report_template.xlsx"
+    )
+    if not os.path.exists(template_path):
+        return "Template não encontrado. Faça upload do arquivo Summit/Wire3 no servidor.", 404
+
+    wb = openpyxl.load_workbook(template_path)
+    ws = wb.active
+
+    # Estrutura do template:
+    DATE_ROW = 4; JOB_ROW = 3
+    C_COL = 3; Q_COL = 17  # colunas C→Q (15 dias)
+
+    # Limpa colunas C→Q linhas 3, 4 e dados
+    code_rows = {}
+    for row in range(1, 30):
+        val = ws.cell(row, 1).value
+        if val and str(val).strip():
+            code_rows[str(val).strip()] = row
+
+    for col in range(C_COL, Q_COL + 1):
+        ws.cell(JOB_ROW, col).value  = None
+        ws.cell(DATE_ROW, col).value = None
+    for row in code_rows.values():
+        for col in range(C_COL, Q_COL + 1):
+            ws.cell(row, col).value = None
+
+    # Preenche linha 3 (mapa) e linha 4 (data)
+    project_label = map_filter or company_filter or ""
+    for i, day in enumerate(days):
+        col = C_COL + i
+        if col > Q_COL:
+            break
+        ds = day.strftime("%Y-%m-%d")
+        maps_today = map_names_by_day.get(ds, set())
+        job_name = " / ".join(sorted(m for m in maps_today if m)) or project_label
+        ws.cell(JOB_ROW, col).value = job_name
+
+        from datetime import datetime as dt_cls
+        c = ws.cell(DATE_ROW, col)
+        c.value = dt_cls(day.year, day.month, day.day)
+        c.number_format = "M/D"
+
+    # Preenche quantidades
+    for code, day_qtys in data.items():
+        if code not in code_rows:
+            continue
+        row = code_rows[code]
+        for i, day in enumerate(days):
+            col = C_COL + i
+            if col > Q_COL:
+                break
+            qty = day_qtys.get(day.strftime("%Y-%m-%d"))
+            if qty:
+                ws.cell(row, col).value = qty
+
+    # Envia
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    date_label = f"{start_raw or 'all'}_to_{end_raw or 'all'}"
+    fname = f"summit_report_{company_filter}_{date_label}.xlsx".replace(" ", "_")
+    from flask import send_file
+    return send_file(buf,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True, download_name=fname)
+
 @app.route('/__version')
 def __version__():
     return 'PHOTO-REMOVE-V49 2026-02-12'

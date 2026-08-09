@@ -102,6 +102,12 @@ mb-3">Registros</h5>
        href="{{ url_for('export_excel', company=company_filter, splicer=splicer_filter, map=map_filter, start=start, end=end) }}">
       Export Excel
     </a>
+    {% if current_user.is_admin %}
+    <a class="btn btn-sm btn-warning me-2"
+       href="{{ url_for('export_summit_report', company=company_filter, map=map_filter, start=start, end=end) }}">
+      📊 Export Summit
+    </a>
+    {% endif %}
     <a class="btn btn-sm btn-outline-light"
        href="{{ url_for('photos_filtered_zip', company=company_filter, splicer=splicer_filter, map=map_filter, device=device_filter, start=start, end=end) }}">
       Download fotos filtradas (.zip)
@@ -115,6 +121,12 @@ mb-3">Registros</h5>
        href="{{ url_for('export_excel', company=company_filter, splicer=splicer_filter, map=map_filter, start=start, end=end) }}">
       Export Excel
     </a>
+    {% if current_user.is_admin %}
+    <a class="btn btn-sm btn-warning me-2"
+       href="{{ url_for('export_summit_report', company=company_filter, map=map_filter, start=start, end=end) }}">
+      📊 Export Summit
+    </a>
+    {% endif %}
     <a class="btn btn-sm btn-outline-light"
        href="{{ url_for('photos_filtered_zip', company=company_filter, splicer=splicer_filter, map=map_filter, device=device_filter, start=start, end=end) }}">
       Download fotos filtradas (.zip)
