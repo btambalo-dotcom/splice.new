@@ -8991,6 +8991,290 @@ def export_summit_report():
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         as_attachment=True, download_name=fname)
 
+
+# ═══════════════════════════════════════════════════════════
+#  RELATÓRIO DE PRODUÇÃO — Claude lê Gmail e monta o texto
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/export/production-report")
+@login_required
+@admin_required
+def export_production_report():
+    """Gera o relatório de produção no formato enviado ao contratante.
+
+    O Claude (via API Anthropic) recebe:
+    - Os Records do SPLICER filtrados por empresa/datas
+    - Os emails do Gmail do contratante (via Google API) com os splices
+    - Monta o relatório: SPLICE em vermelho (HTML) + devices embaixo
+
+    Parâmetros GET:
+      company, start, end, map (mesmos do filtro de produção)
+    """
+    company_filter = request.args.get("company") or None
+    start_raw      = request.args.get("start") or None
+    end_raw        = request.args.get("end") or None
+    map_filter     = request.args.get("map") or None
+    gmail_token    = request.args.get("gmail_token") or None  # OAuth token do frontend
+
+    if not company_filter:
+        return jsonify({"ok": False, "error": "Selecione uma empresa no filtro."}), 400
+
+    # Busca Records do SPLICER
+    q = Record.query.filter(Record.company == company_filter)
+    if map_filter:
+        q = q.filter(Record.map == map_filter)
+
+    dt_from = dt_to = None
+    if start_raw:
+        try:
+            dt_from = datetime.fromisoformat(start_raw)
+            q = q.filter(Record.created_date >= dt_from)
+        except ValueError:
+            pass
+    if end_raw:
+        try:
+            dt_to = datetime.fromisoformat(end_raw)
+            q = q.filter(Record.created_date <= dt_to + timedelta(days=1))
+        except ValueError:
+            pass
+
+    records = q.order_by(Record.created_date.asc().nullslast()).all()
+
+    if not records:
+        return jsonify({"ok": False, "error": "Nenhum registro encontrado."}), 404
+
+    # Monta lista de devices do SPLICER agrupados por tipo
+    device_list = []
+    for rec in records:
+        if rec.device:
+            entry = {
+                "device": rec.device,
+                "type": rec.type or "OTE",
+                "date": rec.created_date.strftime("%Y-%m-%d") if rec.created_date else None,
+                "map": rec.map or "",
+            }
+            device_list.append(entry)
+
+    # Datas do período
+    date_from_str = dt_from.strftime("%m/%d/%Y") if dt_from else start_raw or "?"
+    date_to_str   = dt_to.strftime("%m/%d/%Y") if dt_to else end_raw or "?"
+
+    # Chama Claude para gerar o relatório usando os dados do SPLICER
+    # O Claude vai receber os devices e montar o relatório
+    # inferindo quais splices correspondem a quais devices
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return jsonify({"ok": False, "error": "ANTHROPIC_API_KEY não configurada."}), 500
+
+    # Formata os devices para o prompt
+    devices_text = "\n".join([
+        f"- {d['device']} ({d['type']}) | Mapa: {d['map']} | Data: {d['date'] or 'N/A'}"
+        for d in device_list
+    ])
+
+    # Se tiver token Gmail, busca os emails via Claude
+    gmail_context = ""
+    if gmail_token:
+        try:
+            # Busca emails do Gmail via requests
+            query = f"from:rtfiberllc@gmail.com after:{dt_from.strftime('%Y/%m/%d') if dt_from else '2026/01/01'}"
+            if dt_to:
+                query += f" before:{dt_to.strftime('%Y/%m/%d')}"
+
+            gmail_resp = requests.get(
+                "https://gmail.googleapis.com/gmail/v1/users/me/threads",
+                headers={"Authorization": f"Bearer {gmail_token}"},
+                params={"q": query, "maxResults": 50},
+                timeout=15,
+            )
+            if gmail_resp.status_code == 200:
+                threads = gmail_resp.json().get("threads", [])
+                # Para cada thread, pega o subject (que é o nome do splice)
+                splice_emails = []
+                for t in threads[:30]:
+                    thread_resp = requests.get(
+                        f"https://gmail.googleapis.com/gmail/v1/users/me/threads/{t['id']}",
+                        headers={"Authorization": f"Bearer {gmail_token}"},
+                        params={"format": "metadata", "metadataHeaders": ["Subject"]},
+                        timeout=10,
+                    )
+                    if thread_resp.status_code == 200:
+                        msgs = thread_resp.json().get("messages", [])
+                        if msgs:
+                            headers = msgs[0].get("payload", {}).get("headers", [])
+                            subject = next((h["value"] for h in headers if h["name"] == "Subject"), "")
+                            # Extrai nome dos anexos xlsx (= nome dos devices)
+                            parts = msgs[0].get("payload", {}).get("parts", [])
+                            attachments = [
+                                p.get("filename", "").replace(".xlsx", "")
+                                for p in parts
+                                if p.get("filename", "").endswith(".xlsx")
+                            ]
+                            if subject and any(x in subject.upper() for x in ["SPLICE", "MDC", "DLS", "DTE", "PBC", "OCE"]):
+                                splice_emails.append({
+                                    "splice": subject.strip(),
+                                    "devices": attachments,
+                                })
+
+                if splice_emails:
+                    gmail_context = "\n\nMAPEAMENTO DE SPLICES (do Gmail do contratante):\n"
+                    for se in splice_emails:
+                        gmail_context += f"\n{se['splice']}:\n"
+                        for dev in se["devices"]:
+                            gmail_context += f"  - {dev}\n"
+        except Exception as e:
+            print(f"[PRODUCTION-REPORT] Erro Gmail: {e}", flush=True)
+            gmail_context = ""
+
+    prompt = f"""Você é um sistema de geração de relatório de produção de fibra óptica.
+
+Com base nos dispositivos abaixo do SPLICER (empresa: {company_filter}, período: {date_from_str} a {date_to_str}):
+
+{devices_text}
+{gmail_context}
+
+Gere o relatório de produção no seguinte formato EXATO:
+
+- Cada SPLICE em linha separada, em MAIÚSCULAS
+- Abaixo de cada splice, os devices correspondentes (indentados com espaço)
+- Devices com tipo CAN/450D marcados como "(450 D)"
+- Devices OTE simples sem marcação extra
+- Use apenas o nome dos splices que estão nos emails (se disponível) ou infira pelo padrão do nome dos devices
+- O padrão é: devices com mesmo prefixo (ex: MDC-14_08, MDC-14_10) pertencem ao mesmo splice MDC-14-SPLICE-X
+
+Retorne APENAS o texto do relatório, sem explicações, sem markdown.
+
+Exemplo do formato esperado:
+DLS-02-SPLICE-005
+
+DLS-02-23
+ DLS-02-24
+
+MDC-02-SPLICE-013
+
+MDC-02-01 (450 D)
+ MDC-02-02 (450 D)
+"""
+
+    try:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 4000,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=60,
+        )
+
+        if resp.status_code != 200:
+            return jsonify({"ok": False, "error": f"Erro Claude: HTTP {resp.status_code}"}), 500
+
+        report_text = ""
+        for block in resp.json().get("content", []):
+            if block.get("type") == "text":
+                report_text = block.get("text", "").strip()
+                break
+
+        if not report_text:
+            return jsonify({"ok": False, "error": "Claude não gerou o relatório."}), 500
+
+        return jsonify({
+            "ok": True,
+            "report": report_text,
+            "subject": f"PRODUCAO {date_from_str} A {date_to_str}",
+            "period": f"{date_from_str} a {date_to_str}",
+            "company": company_filter,
+        })
+
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"Erro: {str(e)}"}), 500
+
+
+@app.route("/gmail/messages")
+@login_required
+@admin_required
+def gmail_messages():
+    """Busca emails do Gmail via token OAuth passado como query param.
+    Retorna JSON com lista de splices e devices dos emails do contratante.
+    """
+    token      = request.args.get("token") or ""
+    date_from  = request.args.get("date_from") or ""
+    date_to    = request.args.get("date_to") or ""
+
+    if not token:
+        return jsonify({"ok": False, "error": "Token Gmail não fornecido."}), 400
+
+    try:
+        # Monta query Gmail
+        query = "from:rtfiberllc@gmail.com"
+        if date_from:
+            query += f" after:{date_from.replace('-', '/')}"
+        if date_to:
+            query += f" before:{date_to.replace('-', '/')}"
+
+        # Busca threads
+        threads_resp = requests.get(
+            "https://gmail.googleapis.com/gmail/v1/users/me/threads",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"q": query, "maxResults": 50},
+            timeout=15,
+        )
+        if threads_resp.status_code != 200:
+            return jsonify({"ok": False, "error": f"Erro Gmail: {threads_resp.status_code}"}), 400
+
+        threads = threads_resp.json().get("threads", [])
+        splices = []
+
+        for t in threads[:40]:
+            try:
+                t_resp = requests.get(
+                    f"https://gmail.googleapis.com/gmail/v1/users/me/threads/{t['id']}",
+                    headers={"Authorization": f"Bearer {token}"},
+                    params={"format": "metadata", "metadataHeaders": ["Subject"]},
+                    timeout=10,
+                )
+                if t_resp.status_code != 200:
+                    continue
+                msgs = t_resp.json().get("messages", [])
+                if not msgs:
+                    continue
+                headers = msgs[0].get("payload", {}).get("headers", [])
+                subject = next((h["value"] for h in headers if h["name"] == "Subject"), "")
+
+                # Só pega emails que parecem ser de splice
+                subject_upper = subject.upper()
+                is_splice = any(x in subject_upper for x in ["SPLICE", "MDC-", "DLS-", "DTE-", "PBC-", "OCE-", "MBN-"])
+                if not is_splice:
+                    continue
+
+                # Pega nome dos anexos xlsx (= devices)
+                parts = msgs[0].get("payload", {}).get("parts", [])
+                devices = [
+                    p.get("filename", "").replace(".xlsx", "").replace(".XLSX", "").strip()
+                    for p in parts
+                    if p.get("filename", "").lower().endswith(".xlsx")
+                ]
+                # Remove vazio e imagens
+                devices = [d for d in devices if d and not d.lower().startswith("image")]
+
+                splices.append({
+                    "splice": subject.strip(),
+                    "devices": devices,
+                })
+            except Exception:
+                continue
+
+        return jsonify({"ok": True, "splices": splices, "count": len(splices)})
+
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 @app.route('/__version')
 def __version__():
     return 'PHOTO-REMOVE-V49 2026-02-12'

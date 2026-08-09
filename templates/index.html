@@ -1,6 +1,122 @@
 
 {% extends 'base.html' %}
-{% block title %}SPLICER{% endblock %}
+{% block title %}SPLICER
+<!-- Modal Relatório de Produção -->
+<div class="modal fade" id="productionReportModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content bg-dark text-light">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title">📋 Relatório de Produção</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="prod-report-loading" class="text-center py-4 d-none">
+          <div class="spinner-border text-info" role="status"></div>
+          <p class="mt-2 text-muted">Claude está gerando o relatório...</p>
+        </div>
+        <div id="prod-report-content" class="d-none">
+          <div class="mb-3 d-flex gap-2 align-items-center">
+            <span id="prod-report-subject" class="fw-bold text-light"></span>
+            <button class="btn btn-sm btn-outline-light ms-auto" id="btn-copy-report">
+              📋 Copiar
+            </button>
+          </div>
+          <pre id="prod-report-text"
+               style="background:var(--bs-dark);border:1px solid #444;border-radius:6px;padding:1rem;
+                      font-family:Arial,sans-serif;font-size:13px;color:#fff;
+                      max-height:500px;overflow-y:auto;white-space:pre-wrap;"></pre>
+        </div>
+        <div id="prod-report-error" class="alert alert-danger d-none"></div>
+      </div>
+      <div class="modal-footer border-secondary">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Fechar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+document.getElementById('btn-production-report')?.addEventListener('click', async function() {
+  const btn = this;
+  const company = btn.dataset.company;
+  const map     = btn.dataset.map;
+  const start   = btn.dataset.start;
+  const end     = btn.dataset.end;
+
+  if (!company) {
+    alert('Selecione uma empresa no filtro antes de gerar o relatório.');
+    return;
+  }
+
+  const modal = new bootstrap.Modal(document.getElementById('productionReportModal'));
+  modal.show();
+
+  document.getElementById('prod-report-loading').classList.remove('d-none');
+  document.getElementById('prod-report-content').classList.add('d-none');
+  document.getElementById('prod-report-error').classList.add('d-none');
+
+  try {
+    // Obtém token Gmail via Google Identity Services (OAuth implícito)
+    let gmailToken = sessionStorage.getItem('gmail_access_token') || '';
+
+    const runReport = async (token) => {
+      const params = new URLSearchParams({ company, map, start, end, gmail_token: token });
+      const resp = await fetch('/export/production-report?' + params.toString());
+      return await resp.json();
+    };
+
+    // Se não tem token, pede via OAuth popup
+    if (!gmailToken) {
+      await new Promise((resolve, reject) => {
+        if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) {
+          resolve(); // Continua sem Gmail
+          return;
+        }
+        const client = window.google.accounts.oauth2.initTokenClient({
+          client_id: '{{GOOGLE_CLIENT_ID}}',
+          scope: 'https://www.googleapis.com/auth/gmail.readonly',
+          callback: (tokenResponse) => {
+            if (tokenResponse.access_token) {
+              gmailToken = tokenResponse.access_token;
+              sessionStorage.setItem('gmail_access_token', gmailToken);
+            }
+            resolve();
+          },
+          error_callback: () => resolve(), // Continua sem Gmail se falhar
+        });
+        client.requestAccessToken({ prompt: 'consent' });
+      });
+    }
+
+    const data = await runReport(gmailToken);
+
+    document.getElementById('prod-report-loading').classList.add('d-none');
+
+    if (data.ok) {
+      document.getElementById('prod-report-subject').textContent = data.subject;
+      document.getElementById('prod-report-text').textContent = data.report;
+      document.getElementById('prod-report-content').classList.remove('d-none');
+    } else {
+      document.getElementById('prod-report-error').textContent = data.error || 'Erro desconhecido.';
+      document.getElementById('prod-report-error').classList.remove('d-none');
+    }
+  } catch(e) {
+    document.getElementById('prod-report-loading').classList.add('d-none');
+    document.getElementById('prod-report-error').textContent = 'Erro de conexão: ' + e.message;
+    document.getElementById('prod-report-error').classList.remove('d-none');
+  }
+});
+
+document.getElementById('btn-copy-report')?.addEventListener('click', function() {
+  const text = document.getElementById('prod-report-text').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    this.textContent = '✅ Copiado!';
+    setTimeout(() => this.textContent = '📋 Copiar', 2000);
+  });
+});
+</script>
+
+{% endblock %}
 {% block content %}
 <h3 class="mb-3">SPLICER · Produção</h3>
 
@@ -107,6 +223,13 @@ mb-3">Registros</h5>
        href="{{ url_for('export_summit_report', company=company_filter, map=map_filter, start=start, end=end) }}">
       📊 Export Summit
     </a>
+    <button class="btn btn-sm btn-outline-info me-2" id="btn-production-report"
+            data-company="{{ company_filter or '' }}"
+            data-map="{{ map_filter or '' }}"
+            data-start="{{ start or '' }}"
+            data-end="{{ end or '' }}">
+      📋 Relatório Produção
+    </button>
     {% endif %}
     <a class="btn btn-sm btn-outline-light"
        href="{{ url_for('photos_filtered_zip', company=company_filter, splicer=splicer_filter, map=map_filter, device=device_filter, start=start, end=end) }}">
@@ -126,6 +249,13 @@ mb-3">Registros</h5>
        href="{{ url_for('export_summit_report', company=company_filter, map=map_filter, start=start, end=end) }}">
       📊 Export Summit
     </a>
+    <button class="btn btn-sm btn-outline-info me-2" id="btn-production-report"
+            data-company="{{ company_filter or '' }}"
+            data-map="{{ map_filter or '' }}"
+            data-start="{{ start or '' }}"
+            data-end="{{ end or '' }}">
+      📋 Relatório Produção
+    </button>
     {% endif %}
     <a class="btn btn-sm btn-outline-light"
        href="{{ url_for('photos_filtered_zip', company=company_filter, splicer=splicer_filter, map=map_filter, device=device_filter, start=start, end=end) }}">
