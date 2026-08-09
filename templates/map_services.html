@@ -274,7 +274,8 @@ if (qtyInput) qtyInput.addEventListener('input', updatePreview);
       </div>
       <div class="modal-body">
         <p class="text-muted small mb-3">
-          Gera o relatório no formato Summit/Wire3 com as quantidades por dia e totais calculados.
+          Preenche automaticamente o template Summit/Wire3 com os lançamentos do período.
+          As fórmulas de UNIT, PRICE e TOTAL são calculadas automaticamente.
         </p>
         <div class="row g-3">
           <div class="col-6">
@@ -286,7 +287,7 @@ if (qtyInput) qtyInput.addEventListener('input', updatePreview);
             <input type="date" id="exp-date-to" class="form-control bg-secondary text-light border-0" required>
           </div>
         </div>
-        <p class="text-muted small mt-2">Máximo de 15 dias por relatório.</p>
+        <p class="text-muted small mt-2">⚠️ Máximo 15 dias por relatório (colunas C→Q do template).</p>
       </div>
       <div class="modal-footer border-secondary">
         <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
