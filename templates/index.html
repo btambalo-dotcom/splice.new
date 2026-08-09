@@ -354,8 +354,19 @@ document.addEventListener('click', async function(e) {
   document.getElementById('prod-report-error').classList.add('d-none');
 
   try {
-    const params = new URLSearchParams({ company, map, start, end, gmail_token: '' });
-    const resp = await fetch('/export/production-report?' + params.toString());
+    // Monta payload com dados do SPLICER
+    const payload = {
+      company: company,
+      date_from: start,
+      date_to: end,
+      splice_map: [],
+      records: []
+    };
+    const resp = await fetch('/export/production-report-v2', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
     const data = await resp.json();
 
     document.getElementById('prod-report-loading').classList.add('d-none');

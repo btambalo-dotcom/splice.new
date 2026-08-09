@@ -9276,6 +9276,98 @@ def gmail_messages():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
+
+@app.route("/export/production-report-v2", methods=["POST"])
+@login_required
+@admin_required
+def export_production_report_v2():
+    """Gera relatório de produção recebendo mapeamento splice→devices via POST JSON.
+    
+    Body JSON:
+    {
+      "company": "RT FIBER",
+      "date_from": "08/03/2026",
+      "date_to": "08/09/2026",
+      "splice_map": [
+        {"splice": "PBC-01-SPLICE010", "devices": ["PBC-01_42", "PBC-01_43"]},
+        ...
+      ],
+      "records": [
+        {"device": "MDC-14_42", "type": "OTE", "map": "WIRED 3 LUIZ"},
+        ...
+      ]
+    }
+    """
+    data = request.get_json(silent=True) or {}
+    company    = data.get("company", "")
+    date_from  = data.get("date_from", "")
+    date_to    = data.get("date_to", "")
+    splice_map = data.get("splice_map", [])
+    records    = data.get("records", [])
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return jsonify({"ok": False, "error": "ANTHROPIC_API_KEY não configurada."}), 500
+
+    # Monta contexto dos splices para o Claude
+    splice_context = ""
+    if splice_map:
+        splice_context = "\n\nMAPEAMENTO EXATO DOS SPLICES (do Gmail do contratante):\n"
+        for sm in splice_map:
+            splice_context += f"\n{sm['splice']}:\n"
+            for dev in sm.get("devices", []):
+                splice_context += f"  - {dev}\n"
+
+    # Monta lista de devices do SPLICER
+    devices_text = ""
+    if records:
+        devices_text = "\n".join([
+            f"- {r.get('device','')} ({r.get('type','OTE')}) | Mapa: {r.get('map','')}"
+            for r in records
+        ])
+
+    prompt = f"""Gere o relatório de produção no formato EXATO abaixo.
+
+DADOS DO SPLICER (empresa: {company}, período: {date_from} a {date_to}):
+{devices_text}
+{splice_context}
+
+FORMATO EXATO DO RELATÓRIO:
+- Cada SPLICE em linha separada (ex: PBC-01-SPLICE010)
+- Linha em branco após o nome do splice
+- Devices abaixo, um por linha com espaço na frente
+- Devices CAN/450D marcados como "(450 D)"
+- Linha em branco entre grupos
+
+Use EXATAMENTE os nomes dos splices do mapeamento do Gmail.
+Se um device não aparecer no mapeamento, coloque no splice mais provável pelo prefixo.
+
+Retorne APENAS o texto, sem explicações."""
+
+    try:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
+            json={"model": "claude-sonnet-4-6", "max_tokens": 4000, "messages": [{"role": "user", "content": prompt}]},
+            timeout=60,
+        )
+        if resp.status_code != 200:
+            return jsonify({"ok": False, "error": f"Erro Claude: {resp.status_code}"}), 500
+
+        report_text = ""
+        for block in resp.json().get("content", []):
+            if block.get("type") == "text":
+                report_text = block.get("text", "").strip()
+                break
+
+        return jsonify({
+            "ok": True,
+            "report": report_text,
+            "subject": f"PRODUCAO {date_from} A {date_to}",
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 @app.route('/__version')
 def __version__():
     return 'PHOTO-REMOVE-V49 2026-02-12'
