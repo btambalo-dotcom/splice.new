@@ -9033,8 +9033,9 @@ def export_production_report():
             pass
     if end_raw:
         try:
+            from datetime import timedelta as _timedelta
             dt_to = datetime.fromisoformat(end_raw)
-            q = q.filter(Record.created_date <= dt_to + timedelta(days=1))
+            q = q.filter(Record.created_date <= dt_to + _timedelta(days=1))
         except ValueError:
             pass
 
