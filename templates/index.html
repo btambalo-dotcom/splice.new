@@ -1,95 +1,6 @@
 
 {% extends 'base.html' %}
-{% block title %}SPLICER
-<!-- Modal Relatório de Produção -->
-<div class="modal fade" id="productionReportModal" tabindex="-1" aria-hidden="true">
-  <div class="modal-dialog modal-lg">
-    <div class="modal-content bg-dark text-light">
-      <div class="modal-header border-secondary">
-        <h5 class="modal-title">📋 Relatório de Produção</h5>
-        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-      </div>
-      <div class="modal-body">
-        <div id="prod-report-loading" class="text-center py-4 d-none">
-          <div class="spinner-border text-info" role="status"></div>
-          <p class="mt-2 text-muted">Claude está gerando o relatório...</p>
-        </div>
-        <div id="prod-report-content" class="d-none">
-          <div class="mb-3 d-flex gap-2 align-items-center">
-            <span id="prod-report-subject" class="fw-bold text-light"></span>
-            <button class="btn btn-sm btn-outline-light ms-auto" id="btn-copy-report">
-              📋 Copiar
-            </button>
-          </div>
-          <pre id="prod-report-text"
-               style="background:var(--bs-dark);border:1px solid #444;border-radius:6px;padding:1rem;
-                      font-family:Arial,sans-serif;font-size:13px;color:#fff;
-                      max-height:500px;overflow-y:auto;white-space:pre-wrap;"></pre>
-        </div>
-        <div id="prod-report-error" class="alert alert-danger d-none"></div>
-      </div>
-      <div class="modal-footer border-secondary">
-        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Fechar</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<script>
-document.getElementById('btn-production-report')?.addEventListener('click', async function() {
-  const btn = this;
-  const company = btn.dataset.company;
-  const map     = btn.dataset.map;
-  const start   = btn.dataset.start;
-  const end     = btn.dataset.end;
-
-  if (!company) {
-    alert('Selecione uma empresa no filtro antes de gerar o relatório.');
-    return;
-  }
-
-  const modal = new bootstrap.Modal(document.getElementById('productionReportModal'));
-  modal.show();
-
-  document.getElementById('prod-report-loading').classList.remove('d-none');
-  document.getElementById('prod-report-content').classList.add('d-none');
-  document.getElementById('prod-report-error').classList.add('d-none');
-
-  try {
-    const params = new URLSearchParams({ company, map, start, end, gmail_token: '' });
-    const data = await fetch('/export/production-report?' + params.toString()).then(r => r.json());
-
-    document.getElementById('prod-report-loading').classList.add('d-none');
-
-    if (data.ok) {
-      document.getElementById('prod-report-subject').textContent = data.subject;
-      document.getElementById('prod-report-text').textContent = data.report;
-      document.getElementById('prod-report-content').classList.remove('d-none');
-    } else {
-      document.getElementById('prod-report-error').textContent = data.error || 'Erro desconhecido.';
-      document.getElementById('prod-report-error').classList.remove('d-none');
-    }
-  } catch(e) {
-    document.getElementById('prod-report-loading').classList.add('d-none');
-    document.getElementById('prod-report-error').textContent = 'Erro de conexão: ' + e.message;
-    document.getElementById('prod-report-error').classList.remove('d-none');
-  }
-});
-
-document.getElementById('btn-production-report-2')?.addEventListener('click', function() {
-  document.getElementById('btn-production-report')?.click();
-});
-
-document.getElementById('btn-copy-report')?.addEventListener('click', function() {
-  const text = document.getElementById('prod-report-text').textContent;
-  navigator.clipboard.writeText(text).then(() => {
-    this.textContent = '✅ Copiado!';
-    setTimeout(() => this.textContent = '📋 Copiar', 2000);
-  });
-});
-</script>
-
-{% endblock %}
+{% block title %}SPLICER{% endblock %}
 {% block content %}
 <h3 class="mb-3">SPLICER · Produção</h3>
 
@@ -389,4 +300,88 @@ mb-3">Registros</h5>
 
 </div>
 </div>
+
+<!-- Modal Relatório de Produção -->
+<div class="modal fade" id="productionReportModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content bg-dark text-light">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title">📋 Relatório de Produção</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="prod-report-loading" class="text-center py-4 d-none">
+          <div class="spinner-border text-info" role="status"></div>
+          <p class="mt-2 text-muted">Claude está gerando o relatório...</p>
+        </div>
+        <div id="prod-report-content" class="d-none">
+          <div class="mb-3 d-flex gap-2 align-items-center">
+            <span id="prod-report-subject" class="fw-bold text-light"></span>
+            <button class="btn btn-sm btn-outline-light ms-auto" id="btn-copy-report">📋 Copiar</button>
+          </div>
+          <pre id="prod-report-text"
+               style="background:#1a1a1a;border:1px solid #444;border-radius:6px;padding:1rem;
+                      font-family:Arial,sans-serif;font-size:13px;color:#fff;
+                      max-height:500px;overflow-y:auto;white-space:pre-wrap;"></pre>
+        </div>
+        <div id="prod-report-error" class="alert alert-danger d-none"></div>
+      </div>
+      <div class="modal-footer border-secondary">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Fechar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Event delegation - funciona independente de timing de DOM
+document.addEventListener('click', async function(e) {
+  const btn = e.target.closest('#btn-production-report, #btn-production-report-2');
+  if (!btn) return;
+
+  const company = btn.dataset.company;
+  const map     = btn.dataset.map;
+  const start   = btn.dataset.start;
+  const end     = btn.dataset.end;
+
+  if (!company) { alert('Selecione uma empresa no filtro.'); return; }
+
+  const modal = new bootstrap.Modal(document.getElementById('productionReportModal'));
+  modal.show();
+
+  document.getElementById('prod-report-loading').classList.remove('d-none');
+  document.getElementById('prod-report-content').classList.add('d-none');
+  document.getElementById('prod-report-error').classList.add('d-none');
+
+  try {
+    const params = new URLSearchParams({ company, map, start, end, gmail_token: '' });
+    const resp = await fetch('/export/production-report?' + params.toString());
+    const data = await resp.json();
+
+    document.getElementById('prod-report-loading').classList.add('d-none');
+
+    if (data.ok) {
+      document.getElementById('prod-report-subject').textContent = data.subject;
+      document.getElementById('prod-report-text').textContent = data.report;
+      document.getElementById('prod-report-content').classList.remove('d-none');
+    } else {
+      document.getElementById('prod-report-error').textContent = data.error || 'Erro desconhecido.';
+      document.getElementById('prod-report-error').classList.remove('d-none');
+    }
+  } catch(e) {
+    document.getElementById('prod-report-loading').classList.add('d-none');
+    document.getElementById('prod-report-error').textContent = 'Erro: ' + e.message;
+    document.getElementById('prod-report-error').classList.remove('d-none');
+  }
+});
+
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('#btn-copy-report')) return;
+  const text = document.getElementById('prod-report-text').textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    e.target.textContent = '✅ Copiado!';
+    setTimeout(() => e.target.textContent = '📋 Copiar', 2000);
+  });
+});
+</script>
 {% endblock %}
