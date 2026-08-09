@@ -1902,15 +1902,19 @@ def classify_photo_with_ai(image_bytes: bytes):
             "Você é um especialista em fotos de campo de instalação de fibra óptica (FTTX).\n"
             "As fotos são tiradas com o app Timemark que adiciona carimbo com nome, data, endereço e GPS.\n\n"
             "Analise a imagem e determine o TIPO da foto:\n\n"
-            "TIPO 'splice': mostra o interior de um dispositivo de fibra óptica aberto com splice tray e fusões.\n"
+            "TIPO 'splice': mostra o interior OU o corpo de um dispositivo de fibra óptica (splice box).\n"
+            "  INCLUI: box aberta com tray visível, box com tampa parcial, box com velcro/tira de organização,\n"
+            "  box com splitter PLC visível (1x8, 1x16), fibras azuis/coloridas dentro da caixa.\n"
+            "  SINAL CHAVE: se a foto mostrar o INTERIOR de uma caixa plástica com fibras ópticas,\n"
+            "  splitters, splice trays ou conectores — é SEMPRE splice, mesmo que parcialmente coberto.\n"
             "  Há dois subtipos — determine o device_type APENAS pelo VISUAL DA BANDEJA, NUNCA pelo nome:\n"
-            "  device_type='OTE': bandeja PEQUENA e COMPACTA (aprox. 15x10cm), poucas fusões (até 24),\n"
-            "    cabe numa mão, splice tray estreita. Ex: FT33, FT90, FT102, MDC-13_19.\n"
-            "  device_type='CAN': bandeja GRANDE e LONGA (aprox. 40x15cm ou maior), MUITAS fileiras de\n"
+            "  device_type='OTE': caixa PEQUENA e COMPACTA (aprox. 15x10cm), poucas fibras (até 24),\n"
+            "    splice tray estreita ou splitter PLC pequeno. Ex: FT33, FT90, FT102, PBC-01-47.\n"
+            "  device_type='CAN': caixa GRANDE e LONGA (aprox. 40x15cm ou maior), MUITAS fileiras de\n"
             "    fusões em sequência (48, 72, 96, 144, 288+), bandeja ocupa quase toda a foto.\n"
             "    Ex: MDC-13_02, MDC-13_03, DLS-03_02.\n"
             "  ATENÇÃO: o nome MDC no carimbo NÃO significa CAN automaticamente.\n"
-            "    Olhe o TAMANHO FÍSICO da bandeja na foto para decidir.\n"
+            "    Olhe o TAMANHO FÍSICO da caixa na foto para decidir.\n"
             "  Extraia: device_name (da etiqueta dentro da box ou carimbo), device_type ('OTE' ou 'CAN'),\n"
             "  splices (total de fusões) e splices_confirmed (true/false):\n"
             "  REGRA PRINCIPAL: leia o número de fusões do CARIMBO TIMEMARK (legenda da foto).\n"
@@ -1934,7 +1938,7 @@ def classify_photo_with_ai(image_bytes: bytes):
             "TIPO 'unknown': use SOMENTE se não houver carimbo Timemark e não der para identificar nada.\n\n"
             "REGRAS DE PRIORIDADE (siga nessa ordem):\n"
             "  1. Power meter/OTDR com display numérico dBm/µW na tela → SEMPRE 'test'\n"
-            "  2. Splice tray aberta com fibras/fusões visíveis → SEMPRE 'splice'\n"
+            "  2. Interior de caixa com fibras, splitters, tray (mesmo parcialmente coberta) → SEMPRE 'splice'\n"
             "  3. Qualquer outra foto COM carimbo Timemark e nome do dispositivo → 'placed'\n"
             "  4. Sem carimbo e sem contexto de fibra óptica → 'unknown'\n\n"
             "NUNCA retorne 'unknown' se a foto tiver carimbo Timemark com nome do dispositivo.\n\n"
@@ -4213,6 +4217,38 @@ def settings_project_detail(pid: int):
                     flash("Mapa atualizado.", "success")
             return redirect(url_for("settings_project_detail", pid=project.id))
 
+        if request.form.get("action") == "add_service_code":
+            code        = (request.form.get("code") or "").strip().upper()
+            description = (request.form.get("description") or "").strip()
+            by_quantity = request.form.get("by_quantity") == "1"
+            is_mo_post  = bool(getattr(current_user, "is_master_owner", False))
+            try: unit_price  = float(request.form.get("unit_price") or 0)
+            except: unit_price = 0.0
+            try: owner_price = float(request.form.get("owner_price") or 0) if is_mo_post else None
+            except: owner_price = None
+            if code and description:
+                sc = ServiceCode.query.filter_by(code=code, company=project.company, project_id=project.id).first()
+                if sc:
+                    sc.description = description; sc.unit_price = unit_price; sc.by_quantity = by_quantity
+                    if is_mo_post: sc.owner_price = owner_price
+                else:
+                    db.session.add(ServiceCode(code=code, description=description, unit_price=unit_price,
+                        owner_price=owner_price if is_mo_post else None, by_quantity=by_quantity,
+                        company=project.company, project_id=project.id))
+                db.session.commit()
+                flash(f"Código {code} salvo.", "success")
+            else:
+                flash("Código e descrição obrigatórios.", "danger")
+            return redirect(url_for("settings_project_detail", pid=project.id) + "#section-servicos")
+
+        if request.form.get("action") == "delete_service_code":
+            sc_id = request.form.get("sc_id")
+            sc = ServiceCode.query.get(sc_id)
+            if sc and sc.project_id == project.id:
+                db.session.delete(sc); db.session.commit()
+                flash("Código removido.", "success")
+            return redirect(url_for("settings_project_detail", pid=project.id) + "#section-servicos")
+
         new_map = (request.form.get("new_map") or "").strip()
         if new_map:
             exists = CompanyMap.query.filter_by(company=project.company, name=new_map, project_id=project.id).first()
@@ -4225,6 +4261,8 @@ def settings_project_detail(pid: int):
     types = DeviceType.query.filter_by(company=project.company, project_id=project.id).order_by(DeviceType.name).all()
     tiers = SpliceTier.query.filter_by(company=project.company, project_id=project.id).order_by(SpliceTier.min_splices).all()
     maps = CompanyMap.query.filter_by(company=project.company, project_id=project.id).order_by(CompanyMap.name).all()
+    service_codes = ServiceCode.query.filter_by(company=project.company, project_id=project.id).order_by(ServiceCode.code).all()
+    is_mo = bool(getattr(current_user, "is_master_owner", False))
 
     return render_template(
         "settings_project.html",
@@ -4232,6 +4270,8 @@ def settings_project_detail(pid: int):
         types=types,
         tiers=tiers,
         maps=maps,
+        service_codes=service_codes,
+        is_mo=is_mo,
         company_id=company_id,
     )
 

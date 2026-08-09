@@ -49,6 +49,7 @@
       <button class="cfg-sidebar-btn" onclick="showSection('faixas', this)">Faixas de preço</button>
       <button class="cfg-sidebar-btn" onclick="showSection('mapas', this)">Mapas</button>
       <button class="cfg-sidebar-btn" onclick="showSection('horas', this)">Taxas horárias</button>
+      <button class="cfg-sidebar-btn" onclick="showSection('servicos', this)">Códigos de serviço</button>
     </div>
   </div>
 
@@ -425,6 +426,83 @@
           {% endif %}
         </div>
       </div>
+    </div>
+
+
+    <!-- ── Códigos de Serviço ── -->
+    <div id="section-servicos" class="cfg-panel">
+      <p class="section-header">Códigos de serviço — {{ project.name }}</p>
+
+      <!-- Formulário de adição -->
+      <form method="post" class="row g-2 mb-4">
+        <input type="hidden" name="action" value="add_service_code">
+        <div class="col-2">
+          <input name="code" class="form-control form-control-sm" placeholder="SHH01"
+                 maxlength="30" required style="text-transform:uppercase">
+        </div>
+        <div class="col-4">
+          <input name="description" class="form-control form-control-sm"
+                 placeholder="Splicer per hour, standard" required>
+        </div>
+        <div class="col-2">
+          <input name="unit_price" type="number" step="0.01" min="0"
+                 class="form-control form-control-sm" placeholder="$ ADM">
+        </div>
+        {% if is_mo %}
+        <div class="col-2">
+          <input name="owner_price" type="number" step="0.01" min="0"
+                 class="form-control form-control-sm border-warning text-warning"
+                 placeholder="$ Owner 🔐" style="background:#1a1a0a">
+        </div>
+        {% endif %}
+        <div class="col-{% if is_mo %}1{% else %}2{% endif %}">
+          <select name="by_quantity" class="form-select form-select-sm">
+            <option value="1">× qty</option>
+            <option value="0">Fixo</option>
+          </select>
+        </div>
+        <div class="col-1">
+          <button type="submit" class="btn btn-primary btn-sm w-100">+ Add</button>
+        </div>
+      </form>
+
+      <!-- Lista de códigos -->
+      {% if service_codes %}
+      <table class="table table-dark table-sm table-hover">
+        <thead>
+          <tr>
+            <th>Código</th>
+            <th>Descrição</th>
+            <th>Tipo</th>
+            <th class="text-end">$ ADM</th>
+            {% if is_mo %}<th class="text-end text-warning">$ Owner 🔐</th>{% endif %}
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for sc in service_codes %}
+          <tr>
+            <td><span class="badge bg-secondary font-monospace">{{ sc.code }}</span></td>
+            <td>{{ sc.description }}</td>
+            <td><small class="text-muted">{% if sc.by_quantity %}qty × preço{% else %}fixo{% endif %}</small></td>
+            <td class="text-end">${{ "%.2f"|format(sc.unit_price) }}</td>
+            {% if is_mo %}
+            <td class="text-end text-warning">${{ "%.2f"|format(sc.owner_price or sc.unit_price) }}</td>
+            {% endif %}
+            <td>
+              <form method="post" onsubmit="return confirm('Remover {{ sc.code }}?')" class="d-inline">
+                <input type="hidden" name="action" value="delete_service_code">
+                <input type="hidden" name="sc_id" value="{{ sc.id }}">
+                <button class="btn btn-sm btn-outline-danger py-0 px-1">🗑</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="text-muted">Nenhum código cadastrado para este projeto.</p>
+      {% endif %}
     </div>
 
   </div><!-- fim cfg-main -->
