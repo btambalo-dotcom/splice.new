@@ -8682,6 +8682,190 @@ def map_services(map_id):
         today=date.today().isoformat(),
     )
 
+
+# ═══════════════════════════════════════════════════════════
+#  EXPORT RELATÓRIO SUMMIT/WIRE3 (.xlsx)
+# ═══════════════════════════════════════════════════════════
+
+@app.route("/export/service-report")
+@login_required
+@admin_required
+def export_service_report():
+    """Gera o relatório Excel de serviços no formato Summit/Wire3.
+
+    Parâmetros GET:
+      - project_id: ID do projeto
+      - date_from:  data inicial (YYYY-MM-DD)
+      - date_to:    data final   (YYYY-MM-DD)
+      - map_name:   filtrar por mapa (opcional)
+    """
+    import openpyxl
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    from openpyxl.utils import get_column_letter
+    import io
+
+    project_id_raw = request.args.get("project_id") or None
+    date_from_str  = request.args.get("date_from") or None
+    date_to_str    = request.args.get("date_to") or None
+    map_filter     = request.args.get("map_name") or None
+
+    # Valida datas
+    try:
+        dt_from = datetime.strptime(date_from_str, "%Y-%m-%d") if date_from_str else None
+        dt_to   = datetime.strptime(date_to_str,   "%Y-%m-%d") if date_to_str else None
+    except Exception:
+        return "Datas inválidas.", 400
+
+    if not dt_from or not dt_to:
+        return "Informe data_from e date_to.", 400
+    if dt_to < dt_from:
+        return "date_to deve ser >= date_from.", 400
+
+    # Limita a 15 colunas de dias (igual ao template original C→Q)
+    from datetime import timedelta
+    days = []
+    d = dt_from
+    while d <= dt_to and len(days) < 15:
+        days.append(d)
+        d += timedelta(days=1)
+
+    # Busca service_codes do projeto
+    sc_q = ServiceCode.query
+    if project_id_raw:
+        sc_q = sc_q.filter(ServiceCode.project_id == int(project_id_raw))
+    service_codes = sc_q.order_by(ServiceCode.code).all()
+
+    # Busca lançamentos no período
+    entries_q = ServiceEntry.query.filter(
+        ServiceEntry.entry_date >= dt_from,
+        ServiceEntry.entry_date <= dt_to + timedelta(days=1),
+    )
+    if project_id_raw:
+        entries_q = entries_q.filter(ServiceEntry.project_id == int(project_id_raw))
+    if map_filter:
+        entries_q = entries_q.filter(ServiceEntry.map_name == map_filter)
+    entries = entries_q.all()
+
+    # Agrupa: {code: {date_str: qty}}
+    from collections import defaultdict
+    data = defaultdict(lambda: defaultdict(float))
+    for e in entries:
+        if e.entry_date and e.code:
+            day_str = e.entry_date.strftime("%Y-%m-%d")
+            data[e.code][day_str] += e.quantity
+
+    # ── Constrói o workbook ──
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Report"
+
+    # Estilos
+    red_bold   = Font(color="FF0000", bold=True)
+    bold       = Font(bold=True)
+    gray_fill  = PatternFill("solid", fgColor="D9D9D9")
+    yellow_fill= PatternFill("solid", fgColor="FFFF00")
+    thin       = Side(style="thin")
+    border_all = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    def cell(row, col, value=None, font=None, fill=None, align=None, number_format=None):
+        c = ws.cell(row=row, column=col, value=value)
+        if font:   c.font   = font
+        if fill:   c.fill   = fill
+        if align:  c.alignment = align
+        if number_format: c.number_format = number_format
+        return c
+
+    center = Alignment(horizontal="center")
+
+    # Linha 1: LOCATION #
+    cell(1, 1, "  LOCATION #", font=bold)
+
+    # Linha 2: UNIT / PRICE / TOTAL headers
+    UNIT_COL  = 2 + 15 + 1  # coluna R (18)
+    PRICE_COL = UNIT_COL + 1
+    TOTAL_COL = PRICE_COL + 1
+    cell(2, UNIT_COL,  "UNIT",  font=bold, align=center)
+    cell(2, PRICE_COL, "PRICE", font=bold, align=center)
+    cell(2, TOTAL_COL, "TOTAL", font=bold, align=center)
+
+    # Linha 3: JOB # + nomes dos mapas por coluna
+    cell(3, 1, "JOB #", font=bold)
+    # Pega mapas únicos por dia (simplificado: usa map_filter ou "PROJECT")
+    project_name = ""
+    if project_id_raw:
+        pr = Project.query.get(int(project_id_raw))
+        if pr: project_name = pr.name
+    for i, day in enumerate(days):
+        col = 3 + i
+        cell(3, col, map_filter or project_name, align=center)
+
+    # Linha 4: DATE + datas
+    cell(4, 1, "DATE", font=bold)
+    for i, day in enumerate(days):
+        col = 3 + i
+        c = cell(4, col, day, align=center)
+        c.number_format = "M/D"
+
+    # Linhas 5+: códigos de serviço
+    row = 5
+    total_col_refs = []
+    for sc in service_codes:
+        cell(row, 1, sc.code, font=Font(bold=True))
+        cell(row, 2, sc.description)
+        # Quantidades por dia
+        for i, day in enumerate(days):
+            col = 3 + i
+            day_str = day.strftime("%Y-%m-%d")
+            qty = data[sc.code].get(day_str)
+            if qty:
+                cell(row, col, qty, align=center)
+
+        # Coluna UNIT (soma)
+        first_col = get_column_letter(3)
+        last_col  = get_column_letter(3 + len(days) - 1)
+        sum_cell = ws.cell(row=row, column=UNIT_COL)
+        sum_cell.value = f"=SUM({first_col}{row}:{last_col}{row})"
+
+        # Coluna PRICE
+        cell(row, PRICE_COL, sc.unit_price, number_format='"$"#,##0.00')
+
+        # Coluna TOTAL
+        unit_ref  = f"{get_column_letter(UNIT_COL)}{row}"
+        price_ref = f"{get_column_letter(PRICE_COL)}{row}"
+        total_cell = ws.cell(row=row, column=TOTAL_COL)
+        total_cell.value = f"={unit_ref}*{price_ref}"
+        total_cell.number_format = '"$"#,##0.00'
+        total_col_refs.append(f"{get_column_letter(TOTAL_COL)}{row}")
+
+        row += 1
+
+    # Linha de TOTAL geral
+    cell(row, UNIT_COL,  "TOTAL", font=bold, align=center)
+    if total_col_refs:
+        total_sum = ws.cell(row=row, column=TOTAL_COL)
+        total_sum.value = f"=SUM({','.join(total_col_refs)})"
+        total_sum.number_format = '"$"#,##0.00'
+        total_sum.font = bold
+
+    # Ajusta largura das colunas
+    ws.column_dimensions["A"].width = 10
+    ws.column_dimensions["B"].width = 42
+    for i in range(len(days)):
+        ws.column_dimensions[get_column_letter(3 + i)].width = 8
+    ws.column_dimensions[get_column_letter(UNIT_COL)].width  = 8
+    ws.column_dimensions[get_column_letter(PRICE_COL)].width = 10
+    ws.column_dimensions[get_column_letter(TOTAL_COL)].width = 12
+
+    # Salva em memória
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    fname = f"service_report_{date_from_str}_to_{date_to_str}.xlsx"
+    from flask import send_file
+    return send_file(buf, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                     as_attachment=True, download_name=fname)
+
 @app.route('/__version')
 def __version__():
     return 'PHOTO-REMOVE-V49 2026-02-12'

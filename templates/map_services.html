@@ -13,6 +13,9 @@
   <button class="btn btn-success btn-sm" data-bs-toggle="modal" data-bs-target="#addCodeModal">
     ⚙️ + Código
   </button>
+  <button class="btn btn-outline-warning btn-sm" data-bs-toggle="modal" data-bs-target="#exportModal">
+    📊 Exportar Relatório
+  </button>
   {% endif %}
 </div>
 
@@ -259,4 +262,50 @@ function updatePreview() {
 if (scSelect) scSelect.addEventListener('change', updatePreview);
 if (qtyInput) qtyInput.addEventListener('input', updatePreview);
 </script>
+
+{% if is_admin %}
+<!-- Modal: exportar relatório -->
+<div class="modal fade" id="exportModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content bg-dark text-light">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title">📊 Exportar Relatório Excel</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted small mb-3">
+          Gera o relatório no formato Summit/Wire3 com as quantidades por dia e totais calculados.
+        </p>
+        <div class="row g-3">
+          <div class="col-6">
+            <label class="form-label small">Data inicial *</label>
+            <input type="date" id="exp-date-from" class="form-control bg-secondary text-light border-0" required>
+          </div>
+          <div class="col-6">
+            <label class="form-label small">Data final *</label>
+            <input type="date" id="exp-date-to" class="form-control bg-secondary text-light border-0" required>
+          </div>
+        </div>
+        <p class="text-muted small mt-2">Máximo de 15 dias por relatório.</p>
+      </div>
+      <div class="modal-footer border-secondary">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" class="btn btn-warning" id="btn-export-download">⬇ Baixar Excel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+document.getElementById('btn-export-download').addEventListener('click', function() {
+  const from = document.getElementById('exp-date-from').value;
+  const to   = document.getElementById('exp-date-to').value;
+  if (!from || !to) { alert('Informe as duas datas.'); return; }
+  if (to < from)    { alert('Data final deve ser >= data inicial.'); return; }
+  const url = '/export/service-report?project_id={{ mp.project_id or "" }}&date_from=' + from + '&date_to=' + to + '&map_name={{ mp.name }}';
+  window.location.href = url;
+});
+</script>
+{% endif %}
+
 {% endblock %}
