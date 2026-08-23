@@ -1772,7 +1772,7 @@ def extract_timestamp_fields_with_ai(image_bytes: bytes):
                             "type": "image",
                             "source": {
                                 "type": "base64",
-                                "media_type": "image/jpeg",
+                                "media_type": _detect_media_type(image_bytes),
                                 "data": img_b64,
                             },
                         },
@@ -1877,6 +1877,19 @@ def extract_timestamp_fields_with_ai(image_bytes: bytes):
 
 
 
+def _detect_media_type(image_bytes: bytes) -> str:
+    """Detecta o media_type correto da imagem pelos magic bytes."""
+    if image_bytes[:8] == b'\x89PNG\r\n\x1a\n':
+        return 'image/png'
+    if image_bytes[:3] == b'\xff\xd8\xff':
+        return 'image/jpeg'
+    if image_bytes[:4] == b'GIF8':
+        return 'image/gif'
+    if image_bytes[:4] == b'RIFF' and image_bytes[8:12] == b'WEBP':
+        return 'image/webp'
+    return 'image/jpeg'  # fallback
+
+
 def classify_photo_with_ai(image_bytes: bytes):
     """Classifica o tipo de foto Timemark usando Claude.
 
@@ -1934,6 +1947,8 @@ def classify_photo_with_ai(image_bytes: bytes):
             "  Exemplos corretos: -15.45, -15.22, -15.18, -22.30, -24.50\n\n"
             "TIPO 'placed': qualquer foto de campo que NÃO seja splice box aberta nem power meter.\n"
             "  Exemplos: poste com caixa, caixa fechada, fio aéreo, rua, dispositivo no campo.\n"
+            "  IMPORTANTE: fotos sem carimbo Timemark mas com dispositivo visível → placed.\n"
+            "  Se não conseguir identificar nada → placed com device_name=null.\n"
             "  Extraia: device_name (do carimbo Timemark), gps, photo_datetime\n\n"
             "TIPO 'unknown': use SOMENTE se não houver carimbo Timemark e não der para identificar nada.\n\n"
             "REGRAS DE PRIORIDADE (siga nessa ordem):\n"
@@ -1956,7 +1971,7 @@ def classify_photo_with_ai(image_bytes: bytes):
             'messages': [{
                 'role': 'user',
                 'content': [
-                    {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/jpeg', 'data': img_b64}},
+                    {'type': 'image', 'source': {'type': 'base64', 'media_type': _detect_media_type(image_bytes), 'data': img_b64}},
                     {'type': 'text', 'text': prompt},
                 ],
             }],
@@ -7888,8 +7903,12 @@ def auto_photo_launch(map_id):
         photo_type, parsed, ai_error = classify_photo_with_ai(raw_bytes)
         print(f"[AUTO-PHOTO] type={photo_type} device={parsed.get('device_name')} error={ai_error}", flush=True)
 
-        if photo_type == "unknown" or ai_error:
-            results.append({"file": fname, "ok": False, "error": ai_error or "Tipo de foto não reconhecido."})
+        if ai_error:
+            results.append({"file": fname, "ok": False, "error": ai_error})
+            continue
+        if photo_type == "unknown":
+            # Trata como placed sem device — não bloqueia o lote
+            results.append({"file": fname, "ok": False, "error": "Tipo de foto não reconhecido."})
             continue
 
         device_name = parsed.get("device_name") or ""
@@ -8085,8 +8104,12 @@ def auto_photo_global_launch():
         photo_type, parsed, ai_error = classify_photo_with_ai(raw_bytes)
         print(f"[AUTO-PHOTO-GLOBAL] type={photo_type} device={parsed.get('device_name')} error={ai_error}", flush=True)
 
-        if photo_type == "unknown" or ai_error:
-            results.append({"file": fname, "ok": False, "error": ai_error or "Tipo de foto não reconhecido."})
+        if ai_error:
+            results.append({"file": fname, "ok": False, "error": ai_error})
+            continue
+        if photo_type == "unknown":
+            # Trata como placed sem device — não bloqueia o lote
+            results.append({"file": fname, "ok": False, "error": "Tipo de foto não reconhecido."})
             continue
 
         device_name = parsed.get("device_name") or ""
