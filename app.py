@@ -5126,12 +5126,12 @@ def export_invoice():
     # Com codigos: Date(20) Map(28) Device(42) Tipo(13) Incl(10) Splices(13) Dev$(22) Total(22) Codes(20) = 190
     has_billing = any(l.get("billing_codes") for l in lines)
     if has_billing:
-        # Date(20)+Codes(28)+Map(18)+Device(32)+Tipo(14)+Incl(9)+Splices(12)+Dev$(24)+Total(33)=190
-        col_widths = [20, 28, 18, 32, 14, 9, 12, 24, 33]
-        headers   = ["Date", "Codes", "Map", "Device", "Tipo", "Incl.", "Spl.", "Dev $", "Total"]
+        # Date(20)+Codes(28)+Map(25)+Device(39)+Incl(9)+Splices(12)+Dev$(24)+Total(33)=190
+        col_widths = [20, 28, 25, 39, 9, 12, 24, 33]
+        headers   = ["Date", "Codes", "Map", "Device", "Incl.", "Spl.", "Dev $", "Total"]
     else:
-        col_widths = [22, 30, 50, 14, 10, 14, 24, 26]
-        headers   = ["Date", "Map", "Device", "Tipo", "Incl.", "Splices", "Dev $", "Total"]
+        col_widths = [22, 37, 57, 10, 14, 24, 26]
+        headers   = ["Date", "Map", "Device", "Incl.", "Splices", "Dev $", "Total"]
 
     pdf.set_font("Arial", "B", 9)
 
@@ -5153,7 +5153,6 @@ def export_invoice():
             row += [
                 _pdf_safe(line["map"] or "-"),
                 _pdf_safe(line["device"] or "-"),
-                "HORAS",
                 "-",
                 f"{line['_hours']}h",
                 f"${line['_rate']:.2f}/h",
@@ -5163,7 +5162,6 @@ def export_invoice():
             row += [
                 _pdf_safe(line["map"] or "-"),
                 _pdf_safe(line["device"] or "-"),
-                _pdf_safe(line["role"] or "-"),
                 str(line["included"] if line["included"] is not None else "-"),
                 str(line["splices"]),
                 f"${line['price_device_usd']:.2f}",
