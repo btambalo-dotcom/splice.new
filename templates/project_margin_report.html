@@ -1,0 +1,177 @@
+{% extends 'base.html' %}
+{% block title %}Margem por Splicer · {{ project.name }} · SPLICER{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+  <a href="{{ url_for('project_splicer_pricing', pid=project.id) }}" class="btn btn-outline-secondary btn-sm">← Modalidades</a>
+  <h4 class="mb-0">Margem por Splicer — <span class="text-primary">{{ project.name }}</span></h4>
+  <span class="text-muted small">{{ project.company }}</span>
+</div>
+
+<!-- Filtro de período -->
+<div class="card p-3 mb-4">
+  <div class="row g-2 align-items-end">
+    <div class="col-md-4">
+      <label class="form-label form-label-sm">Data início</label>
+      <input type="date" class="form-control form-control-sm" id="filter-start">
+    </div>
+    <div class="col-md-4">
+      <label class="form-label form-label-sm">Data fim</label>
+      <input type="date" class="form-control form-control-sm" id="filter-end">
+    </div>
+    <div class="col-md-4">
+      <button class="btn btn-primary btn-sm w-100" onclick="loadMargin()">Calcular</button>
+    </div>
+  </div>
+</div>
+
+<!-- Resultado -->
+<div id="margin-results" class="d-none">
+  <!-- Totais -->
+  <div class="row g-3 mb-4" id="totals-row"></div>
+
+  <!-- Tabela detalhada -->
+  <div class="card">
+    <div class="card-body p-0">
+      <table class="table table-hover mb-0" id="margin-table">
+        <thead class="table-light">
+          <tr>
+            <th>Splicer</th>
+            <th>Modalidade</th>
+            <th class="text-end">Lançamentos</th>
+            <th class="text-end">Fusões</th>
+            <th class="text-end">Receita (cliente)</th>
+            <th class="text-end">Custo (splicer)</th>
+            <th class="text-end">Margem $</th>
+            <th class="text-end">Margem %</th>
+          </tr>
+        </thead>
+        <tbody id="margin-tbody"></tbody>
+        <tfoot id="margin-tfoot"></tfoot>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div id="margin-empty" class="text-center text-muted py-5 d-none">
+  <p>Nenhum dado encontrado para o período selecionado.</p>
+</div>
+
+<div id="margin-loading" class="text-center py-5 d-none">
+  <div class="spinner-border text-primary" role="status"></div>
+  <p class="mt-2 text-muted">Calculando...</p>
+</div>
+
+<script>
+function fmt(val) {
+  if (val === null || val === undefined) return '—';
+  return '$' + parseFloat(val).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+function fmtPct(val) {
+  if (val === null || val === undefined) return '—';
+  return parseFloat(val).toFixed(1) + '%';
+}
+function marginClass(val) {
+  if (val === null || val === undefined) return '';
+  return val >= 0 ? 'text-success' : 'text-danger';
+}
+
+function loadMargin() {
+  const start = document.getElementById('filter-start').value;
+  const end = document.getElementById('filter-end').value;
+  let url = '/api/project/{{ project.id }}/splicer-margin';
+  const params = [];
+  if (start) params.push('start=' + start);
+  if (end) params.push('end=' + end);
+  if (params.length) url += '?' + params.join('&');
+
+  document.getElementById('margin-results').classList.add('d-none');
+  document.getElementById('margin-empty').classList.add('d-none');
+  document.getElementById('margin-loading').classList.remove('d-none');
+
+  fetch(url)
+    .then(r => r.json())
+    .then(data => {
+      document.getElementById('margin-loading').classList.add('d-none');
+      const rows = data.results || [];
+      if (!rows.length) {
+        document.getElementById('margin-empty').classList.remove('d-none');
+        return;
+      }
+      document.getElementById('margin-results').classList.remove('d-none');
+      renderRows(rows);
+    })
+    .catch(() => {
+      document.getElementById('margin-loading').classList.add('d-none');
+      alert('Erro ao carregar dados.');
+    });
+}
+
+function renderRows(rows) {
+  const tbody = document.getElementById('margin-tbody');
+  const tfoot = document.getElementById('margin-tfoot');
+  const totalsRow = document.getElementById('totals-row');
+  tbody.innerHTML = '';
+  tfoot.innerHTML = '';
+  totalsRow.innerHTML = '';
+
+  let totRevenue = 0, totCost = 0, totRecords = 0, totSplices = 0;
+  let hasCost = false;
+
+  rows.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><strong>${r.splicer}</strong></td>
+      <td><span class="badge bg-secondary">${r.plan}</span></td>
+      <td class="text-end">${r.total_records}</td>
+      <td class="text-end">${r.total_splices}</td>
+      <td class="text-end">${fmt(r.revenue_usd)}</td>
+      <td class="text-end">${fmt(r.cost_usd)}</td>
+      <td class="text-end ${marginClass(r.margin_usd)}">${fmt(r.margin_usd)}</td>
+      <td class="text-end ${marginClass(r.margin_usd)}">${fmtPct(r.margin_pct)}</td>
+    `;
+    tbody.appendChild(tr);
+    totRevenue += r.revenue_usd || 0;
+    totSplices += r.total_splices || 0;
+    totRecords += r.total_records || 0;
+    if (r.cost_usd !== null) { totCost += r.cost_usd; hasCost = true; }
+  });
+
+  const totMargin = hasCost ? totRevenue - totCost : null;
+  const totPct = (totMargin !== null && totRevenue > 0) ? (totMargin / totRevenue * 100) : null;
+
+  tfoot.innerHTML = `
+    <tr class="table-light fw-bold">
+      <td colspan="2">Total</td>
+      <td class="text-end">${totRecords}</td>
+      <td class="text-end">${totSplices}</td>
+      <td class="text-end">${fmt(totRevenue)}</td>
+      <td class="text-end">${hasCost ? fmt(totCost) : '—'}</td>
+      <td class="text-end ${marginClass(totMargin)}">${fmt(totMargin)}</td>
+      <td class="text-end ${marginClass(totPct)}">${fmtPct(totPct)}</td>
+    </tr>
+  `;
+
+  // Cards de resumo
+  const cards = [
+    { label: 'Receita total (cliente)', value: fmt(totRevenue), cls: 'text-primary' },
+    { label: 'Custo total (splicers)', value: hasCost ? fmt(totCost) : '—', cls: 'text-secondary' },
+    { label: 'Margem total', value: fmt(totMargin), cls: marginClass(totMargin) },
+    { label: 'Margem %', value: fmtPct(totPct), cls: marginClass(totPct) },
+  ];
+  cards.forEach(c => {
+    const div = document.createElement('div');
+    div.className = 'col-md-3';
+    div.innerHTML = `<div class="card p-3 text-center"><div class="text-muted small">${c.label}</div><div class="fs-4 fw-bold ${c.cls}">${c.value}</div></div>`;
+    totalsRow.appendChild(div);
+  });
+}
+
+// Inicializa com mês atual
+const today = new Date();
+const firstDay = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0,10);
+const lastDay = today.toISOString().slice(0,10);
+document.getElementById('filter-start').value = firstDay;
+document.getElementById('filter-end').value = lastDay;
+loadMargin();
+</script>
+{% endblock %}

@@ -1,0 +1,2207 @@
+{% extends 'base.html' %}
+{% block title %}Mapa · {{ map_obj.name }}{% endblock %}
+
+{% block extra_head %}
+  {{ super() }}
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"
+        crossorigin=""/>
+  <style>
+    #map {
+      width: 100%;
+      height: 600px;
+      border-radius: 12px;
+      border: 1px solid #444;
+      box-shadow: 0 0 20px rgba(0,0,0,0.35);
+    }
+
+    .leaflet-tooltip.device-label {
+      background: rgba(0, 0, 0, 0.8);
+      border-radius: 4px;
+      border: 1px solid #444;
+      color: #fff;
+      font-size: 11px;
+      padding: 2px 6px;
+    }
+
+    .popup-photos {
+      margin-top: 4px;
+    }
+    .popup-thumb {
+      width: 60px;
+      height: 60px;
+      object-fit: cover;
+      border-radius: 4px;
+      border: 1px solid #555;
+    }
+    .tested-device-icon {
+      background: transparent;
+      border: 0;
+    }
+    .tested-device-icon svg {
+      display: block;
+      overflow: visible;
+    }
+    .placed-device-icon {
+      background: transparent;
+      border: 0;
+    }
+    .placed-device-icon svg {
+      display: block;
+      overflow: visible;
+    }
+    .splicer-pin-icon {
+      background: transparent !important;
+      border: 0 !important;
+      overflow: visible !important;
+    }
+    .splicer-pin-icon div {
+      overflow: visible !important;
+    }
+  </style>
+{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h3 class="mb-0">Mapa – {{ map_obj.company }} · {{ map_obj.name }}</h3>
+    <small class="text-muted" data-i18n="map_admin">Administração do mapa interativo para este projeto.</small>
+  </div>
+  {% if map_obj.project_id %}
+  <a href="{{ url_for('settings_project_detail', pid=map_obj.project_id) }}"
+     class="btn btn-outline-light btn-sm">
+    <span data-i18n="back_project">← Voltar para o projeto</span>
+  </a>
+  {% endif %}
+</div>
+
+{% if current_user.is_admin %}
+<div id="map-progress-panel" class="row g-3 mb-3" style="display:none!important;">
+  <div class="col-md-6">
+    <div class="card bg-black border-secondary p-3">
+      <div class="d-flex justify-content-between align-items-center mb-1">
+        <span class="fw-bold text-light" style="font-size:13px;">📡 Testes (OTEs)</span>
+        <span id="prog-test-label" class="small text-muted"></span>
+      </div>
+      <div class="progress" style="height:10px;background:#333;">
+        <div id="prog-test-bar" class="progress-bar" role="progressbar"
+             style="width:0%;background:linear-gradient(90deg,#e53935,#ff7043);"
+             aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+      </div>
+      <div class="d-flex justify-content-between mt-1">
+        <small id="prog-test-done" class="text-success"></small>
+        <small id="prog-test-missing" class="text-danger"></small>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="card bg-black border-secondary p-3">
+      <div class="d-flex justify-content-between align-items-center mb-1">
+        <span class="fw-bold text-light" style="font-size:13px;">⬆ Subidas (todos)</span>
+        <span id="prog-placed-label" class="small text-muted"></span>
+      </div>
+      <div class="progress" style="height:10px;background:#333;">
+        <div id="prog-placed-bar" class="progress-bar" role="progressbar"
+             style="width:0%;background:linear-gradient(90deg,#2ecc40,#00b894);"
+             aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+      </div>
+      <div class="d-flex justify-content-between mt-1">
+        <small id="prog-placed-done" class="text-success"></small>
+        <small id="prog-placed-missing" class="text-warning"></small>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if current_user.is_company_owner and not current_user.is_admin %}
+<div class="row g-4">
+  <div class="col-12">
+        <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+      <input id="deviceSearch" class="form-control form-control-sm" style="max-width: 340px" data-i18n-placeholder="search_device_placeholder" placeholder="Buscar device (ex: FT61, RN51E)..." />
+      <button id="deviceSearchBtn" class="btn btn-outline-light btn-sm" data-i18n="search">Buscar</button>
+      <button id="showAllBtn" class="btn btn-outline-secondary btn-sm" data-i18n="show_all">Mostrar tudo</button>
+      {% if current_user.is_admin %}<a href="{{ url_for('export_map_tests_report', map_id=map_obj.id) }}" class="btn btn-outline-success btn-sm" data-i18n="tests_report">Relatório testes</a>{% endif %}
+      <a href="{{ url_for('map_services', map_id=map_obj.id) }}" class="btn btn-outline-info btn-sm">📋 Serviços</a>
+      <span id="deviceSearchHint" class="small text-muted"></span>
+    </div>
+    <div id="map"></div>
+  </div>
+</div>
+{% else %}
+<div class="row g-4">
+  <div class="col-lg-4">
+    <div class="card bg-black border-secondary h-100">
+      <div class="card-body">
+        {% if current_user.is_admin %}
+<h5 class="card-title mb-3" data-i18n="import_devices_kmz">Importar dispositivos via KMZ</h5>
+        <form id="kmz-form" class="mb-2" enctype="multipart/form-data">
+          <div class="mb-2">
+            <input type="file" name="kmz_file" accept=".kmz" class="form-control form-control-sm bg-dark text-light border-secondary" required>
+          </div>
+          <button type="submit" class="btn btn-primary btn-sm w-100">
+            Importar KMZ
+          </button>
+        </form>
+        <small class="text-muted d-block mb-3">
+          <span data-i18n="kmz_help">O sistema vai criar ou atualizar os dispositivos deste mapa com base nos pontos do arquivo KMZ.</span>
+        </small>
+
+        <hr class="border-secondary">
+
+        <h5 class="card-title mb-3">Importar via planilha HAF (.xlsx)</h5>
+        <form id="haf-form" class="mb-2" enctype="multipart/form-data">
+          <div class="mb-2">
+            <input type="file" name="haf_file" accept=".xlsx,.xls" class="form-control form-control-sm bg-dark text-light border-secondary" required>
+          </div>
+          <button type="submit" class="btn btn-success btn-sm w-100">
+            Importar planilha HAF
+          </button>
+        </form>
+        <small class="text-muted d-block mb-3">
+          Importa dispositivos a partir da planilha HAF FIBER. Usa as colunas <strong>LAT</strong>, <strong>LONG</strong>, <strong>COMMENT</strong> (nome do dispositivo) e o endereço completo da residência que cada dispositivo vai alimentar.
+        </small>
+
+        <hr class="border-secondary">
+
+        <h5 class="card-title mb-3">Importar Splice Report (.xlsx)</h5>
+        <form id="splice-report-form" class="mb-2" enctype="multipart/form-data">
+          <div class="mb-2">
+            <label class="form-label small text-muted mb-1">Arquivo SIGNAL (.xlsx)</label>
+            <input type="file" name="splice_file" accept=".xlsx,.xls" class="form-control form-control-sm bg-dark text-light border-secondary" required>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small text-muted mb-1">
+              Ordem dos PONs — nomes das abas, um por linha
+              <span class="text-secondary">(deixe vazio para usar a ordem do arquivo)</span>
+            </label>
+            <textarea name="pon_order" rows="4"
+              class="form-control form-control-sm bg-dark text-light border-secondary font-monospace"
+              placeholder="Ex:&#10;SE_001&#10;SE_004&#10;SE_008&#10;SE_015"
+              style="font-size:0.75rem; resize:vertical;"></textarea>
+          </div>
+          <button type="submit" class="btn btn-warning btn-sm w-100" style="color:#000">
+            Importar SIGNAL
+          </button>
+        </form>
+        <small class="text-muted d-block mb-3">
+          Usa o arquivo SIGNAL gerado pelo sistema. Cada aba vira um PON — a ordem das abas define PON 1, PON 2, etc. Preenche <strong>PON</strong>, <strong>splitter</strong> e <strong>fibras</strong> de cada dispositivo no mapa.
+        </small>
+        {% if current_user.is_admin %}
+        <button type="button" class="btn btn-outline-warning btn-sm w-100 mb-3" id="auto-network-btn">
+          Montar rede automática
+        </button>
+        {% endif %}
+
+        <hr class="border-secondary">
+
+        <h5 class="card-title mb-2" data-i18n="pon_colors">Cores dos PONs</h5>
+        <p class="small text-muted">
+          <span data-i18n="pon_colors_help">Os dispositivos agora usam cor por PON. Cada PON recebe uma cor automática para facilitar a leitura da rede no mapa.</span>
+        </p>
+        <div id="section-colors-panel" class="d-flex flex-column gap-2 small mb-2"></div>
+        {% if current_user.is_admin %}
+        <button type="button" class="btn btn-outline-light btn-sm w-100 mb-3" id="save-section-colors-btn">
+          Atualizar lista de PONs
+        </button>
+        {% else %}
+        <p class="small text-muted">Apenas o admin ou dono da empresa pode atualizar a lista.</p>
+        {% endif %}
+
+        <hr class="border-secondary">
+
+        <h5 class="card-title mb-2" data-i18n="manual_add">Adicionar dispositivo manualmente</h5>
+        <form id="manual-device-form" class="row g-2">
+          <div class="col-12">
+            <label class="form-label" data-i18n="device_name">Nome do dispositivo</label>
+            <input type="text" class="form-control form-control-sm bg-dark text-light border-secondary"
+                   id="manual-device-name" placeholder="Ex.: FDH-01, DP-10, DROP-23" required>
+          </div>
+          <div class="col-6">
+            <label class="form-label" data-i18n="latitude">Latitude</label>
+            <input type="text" class="form-control form-control-sm bg-dark text-light border-secondary"
+                   id="manual-device-lat" placeholder="Ex.: 33.123456" required>
+          </div>
+          <div class="col-6">
+            <label class="form-label" data-i18n="longitude">Longitude</label>
+            <input type="text" class="form-control form-control-sm bg-dark text-light border-secondary"
+                   id="manual-device-lng" placeholder="Ex.: -93.123456" required>
+          </div>
+          <div class="col-12">
+            <label class="form-label" data-i18n="device_info">Informações do dispositivo</label>
+            <input type="text" class="form-control form-control-sm bg-dark text-light border-secondary"
+                   id="manual-device-info"
+                   placeholder="Ex.: Fibra 73, porta 1x8, casa 12">
+          </div>
+          <div class="col-12 mt-1">
+            <button type="submit" class="btn btn-success btn-sm w-100">
+              Adicionar dispositivo
+            </button>
+          </div>
+        </form>
+    <div id="invalid-devices-box" class="mt-3" style="display:none;">
+      <div class="card p-2" style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px;">
+        <div style="font-weight:700; margin-bottom:6px;">Dispositivos com coordenadas inválidas</div>
+        <div id="invalid-devices-list" style="font-size: 13px; line-height: 1.3;"></div>
+        <div style="opacity:0.75; font-size:12px; margin-top:6px;">
+          Dica: edite o dispositivo e corrija Latitude/Longitude para voltar a aparecer no mapa.
+        </div>
+      </div>
+    </div>
+    
+
+        <hr class="border-secondary">
+{% endif %}
+
+        <p class="small text-muted mb-0">
+          • Pin <span class="text-primary">azul</span> = sem lançamento<br>
+          • Pin <span style="color:#2ecc40;">verde ✓</span> = lançado<br>
+          • 📡 Anteninha vermelha = teste lançado<br>
+          • ↑ Seta verde = dispositivo subido (placed)
+        </p>
+        <p class="small text-muted mb-0 mt-2">
+          Para editar um dispositivo existente, clique no ponto correspondente no mapa ao lado.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-8">
+        <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+      <input id="deviceSearch" class="form-control form-control-sm" style="max-width: 340px" data-i18n-placeholder="search_device_placeholder" placeholder="Buscar device (ex: FT61, RN51E)..." />
+      <button id="deviceSearchBtn" class="btn btn-outline-light btn-sm" data-i18n="search">Buscar</button>
+      <button id="showAllBtn" class="btn btn-outline-secondary btn-sm" data-i18n="show_all">Mostrar tudo</button>
+      {% if current_user.is_admin %}<a href="{{ url_for('export_map_tests_report', map_id=map_obj.id) }}" class="btn btn-outline-success btn-sm" data-i18n="tests_report">Relatório testes</a>{% endif %}
+      <a href="{{ url_for('map_services', map_id=map_obj.id) }}" class="btn btn-outline-info btn-sm">📋 Serviços</a>
+      <span id="deviceSearchHint" class="small text-muted"></span>
+    </div>
+    <div id="map"></div>
+  </div>
+</div>
+
+
+{% endif %}
+<!-- Modal para editar dispositivo -->
+<div class="modal fade" id="deviceModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <form class="modal-content bg-dark text-light" id="device-form">
+      <div class="modal-header">
+        <h5 class="modal-title">Dispositivo</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Fechar"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="device-record-id">
+
+        <div class="mb-3">
+          <label class="form-label" data-i18n="device_name">Nome do dispositivo</label>
+          <input type="text" class="form-control bg-dark text-light border-secondary" id="device-name" placeholder="Ex.: FT01, OTE-23">
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Quantidade de fusões</label>
+          <input type="number" min="0" class="form-control bg-dark text-light border-secondary" id="device-splices">
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label" data-i18n="device_info">Informações do dispositivo</label>
+          <input type="text" class="form-control bg-dark text-light border-secondary" id="device-info"
+                 placeholder="Ex.: Fibra 73 indo para casa 12, porta 3 do splitter"
+                 {% if not current_user.is_admin %}readonly{% endif %}>
+        </div>
+
+        <div class="row g-2">
+          <div class="col-md-6">
+            <label class="form-label">Tipo do dispositivo</label>
+            <select class="form-select bg-dark text-light border-secondary" id="device-type" {% if not current_user.is_admin %}disabled{% endif %}>
+              <option>OTE</option>
+              <option>Splitter</option>
+              <option>D</option>
+              <option>BS</option>
+              <option>BS RIBBON</option>
+              <option>Butt Splicer</option>
+              <option>Outro</option>
+            </select>
+            {% if not current_user.is_admin %}
+            <div class="form-text text-muted" style="font-size:.75rem;">Tipo só pode ser alterado pelo Admin.</div>
+            {% endif %}
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Port label</label>
+            <input type="text" class="form-control bg-dark text-light border-secondary" id="device-port-label" placeholder="Ex.: P2">
+          </div>
+          <div class="col-12">
+            <label class="form-label">Endereço</label>
+            <div class="input-group">
+              <input type="text" class="form-control bg-dark text-light border-secondary" id="device-address" placeholder="Endereço do dispositivo">
+              <button class="btn btn-outline-info" type="button" id="refresh-address-btn">Buscar de novo</button>
+            </div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">PON</label>
+            <input type="text" class="form-control bg-dark text-light border-secondary" id="device-pon-name" placeholder="Ex.: PON 2">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Splitter</label>
+            <input type="text" class="form-control bg-dark text-light border-secondary" id="device-splitter-name" placeholder="Nome do splitter">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">FROM</label>
+            <input type="text" class="form-control bg-dark text-light border-secondary" id="device-source-from" placeholder="Dispositivo anterior">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">OUT</label>
+            <input type="text" class="form-control bg-dark text-light border-secondary" id="device-source-out" placeholder="Próximo dispositivo">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">OTE / fibras</label>
+            <input type="text" class="form-control bg-dark text-light border-secondary" id="device-ote-label" placeholder="Ex.: 13-14">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Seção / camada</label>
+            <input type="text" class="form-control bg-dark text-light border-secondary" id="device-section" placeholder="Ex.: PON azul">
+          </div>
+        </div>
+
+        <div class="mb-3 mt-3">
+          <label class="form-label">Fotos do dispositivo (até 5)</label>
+          <input type="file" class="form-control bg-dark text-light border-secondary"
+                 id="device-photos" name="photos" accept="image/*" multiple>
+          <div class="form-text text-muted">
+            As fotos serão comprimidas automaticamente, igual na tela de lançamento.
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <a id="device-gmaps-link" href="#" target="_blank"
+           class="btn btn-outline-info btn-sm me-auto">
+          Abrir no Google Maps
+        </a>
+        <button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Fechar</button>
+        {% if current_user.is_admin %}
+        <button type="button" class="btn btn-warning btn-sm" id="btn-toggle-active" onclick="toggleDeviceActive()">Desativar</button>
+        <button type="button" class="btn btn-danger btn-sm" id="btn-delete-device" onclick="deleteDeviceFromMap()">Excluir</button>
+        {% endif %}
+        <button type="submit" class="btn btn-primary">Salvar</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Modal: Subir dispositivo (placed) -->
+<div class="modal fade" id="placedModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <form class="modal-content bg-dark text-light" id="placed-form">
+      <div class="modal-header">
+        <h5 class="modal-title">⬆ Subir dispositivo</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Fechar"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="placed-record-id">
+
+        <div class="mb-2">
+          <small class="text-muted" id="placed-device-name-label"></small><br>
+          <small class="text-muted" id="placed-splicer-label"></small>
+        </div>
+
+        <div id="placed-already-box" class="alert alert-success py-2 px-3 mb-3" style="display:none;">
+          <strong>✔ Subido por:</strong> <span id="placed-already-name"></span><br>
+          <small class="text-muted" id="placed-already-date"></small>
+        </div>
+
+        <hr class="border-secondary">
+
+        <div class="mb-3">
+          <label class="form-label">Foto da subida (opcional, até 5)</label>
+          <input type="file" class="form-control bg-dark text-light border-secondary"
+                 id="placed-photos" name="photos" accept="image/*" multiple>
+          <div class="form-text text-muted">Tire uma foto do dispositivo instalado no campo.</div>
+        </div>
+
+        <div id="placed-already-box-force" class="mt-2" style="display:none;">
+          <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="placed-force-check">
+            <label class="form-check-label text-warning" for="placed-force-check">
+              Atualizar responsável (sobrescrever quem subiu)
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Fechar</button>
+        <button type="submit" class="btn btn-success"><span>⬆ Confirmar subida</span></button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal fade" id="testModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <form class="modal-content bg-dark text-light" id="test-form">
+      <div class="modal-header">
+        <h5 class="modal-title">Teste do dispositivo</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Fechar"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="test-record-id">
+
+        <div class="mb-2">
+          <small class="text-muted" id="test-device-name-label"></small><br>
+          <small class="text-muted" id="test-splicer-label"></small><br>
+          <small class="text-muted" id="test-info-label"></small>
+        </div>
+
+        <hr class="border-secondary">
+
+        <div class="mb-3">
+          <label class="form-label">Níveis de teste (um por fusão)</label>
+          <div id="test-levels-container"></div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Fotos do teste (opcional, até 5)</label>
+          <input type="file" class="form-control bg-dark text-light border-secondary"
+                 id="test-photos" name="photos" accept="image/*" multiple>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Fechar</button>
+        <button type="submit" class="btn btn-primary">Salvar teste</button>
+      </div>
+    </form>
+  </div>
+</div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+  {{ super() }}
+  <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script>
+    // Fallback: se Leaflet não carregou, tenta unpkg
+    if (typeof L === 'undefined') {
+      document.write('<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"><\/script>');
+    }
+  </script>
+  <script>
+    const recordsUrl = "{{ url_for('api_map_records', map_id=map_obj.id) }}";
+    const autoNetworkUrl = "{{ url_for('api_auto_network', map_id=map_obj.id) }}";
+    const importKmzUrl = "{{ url_for('api_import_kmz', map_id=map_obj.id) }}";
+    const importHafUrl = "{{ url_for('api_import_haf', map_id=map_obj.id) }}";
+    const importSpliceReportUrl = "{{ url_for('api_import_splice_report', map_id=map_obj.id) }}";
+    const addRecordUrl = "{{ url_for('api_add_record_to_map', map_id=map_obj.id) }}";
+    const sectionColorsUrl = "{{ url_for('map_section_colors', map_id=map_obj.id) }}";
+    const autoPhotoLaunchUrl = "{{ url_for('auto_photo_launch', map_id=map_obj.id) }}";
+    const initialFocusRecordId = {{ focus_record_id if focus_record_id is not none else "null" }};
+    const IS_OWNER_READONLY = false; // owner nao tem permissao de edicao
+const IS_ADMIN = {{ "true" if current_user.is_admin else "false" }};
+    const MAP_NAME = "{{ map_obj.name }}";
+    const testsReportUrl = "{{ url_for('export_map_tests_report', map_id=map_obj.id) }}";
+
+    // Diagnóstico de inicialização
+    console.log('[SPLICER] Leaflet disponível:', typeof L !== 'undefined');
+    console.log('[SPLICER] recordsUrl:', recordsUrl);
+
+
+    // Cores automáticas por PON
+    let SECTION_COLORS = {};
+
+    let leafletMap;
+    let markersLayer = L.layerGroup();
+    window._recordMarkers = new Map();
+    let currentFocusRecordId = initialFocusRecordId;
+
+    function _median(arr){
+      if(!arr.length) return null;
+      const a=[...arr].sort((x,y)=>x-y);
+      const mid=Math.floor(a.length/2);
+      return a.length%2 ? a[mid] : (a[mid-1]+a[mid])/2;
+    }
+
+    function _haversineKm(lat1, lon1, lat2, lon2){
+      const R = 6371;
+      const toRad = (d) => d * Math.PI / 180;
+      const dLat = toRad(lat2 - lat1);
+      const dLon = toRad(lon2 - lon1);
+      const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2)**2;
+      return 2 * R * Math.asin(Math.sqrt(a));
+    }
+
+    function _robustFitPoints(records){
+      // Remove invalid coords and drop extreme outliers so 1 bad device doesn't zoom the whole world
+      const pts = (records || [])
+        .map(r => ({ lat: Number(r.lat), lng: Number(r.lng) }))
+        .filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lng) && Math.abs(p.lat) <= 90 && Math.abs(p.lng) <= 180);
+
+      if(!pts.length) return [];
+
+      const medLat = _median(pts.map(p => p.lat));
+      const medLng = _median(pts.map(p => p.lng));
+      if(medLat === null || medLng === null) return pts;
+
+      const dists = pts.map(p => _haversineKm(medLat, medLng, p.lat, p.lng));
+      const medDist = _median(dists) ?? 0;
+      const thr = Math.max(50, medDist * 5); // km
+
+      const kept = pts.filter((p, i) => dists[i] <= thr);
+      return kept.length >= 3 ? kept : pts;
+    }
+
+
+    // Marcador da localização atual do usuário (GPS)
+    let userLocationMarker = null;
+    let userLocationCircle = null;
+
+    function initMap() {
+      leafletMap = L.map('map').setView([0, 0], 2);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap contributors'
+      }).addTo(leafletMap);
+
+      markersLayer.addTo(leafletMap);
+      loadMarkers();
+
+      // Após carregar o mapa, tenta mostrar a localização atual do usuário (GPS)
+      tryLocateUser(true);
+    }
+
+
+
+
+    // Usa a API de geolocalização do navegador para mostrar a posição atual do usuário
+    function tryLocateUser(centerOnFirst) {
+      if (!navigator.geolocation) {
+        console.warn('Geolocalização não suportada pelo navegador.');
+        return;
+      }
+
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          const accuracy = pos.coords.accuracy || 30;
+          const latLng = [lat, lng];
+
+          // Cria ou atualiza o marcador de "minha localização"
+          if (!userLocationMarker) {
+            userLocationMarker = L.marker(latLng, {
+              title: 'Minha localização',
+            }).bindPopup('Minha localização atual');
+            userLocationMarker.addTo(leafletMap);
+          } else {
+            userLocationMarker.setLatLng(latLng);
+          }
+
+          // Cria ou atualiza o círculo de precisão
+          if (!userLocationCircle) {
+            userLocationCircle = L.circle(latLng, {
+              radius: accuracy,
+            });
+            userLocationCircle.addTo(leafletMap);
+          } else {
+            userLocationCircle.setLatLng(latLng);
+            userLocationCircle.setRadius(accuracy);
+          }
+
+          // Na primeira vez, centraliza o mapa na posição do usuário
+          if (centerOnFirst && leafletMap) {
+            leafletMap.setView(latLng, 18);
+          }
+        },
+        (err) => {
+          console.warn('Erro ao obter geolocalização:', err);
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 15000,
+        }
+      );
+    }
+
+    // Gera uma cor estável por nome de seção (HSL baseado em hash) para fallback
+    function autoColorForSection(name) {
+      if (!name) return "#666666";
+      let hash = 0;
+      for (let i = 0; i < name.length; i++) {
+        hash = ((hash << 5) - hash) + name.charCodeAt(i);
+        hash |= 0;
+      }
+      const hue = Math.abs(hash) % 360;
+      return "hsl(" + hue + ", 70%, 45%)";
+    }
+
+    // Cor final por PON
+    const DEFAULT_PON_COLORS = {
+      "1": "#2196F3",
+      "2": "#4CAF50",
+      "3": "#FF9800",
+      "4": "#9C27B0",
+      "5": "#F44336",
+      "6": "#00BCD4",
+      "7": "#FFC107",
+      "8": "#795548",
+      "9": "#E91E63",
+      "10": "#3F51B5",
+      "11": "#009688",
+      "12": "#8BC34A"
+    };
+
+    function normalizePon(raw) {
+      const v = String(raw || "").trim().toUpperCase();
+      if (!v) return "";
+      let m = v.match(/PON\s*[-:]?\s*(\d+)/i);
+      if (m) return m[1];
+      m = v.match(/^P\s*(\d+)$/i);
+      if (m) return m[1];
+      m = v.match(/^(\d+)$/);
+      if (m) return m[1];
+      return v;
+    }
+
+
+    function expandPolygon(points, factor = 1.14) {
+      if (!points || points.length < 3) return points || [];
+      let cx = 0, cy = 0;
+      points.forEach(([x, y]) => { cx += x; cy += y; });
+      cx /= points.length;
+      cy /= points.length;
+      return points.map(([x, y]) => [
+        cx + (x - cx) * factor,
+        cy + (y - cy) * factor
+      ]);
+    }
+
+    function colorForPon(rawPon) {
+      const pon = normalizePon(rawPon);
+      if (!pon) return "#666666";
+
+      // Primeiro tenta a cor salva/customizada do painel lateral.
+      // Aceita chaves como "1", "PON 1", "P1".
+      const candidates = [
+        pon,
+        'PON ' + pon,
+        'P' + pon,
+        String(rawPon || '').trim()
+      ].filter(Boolean);
+
+      for (const key of candidates) {
+        if (SECTION_COLORS && SECTION_COLORS[key]) {
+          return SECTION_COLORS[key];
+        }
+      }
+
+      if (DEFAULT_PON_COLORS[pon]) return DEFAULT_PON_COLORS[pon];
+      return autoColorForSection("PON-" + pon);
+    }
+
+    // Mantido por compatibilidade com versões anteriores do template
+    function colorForSection(name) {
+      return colorForPon(name);
+    }
+
+    // Atualiza o painel de progresso de testes e subidas (só para admin)
+    function updateProgressPanel(records) {
+      const panel = document.getElementById('map-progress-panel');
+      if (!panel) return;
+
+      const OTE_TYPES = ['OTE', '']; // tipos que precisam de teste
+      const SKIP_TEST = ['S', 'SPLITTER', 'D', 'BS', 'CAN']; // não precisam de teste
+
+      // Filtra OTEs (para teste)
+      const testable = (records || []).filter(r => {
+        const t = String(r.type || '').trim().toUpperCase();
+        return !SKIP_TEST.some(skip => t === skip || t.startsWith('CAN'));
+      });
+
+      const testDone    = testable.filter(r => r.test_done).length;
+      const testTotal   = testable.length;
+      const testMissing = testTotal - testDone;
+      const testPct     = testTotal > 0 ? Math.round((testDone / testTotal) * 100) : 0;
+
+      // Todos os dispositivos (para subida)
+      const allRecs      = records || [];
+      const placedDone   = allRecs.filter(r => r.is_placed).length;
+      const placedTotal  = allRecs.length;
+      const placedMissing = placedTotal - placedDone;
+      const placedPct    = placedTotal > 0 ? Math.round((placedDone / placedTotal) * 100) : 0;
+
+      // Atualiza barras
+      const testBar = document.getElementById('prog-test-bar');
+      if (testBar) {
+        testBar.style.width = testPct + '%';
+        testBar.setAttribute('aria-valuenow', testPct);
+        // Verde quando completo, laranja/vermelho quando faltam
+        testBar.style.background = testPct === 100
+          ? 'linear-gradient(90deg,#2ecc40,#00b894)'
+          : 'linear-gradient(90deg,#e53935,#ff7043)';
+      }
+      const placedBar = document.getElementById('prog-placed-bar');
+      if (placedBar) {
+        placedBar.style.width = placedPct + '%';
+        placedBar.setAttribute('aria-valuenow', placedPct);
+        placedBar.style.background = placedPct === 100
+          ? 'linear-gradient(90deg,#2ecc40,#00b894)'
+          : 'linear-gradient(90deg,#2196f3,#00bcd4)';
+      }
+
+      // Labels
+      const setEl = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+      setEl('prog-test-label',   testPct + '%');
+      setEl('prog-test-done',    '✓ ' + testDone + ' testados');
+      setEl('prog-test-missing', testMissing > 0 ? ('✗ ' + testMissing + ' faltam') : '✓ Todos testados!');
+      setEl('prog-placed-label',   placedPct + '%');
+      setEl('prog-placed-done',    '✓ ' + placedDone + ' subidos');
+      setEl('prog-placed-missing', placedMissing > 0 ? ('⬆ ' + placedMissing + ' faltam') : '✓ Todos subidos!');
+
+      // Mostra o painel
+      panel.style.setProperty('display', 'flex', 'important');
+      panel.style.removeProperty('display'); // força reflow
+      panel.removeAttribute('style');
+      panel.style.display = 'flex';
+    }
+
+    // Atualiza o painel lateral com os PONs encontrados
+    function updateSectionColorsPanel(sections) {
+      const panel = document.getElementById('section-colors-panel');
+      if (!panel) return;
+
+      const names = Object.keys(sections || {}).sort();
+      panel.innerHTML = "";
+
+      if (!names.length) {
+        panel.innerHTML = '<span class="text-muted">Nenhum PON encontrado neste mapa ainda.</span>';
+        return;
+      }
+
+      names.forEach(name => {
+        const current = colorForPon(name);
+        const row = document.createElement('div');
+        row.className = 'd-flex align-items-center justify-content-between gap-2';
+
+        const label = document.createElement('span');
+        label.textContent = name;
+
+        const input = document.createElement('input');
+        input.type = 'color';
+        input.className = 'form-control form-control-color form-control-sm';
+        input.value = current;
+        input.setAttribute('data-section-name', name);
+
+        row.appendChild(label);
+        row.appendChild(input);
+        panel.appendChild(row);
+      });
+    }
+
+    // Convex hull simples (algoritmo monotone chain) para envolver os pontos da seção
+    function computeConvexHull(points) {
+      if (points.length <= 1) return points.slice();
+
+      const pts = points.map(p => ({x: p[1], y: p[0]})).sort((a, b) => a.x === b.x ? a.y - b.y : a.x - b.x);
+
+      function cross(o, a, b) {
+        return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+      }
+
+      const lower = [];
+      for (let p of pts) {
+        while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
+          lower.pop();
+        }
+        lower.push(p);
+      }
+
+      const upper = [];
+      for (let i = pts.length - 1; i >= 0; i--) {
+        const p = pts[i];
+        while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
+          upper.pop();
+        }
+        upper.push(p);
+      }
+
+      upper.pop();
+      lower.pop();
+      const hull = lower.concat(upper);
+      return hull.map(p => [p.y, p.x]);
+    }
+
+
+    
+    function copyDeviceInfo(mapName, deviceName) {
+      const template = `MAP: ${mapName}
+DEVICE: ${deviceName}`;
+
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(template)
+          .then(() => {
+            alert('Informações copiadas.');
+          })
+          .catch(err => {
+            console.error('Erro ao copiar para a área de transferência:', err);
+            alert('Não foi possível copiar automaticamente. Você pode copiar manualmente se necessário.');
+          });
+      } else {
+        const temp = document.createElement('textarea');
+        temp.value = template;
+        document.body.appendChild(temp);
+        temp.select();
+        try {
+          document.execCommand('copy');
+          alert('Informações copiadas. Agora é só colar no app de foto, ajustar FUSION e T (P/M).');
+        } catch (e) {
+          console.error('Erro ao copiar (execCommand):', e);
+          alert('Não foi possível copiar automaticamente. Você pode copiar manualmente se necessário.');
+        }
+        document.body.removeChild(temp);
+      }
+    }
+
+
+    
+function openRecordFromMap(recordId) {
+  try {
+    window.location.href = '/entry-focus/' + recordId;
+  } catch (e) {
+    console.error('Erro ao abrir dispositivo a partir do mapa:', e);
+  }
+}
+// ===== Busca e foco de dispositivo no mapa (FT61, RN51E, ID etc.) =====
+function _norm(s){
+  return String(s || "")
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function _normLoose(s){
+  return _norm(s).replace(/[^a-z0-9]+/g, '');
+}
+
+function _setSearchHint(msg){
+  const el = document.getElementById('deviceSearchHint');
+  if (el) el.textContent = msg || "";
+}
+
+function _recordSearchHaystack(r){
+  return [
+    r.id,
+    r.device,
+    r.info,
+    r.section,
+    r.type,
+    r.pon_name,
+    r.port_label,
+    r.splitter_name,
+    r.source_from,
+    r.source_out,
+    r.address
+  ].map(v => String(v || '')).join(' | ');
+}
+
+function _findRecordByQuery(q){
+  const query = _norm(q);
+  const queryLoose = _normLoose(q);
+  const list = window._mapRecords || [];
+  if (!query) return null;
+
+  if (/^\d+$/.test(query)){
+    const id = Number(query);
+    return list.find(r => r.id === id) || null;
+  }
+
+  let rec = list.find(r => _norm(r.device) === query);
+  if (rec) return rec;
+
+  rec = list.find(r => _normLoose(r.device) === queryLoose);
+  if (rec) return rec;
+
+  rec = list.find(r => {
+    const hay = _recordSearchHaystack(r);
+    return _norm(hay).includes(query) || _normLoose(hay).includes(queryLoose);
+  });
+  return rec || null;
+}
+
+function focusRecord(rec){
+  if (!rec) return;
+  const marker = (window._recordMarkers && window._recordMarkers.get(rec.id)) ? window._recordMarkers.get(rec.id) : null;
+  const latlng = [Number(rec.lat), Number(rec.lng)];
+  if (!Number.isFinite(latlng[0]) || !Number.isFinite(latlng[1])) {
+    _setSearchHint("Coordenadas inválidas para esse device.");
+    return;
+  }
+
+  leafletMap.setView(latlng, Math.max(leafletMap.getZoom(), 18));
+  if (marker) {
+    marker.openPopup();
+  } else {
+    _setSearchHint("Ponto não encontrado na camada (recarregue o mapa).");
+  }
+}
+
+function performDeviceSearch(){
+  const input = document.getElementById('deviceSearch');
+  const q = input ? input.value : "";
+  const rec = _findRecordByQuery(q);
+  if (!rec){
+    _setSearchHint("Não encontrei: " + (q || ""));
+    return;
+  }
+  _setSearchHint("Encontrado: " + (rec.device || ("ID " + rec.id)));
+  focusRecord(rec);
+}
+
+// ===== Mover device (arrastar e salvar coordenadas) =====
+window.enableMoveRecord = function(recordId){
+  if (!IS_ADMIN) { alert("Apenas o ADMIN pode mover dispositivos."); return; }
+
+  const rec = (window._mapRecords || []).find(r => r.id === recordId);
+  if (!rec) return alert("Registro não encontrado.");
+
+  const baseMarker = window._recordMarkers ? window._recordMarkers.get(recordId) : null;
+  const startLatLng = baseMarker ? baseMarker.getLatLng() : L.latLng(rec.lat, rec.lng);
+
+  // Remove temporário anterior
+  if (window._moveTmpMarker){
+    try { leafletMap.removeLayer(window._moveTmpMarker); } catch(e) {}
+    window._moveTmpMarker = null;
+  }
+
+  const tmp = L.marker(startLatLng, { draggable: true, autoPan: true });
+  tmp.addTo(leafletMap);
+  window._moveTmpMarker = tmp;
+
+  alert("Arraste o ponto e solte. Ao soltar, vou salvar a nova coordenada.");
+
+  tmp.once('dragend', async function(){
+    const ll = tmp.getLatLng();
+    try {
+      const resp = await fetch(`/api/records/${recordId}/update-coords`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lat: ll.lat, lng: ll.lng })
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) throw new Error(data.error || "Erro ao salvar coordenadas.");
+
+      // Atualiza em memória e recarrega marcadores (cores/bounds)
+      rec.lat = data.lat;
+      rec.lng = data.lng;
+
+      _setSearchHint("Coordenadas atualizadas para " + (rec.device || ("ID " + rec.id)));
+      try { leafletMap.removeLayer(tmp); } catch(e) {}
+      window._moveTmpMarker = null;
+
+      loadMarkers();
+      // Re-focar
+      setTimeout(() => {
+        const r2 = _findRecordByQuery(rec.device || String(rec.id));
+        if (r2) focusRecord(r2);
+      }, 400);
+
+    } catch(e){
+      alert("Falha ao salvar: " + e.message);
+      try { leafletMap.removeLayer(tmp); } catch(err) {}
+      window._moveTmpMarker = null;
+    }
+  });
+};
+
+// Setup UI
+function setupDeviceSearch(){
+  const input = document.getElementById('deviceSearch');
+  const btn = document.getElementById('deviceSearchBtn');
+  const allBtn = document.getElementById('showAllBtn');
+
+  if (btn) btn.addEventListener('click', performDeviceSearch);
+  if (input) {
+    input.addEventListener('keydown', function(e){
+      if (e.key === 'Enter'){
+        e.preventDefault();
+        performDeviceSearch();
+      }
+    });
+  }
+  if (allBtn){
+    allBtn.addEventListener('click', function(){
+      try{
+        const recs = window._mapRecords || [];
+        const fitPoints = _robustFitPoints(recs);
+        const fitBounds = fitPoints.map(p => [p.lat, p.lng]);
+        if (fitBounds.length){
+          leafletMap.fitBounds(fitBounds, { padding: [20, 20] });
+        }
+      } catch(e){}
+    });
+  }
+}
+
+
+function _isCanType(rec) {
+  const t = String((rec && rec.type) || 'OTE').trim().toUpperCase();
+  return t.startsWith('CAN');
+}
+
+function deviceBaseColor(rec) {
+  const hasLaunch = (Number(rec && rec.splices || 0) > 0) || Number(rec && rec.has_photos || 0) > 0;
+  return hasLaunch ? '#03c04a' : '#0d6efd';
+}
+
+function devicePonRingColor(rec) {
+  const ponColor = colorForPon((rec && rec.pon_name) || '');
+  return ponColor || '#ffffff';
+}
+
+function deviceTypeLabel(rec) {
+  const t = String((rec && rec.type) || 'OTE').trim().toUpperCase();
+  if (t === 'SPLITTER') return 'S';
+  if (t === 'D') return 'D';
+  if (t === 'BS') return 'BS';
+  return '';
+}
+
+/* ─────────────────────────────────────────────────
+   buildDeviceIcon — estilo Twelve Fiber
+   Pin SVG verde com ✓ branco interno
+   + badge anteninha vermelha (canto superior direito) quando testado
+   + badge seta branca (canto inferior direito) quando subido (placed)
+   + badge de tipo (S / D / BS) no canto inferior esquerdo
+   ───────────────────────────────────────────────── */
+function buildDeviceIcon(rec) {
+  const hasLaunch = (Number(rec.splices || 0) > 0) || Number(rec.has_photos || 0) > 0 || (Number(rec.ribbon_count || 0) > 0);
+  const tested    = !!rec.test_done;
+  const placed    = !!rec.is_placed;
+  const typeLabel = deviceTypeLabel(rec);
+
+  // Cor do pin: vermelho se desativado, verde se lancado, azul se ainda nao lancado
+  const isActive = rec.is_active !== false;
+  const pinColor = !isActive ? '#e74c3c' : (hasLaunch ? '#2ecc40' : '#1a73e8');
+  const pinDark  = !isActive ? '#922b21' : (hasLaunch ? '#1a7a25' : '#0d4fa8');
+
+  // Badge de tipo (S / D / BS) — construído sem template aninhado
+  var typeBadge = '';
+  if (typeLabel) {
+    var bw = typeLabel.length > 1 ? 18 : 14;
+    var bx = typeLabel.length > 1 ? 10 : 8;
+    typeBadge = '<rect x="1" y="27" width="' + bw + '" height="11" rx="3" fill="#222" opacity="0.85"/>'
+              + '<text x="' + bx + '" y="36" text-anchor="middle" font-size="7.5" font-weight="700"'
+              + ' fill="white" font-family="Arial,sans-serif">' + typeLabel + '</text>';
+  }
+
+  // SVG principal do pin (gota)
+  var pinSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="42" viewBox="0 0 32 42">'
+    + '<path d="M16 2 C8.268 2 2 8.268 2 16 C2 24.418 16 40 16 40 C16 40 30 24.418 30 16 C30 8.268 23.732 2 16 2 Z"'
+    + ' fill="' + pinColor + '" stroke="' + pinDark + '" stroke-width="1.5"'
+    + ' style="filter:drop-shadow(0 2px 3px rgba(0,0,0,0.5))"/>'
+    + '<circle cx="16" cy="16" r="9" fill="white" opacity="0.22"/>'
+    + '<polyline points="10,16 14,20 22,11" fill="none" stroke="white" stroke-width="2.8"'
+    + ' stroke-linecap="round" stroke-linejoin="round"/>'
+    + typeBadge
+    + '</svg>';
+
+  // Badge anteninha vermelha (testado)
+  var antennaSvg = '';
+  if (tested) {
+    antennaSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18"'
+      + ' style="position:absolute;top:-5px;right:-5px;">'
+      + '<circle cx="9" cy="9" r="8.5" fill="#e53935" stroke="white" stroke-width="1"/>'
+      + '<line x1="9" y1="13" x2="9" y2="7" stroke="white" stroke-width="1.8" stroke-linecap="round"/>'
+      + '<path d="M6 6.5 Q9 4 12 6.5" fill="none" stroke="white" stroke-width="1.4" stroke-linecap="round"/>'
+      + '<path d="M4.5 4.8 Q9 1.5 13.5 4.8" fill="none" stroke="white" stroke-width="1.4" stroke-linecap="round"/>'
+      + '<circle cx="9" cy="13.5" r="1.3" fill="white"/>'
+      + '</svg>';
+  }
+
+  // Badge seta verde (subido/placed)
+  var placedSvg = '';
+  if (placed) {
+    placedSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16"'
+      + ' style="position:absolute;bottom:2px;right:-6px;">'
+      + '<circle cx="8" cy="8" r="7.5" fill="#2ecc40" stroke="white" stroke-width="1.5"/>'
+      + '<polyline points="5,10 8,5 11,10" fill="none" stroke="white" stroke-width="2.2"'
+      + ' stroke-linecap="round" stroke-linejoin="round"/>'
+      + '<line x1="8" y1="5" x2="8" y2="12" stroke="white" stroke-width="2.2" stroke-linecap="round"/>'
+      + '</svg>';
+  }
+
+  var html = '<div style="position:relative;width:32px;height:42px;overflow:visible;">'
+    + pinSvg + antennaSvg + placedSvg
+    + '</div>';
+
+  return L.divIcon({
+    className: 'splicer-pin-icon',
+    html: html,
+    iconSize:    [32, 42],
+    iconAnchor:  [16, 42],
+    popupAnchor: [0, -44]
+  });
+}
+
+function createTypeMarker(rec) {
+  return L.marker([rec.lat, rec.lng], { icon: buildDeviceIcon(rec) });
+}
+
+function createTestedDeviceMarker(rec) {
+  return L.marker([rec.lat, rec.lng], { icon: buildDeviceIcon(rec) });
+}
+
+function copyDeviceInfoFromRecord(recordId) {
+      try {
+        const list = window._mapRecords || [];
+        const rec = list.find(r => r.id === recordId);
+        if (!rec) {
+          alert('Não consegui encontrar este dispositivo na lista do mapa.');
+          return;
+        }
+        const deviceName = rec.device || ('ID ' + recordId);
+
+        // 1) Copia o texto para usar no app de Timestamp (fluxo antigo).
+        copyDeviceInfo(MAP_NAME, deviceName);
+
+        // 2) Abre a tela de lançamento por foto já com MAP/DEVICE preenchidos.
+        const url = '/photo-entry?map_name=' + encodeURIComponent(MAP_NAME) +
+                    '&device_name=' + encodeURIComponent(deviceName);
+        window.open(url, '_blank');
+      } catch (e) {
+        console.error('Erro ao preparar texto para copiar / abrir foto-entry:', e);
+        alert('Não foi possível preparar as informações para copiar / abrir a tela de fotos.');
+      }
+    }
+
+
+async function loadMarkers() {
+      // Limpa camada anterior
+      markersLayer.clearLayers();
+      try { window._recordMarkers.clear(); } catch(e) {}
+
+      // Carrega cores das seções via API
+      try {
+        const respColors = await fetch(sectionColorsUrl);
+        if (respColors.ok) {
+          const dataColors = await respColors.json();
+          if (dataColors && dataColors.ok && dataColors.colors) {
+            SECTION_COLORS = dataColors.colors;
+          } else {
+            SECTION_COLORS = {};
+          }
+        } else {
+          SECTION_COLORS = {};
+        }
+      } catch (e) {
+        SECTION_COLORS = {};
+      }
+
+      // Carrega registros do mapa
+      let records = [];
+      try {
+        const resp = await fetch(recordsUrl);
+        if (!resp.ok) {
+          console.error('Falha ao carregar registros do mapa.');
+          return;
+        }
+        const data = await resp.json();
+        records = data.records || [];
+      } catch (e) {
+        console.error('Erro ao carregar registros do mapa.', e);
+        return;
+      }
+
+      if (!records.length) {
+        window._mapRecords = [];
+        updateSectionColorsPanel({});
+        if (IS_ADMIN) updateProgressPanel([]);
+        return;
+      }
+
+      const bounds = [];
+    const invalidRecs = [];
+      let focusLatLng = null;
+      window._mapRecords = records;
+      console.log('[SPLICER] Records carregados:', records.length, '| Exemplo:', records[0] || 'nenhum');
+      if (IS_ADMIN) updateProgressPanel(records);
+
+            // Agrupa pontos por PON para desenhar polígonos coloridos
+            const sections = {};
+            records.forEach(rec => {
+              const ponKey = normalizePon(rec.pon_name || '');
+              if (!ponKey) return;
+              const groupName = 'PON ' + ponKey;
+              if (!sections[groupName]) {
+                sections[groupName] = [];
+              }
+              sections[groupName].push([rec.lat, rec.lng]);
+            });
+
+            // Atualiza painel lateral com os PONs encontrados
+            updateSectionColorsPanel(sections);
+
+            // Desenha um polígono suave (convex hull simples) para cada PON
+            Object.keys(sections).forEach(secName => {
+              const pts = sections[secName];
+              if (pts.length < 3) return;
+
+              const hull = computeConvexHull(pts);
+              const expandedHull = expandPolygon(hull, 1.16);
+              const secColor = colorForPon(secName);
+
+              // Estilo tipo Twelve: contorno mais forte e área leve para leitura rápida
+              L.polygon(expandedHull, {
+                color: secColor,
+                fillColor: secColor,
+                fillOpacity: 0.10,
+                weight: 6,
+                opacity: 0.95,
+                lineJoin: 'round'
+              }).addTo(markersLayer);
+
+              // Linha interna extra para destacar o limite do PON
+              L.polyline([...expandedHull, expandedHull[0]], {
+                color: secColor,
+                weight: 2,
+                opacity: 1.0,
+                lineJoin: 'round'
+              }).addTo(markersLayer);
+            });
+
+            records.forEach(rec => {
+              var marker;
+              try {
+                marker = rec.test_done
+                  ? createTestedDeviceMarker(rec)
+                  : createTypeMarker(rec);
+              } catch(e) {
+                console.error('Erro ao criar ícone para rec.id=' + rec.id, e);
+                // fallback: círculo simples
+                marker = L.circleMarker([rec.lat, rec.lng], {
+                  radius: 8,
+                  color: '#fff',
+                  fillColor: rec.test_done ? '#2ecc40' : '#1a73e8',
+                  fillOpacity: 0.95,
+                  weight: 2
+                });
+              }
+
+
+              const popupParts = [];
+popupParts.push('<div class="device-popup">');
+popupParts.push('<div class="fw-bold mb-1">' + (rec.device || t("no_name")) + '</div>');
+popupParts.push('<div class="small text-info"><strong>' + t("type") + ':</strong> ' + ((rec.type || 'OTE')) + '</div>');
+if (rec.address) {
+  popupParts.push('<div class="small text-muted">' + t("address") + ': ' + rec.address + '</div>');
+}
+if (rec.pon_name) {
+  popupParts.push('<div class="small text-warning"><strong>' + t("pon") + ':</strong> ' + rec.pon_name + '</div>');
+}
+if (rec.section) {
+  popupParts.push('<div class="small text-muted">' + t("section") + ': ' + rec.section + '</div>');
+}
+if (rec.splitter_name) {
+  popupParts.push('<div class="small text-muted">' + t("splitter") + ': ' + rec.splitter_name + '</div>');
+}
+if (rec.source_from) {
+  popupParts.push('<div class="small text-muted">' + t("from") + ': ' + rec.source_from + '</div>');
+}
+if (rec.source_out) {
+  popupParts.push('<div class="small text-muted">' + t("out") + ': ' + rec.source_out + '</div>');
+}
+if (rec.splicer && !(String(rec.splicer).toUpperCase() === 'ADMIN' && Number(rec.splices || 0) === 0 && Number(rec.has_photos || 0) === 0)) {
+  popupParts.push('<div class="small text-muted">Splicer: ' + rec.splicer + '</div>');
+}
+if (rec.info) {
+  popupParts.push('<div class="small mb-1">' + rec.info + '</div>');
+}
+if (rec.ft_lines && rec.ft_lines.length) {
+  popupParts.push('<div class="small mb-1"><strong>FTs:</strong><br>' + rec.ft_lines.join('<br>') + '</div>');
+}
+if (rec.test_levels) {
+  const parsedTests = String(rec.test_levels).split(',').map(function(v){ return v.trim(); }).filter(Boolean);
+  if (parsedTests.length) {
+    const portLines = parsedTests.map(function(v, idx){
+      return 'Porta ' + (idx + 1) + ': ' + v;
+    }).join('<br>');
+    const adminClearBtn = IS_ADMIN
+      ? ' <button class="btn btn-outline-danger btn-sm py-0 px-1 ms-1" style="font-size:10px" onclick="clearRecordTest(' + rec.id + ')">🗑 Apagar</button>'
+      : '';
+    popupParts.push('<div class="small mb-1"><strong>Testes:</strong>' + adminClearBtn + '<br>' + portLines + '</div>');
+  }
+}
+if (rec.test_date) {
+  const d = String(rec.test_date).slice(0, 10);
+  popupParts.push('<div class="small text-success mb-1"><strong>Date:</strong> ' + d + '</div>');
+}
+
+// Miniaturas das fotos de lançamento (se houver)
+if (rec.photo_ids && rec.photo_ids.length > 0) {
+  popupParts.push('<div class="small mt-2"><strong>Fotos do lançamento:</strong></div>');
+  popupParts.push('<div class="mt-1 popup-photos">');
+  rec.photo_ids.forEach(function(pid) {
+    const thumbUrl = '/photo/' + pid + '?size=thumb';
+    const fullUrl = '/photo/' + pid;
+    popupParts.push(
+      '<a href="' + fullUrl + '" target="_blank" class="me-1 mb-1 d-inline-block">' +
+        '<img src="' + thumbUrl + '" class="popup-thumb" alt="Foto">' +
+      '</a>'
+    );
+  });
+  popupParts.push('</div>');
+}
+
+// Miniaturas das fotos de teste (se houver)
+if (rec.test_photo_ids && rec.test_photo_ids.length > 0) {
+  popupParts.push('<div class="small mt-2"><strong>Fotos do teste:</strong></div>');
+  popupParts.push('<div class="mt-1 popup-photos">');
+  rec.test_photo_ids.forEach(function(pid) {
+    const thumbUrl = '/photo/' + pid + '?size=thumb';
+    const fullUrl = '/photo/' + pid;
+    popupParts.push(
+      '<a href="' + fullUrl + '" target="_blank" class="me-1 mb-1 d-inline-block">' +
+        '<img src="' + thumbUrl + '" class="popup-thumb" alt="Foto de teste">' +
+      '</a>'
+    );
+  });
+  popupParts.push('</div>');
+}
+
+// Fotos da subida (placed)
+if (rec.placed_photo_ids && rec.placed_photo_ids.length > 0) {
+  popupParts.push('<div class="small mt-2"><strong>⬆ Fotos da subida:</strong></div>');
+  popupParts.push('<div class="mt-1 popup-photos">');
+  rec.placed_photo_ids.forEach(function(pid) {
+    const thumbUrl = '/photo/' + pid + '?size=thumb';
+    const fullUrl = '/photo/' + pid;
+    popupParts.push(
+      '<a href="' + fullUrl + '" target="_blank" class="me-1 mb-1 d-inline-block">' +
+        '<img src="' + thumbUrl + '" class="popup-thumb" alt="Foto da subida">' +
+      '</a>'
+    );
+  });
+  popupParts.push('</div>');
+}
+
+popupParts.push('<div class="mt-2 d-flex flex-wrap gap-1">');
+if (!IS_OWNER_READONLY) {
+  popupParts.push(
+    '<button class="btn btn-primary btn-sm" onclick="openRecordFromMap(' + rec.id + ')">Abrir dispositivo</button>'
+  );
+  popupParts.push(
+    '<button class="btn btn-warning btn-sm" onclick="copyDeviceInfoFromRecord(' + rec.id + ')">Copiar info</button>'
+  );
+
+  if (!_isCanType(rec) && Number(rec.splices || 0) > 0) {
+    popupParts.push(
+      '<button class="btn btn-success btn-sm" onclick="openTestModalById(' + rec.id + ')">Lançar teste</button>'
+    );
+  }
+
+  // Botão Subir dispositivo (always shown, shows status)
+  const placedLabel = rec.is_placed
+    ? '↑ Subido'
+    : '↑ Subir';
+  const placedBtnClass = rec.is_placed
+    ? 'btn btn-outline-success btn-sm'
+    : 'btn btn-outline-warning btn-sm';
+  popupParts.push(
+    '<button class="' + placedBtnClass + '" onclick="openPlacedModalById(' + rec.id + ')">' + placedLabel + '</button>'
+  );
+
+  if (IS_ADMIN) {
+    popupParts.push(
+      '<button class="btn btn-outline-light btn-sm" onclick="openDeviceModalById(' + rec.id + ')">Editar no mapa</button>'
+    );
+    popupParts.push(
+      '<button class="btn btn-secondary btn-sm" onclick="enableMoveRecord(' + rec.id + ')">Mover</button>'
+    );
+  }
+}
+
+// Placed info line in popup
+if (rec.is_placed) {
+  const placedDateStr = rec.placed_at ? String(rec.placed_at).slice(0, 10) : '';
+  popupParts.push(
+    '<div class="small text-success mt-1">⬆ Subido por: <strong>' + (rec.placed_by || '?') + '</strong>' +
+    (placedDateStr ? ' em ' + placedDateStr : '') + '</div>'
+  );
+}
+popupParts.push(
+  '<a class="btn btn-outline-info btn-sm" href="https://www.google.com/maps?q=' +
+    rec.lat + ',' + rec.lng +
+    '" target="_blank">' + t("google_maps") + '</a>'
+);
+popupParts.push('</div>');
+popupParts.push('</div>');
+const popupHtml = popupParts.join('');
+              try { marker.bindPopup(popupHtml); } catch(e) {}
+              marker.on('click', function () { try { this.openPopup(); } catch(e) {} });
+              try { window._recordMarkers.set(rec.id, marker); } catch(e) {}
+              try { marker.addTo(markersLayer); } catch(e) { console.error('Erro addTo marker rec.id=' + rec.id, e); }
+              if (currentFocusRecordId && rec.id === currentFocusRecordId) {
+                focusLatLng = [rec.lat, rec.lng];
+                marker.openPopup();
+              }
+            });
+            // Compute robust bounds so a single wrong coordinate doesn't zoom the whole world
+            const fitPoints = _robustFitPoints(records);
+            const fitBounds = fitPoints.map(p => [p.lat, p.lng]);
+
+            if (focusLatLng) {
+              leafletMap.setView(focusLatLng, 18);
+              currentFocusRecordId = null;
+            } else if (fitBounds.length) {
+              leafletMap.fitBounds(fitBounds, { padding: [20, 20] });
+            }
+          }
+
+
+    
+function openDeviceModalById(id) {
+      const list = window._mapRecords || [];
+      const rec = list.find(r => r.id === id);
+      if (rec) {
+        openDeviceModal(rec);
+      }
+    }
+
+    window.openPlacedModalById = function(id) {
+      const list = window._mapRecords || [];
+      const rec = list.find(r => r.id === id);
+      if (rec) openPlacedModal(rec);
+    };
+
+    window.openPlacedModal = function(rec) {
+      const modalEl = document.getElementById('placedModal');
+      const modal = new bootstrap.Modal(modalEl);
+
+      document.getElementById('placed-record-id').value = rec.id || '';
+      document.getElementById('placed-device-name-label').textContent =
+        'Dispositivo: ' + (rec.device || 'Sem nome');
+      document.getElementById('placed-splicer-label').textContent =
+        rec.splicer ? ('Splicer original: ' + rec.splicer) : '';
+
+      const alreadyBox = document.getElementById('placed-already-box');
+      const forceBox = document.getElementById('placed-already-box-force');
+      const forceCheck = document.getElementById('placed-force-check');
+
+      if (rec.is_placed) {
+        alreadyBox.style.display = '';
+        document.getElementById('placed-already-name').textContent = rec.placed_by || '?';
+        const dateStr = rec.placed_at ? String(rec.placed_at).slice(0, 10) : '';
+        document.getElementById('placed-already-date').textContent = dateStr ? 'Data: ' + dateStr : '';
+        forceBox.style.display = '';
+        if (forceCheck) forceCheck.checked = false;
+      } else {
+        alreadyBox.style.display = 'none';
+        forceBox.style.display = 'none';
+        if (forceCheck) forceCheck.checked = false;
+      }
+
+      // Reset fotos
+      const photosInput = document.getElementById('placed-photos');
+      if (photosInput) photosInput.value = '';
+
+      modal.show();
+    };
+
+    window.openTestModalById = function(id) {
+      const list = window._mapRecords || [];
+      const rec = list.find(r => r.id === id);
+      if (rec) {
+        openTestModal(rec);
+      }
+    }
+
+    
+    window.openTestModal = function(rec) {
+      const modalEl = document.getElementById('testModal');
+      const modal = new bootstrap.Modal(modalEl);
+      document.getElementById('test-record-id').value = rec.id || "";
+      document.getElementById('test-device-name-label').textContent =
+        'Dispositivo: ' + (rec.device || 'Sem nome');
+      document.getElementById('test-splicer-label').textContent =
+        rec.splicer ? ('Splicer: ' + rec.splicer) : '';
+      document.getElementById('test-info-label').textContent =
+        rec.info ? ('Info: ' + rec.info) : '';
+
+      const container = document.getElementById('test-levels-container');
+      container.innerHTML = "";
+
+      const totalSplices = rec.splices && rec.splices > 0 ? rec.splices : 0;
+      const levelsRaw = rec.test_levels || "";
+      const parsedLevels = levelsRaw ? levelsRaw.split(',').map(s => s.trim()) : [];
+
+      const count = Math.max(totalSplices, parsedLevels.length, 0);
+      if (count <= 0) {
+        alert('Este dispositivo ainda não tem fusões lançadas para testar.');
+        return;
+      }
+
+      for (let i = 0; i < count; i++) {
+        const group = document.createElement('div');
+        group.className = 'input-group input-group-sm mb-2';
+
+        const span = document.createElement('span');
+        span.className = 'input-group-text bg-secondary text-light';
+        span.textContent = 'Nivel ' + (i + 1);
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'form-control bg-dark text-light border-secondary test-level-input';
+        input.placeholder = '-18.5 dB';
+        if (parsedLevels[i]) {
+          input.value = parsedLevels[i];
+        }
+
+        group.appendChild(span);
+        group.appendChild(input);
+        container.appendChild(group);
+      }
+
+      const photosInput = document.getElementById('test-photos');
+      if (photosInput) {
+        photosInput.value = '';
+      }
+
+      modal.show();
+    }
+
+    function openDeviceModal(rec) {
+      document.getElementById('device-record-id').value = rec.id;
+      document.getElementById('device-name').value = rec.device || '';
+      document.getElementById('device-splices').value = rec.splices || 0;
+      document.getElementById('device-photos').value = '';
+      document.getElementById('device-info').value = rec.info || '';
+      document.getElementById('device-type').value = rec.type || 'OTE';
+      document.getElementById('device-address').value = rec.address || '';
+      document.getElementById('device-pon-name').value = rec.pon_name || '';
+      document.getElementById('device-splitter-name').value = rec.splitter_name || '';
+      document.getElementById('device-source-from').value = rec.source_from || '';
+      document.getElementById('device-source-out').value = rec.source_out || '';
+      document.getElementById('device-ote-label').value = rec.ote_label || '';
+      document.getElementById('device-port-label').value = rec.port_label || '';
+      document.getElementById('device-section').value = rec.section || '';
+
+      const gmapsLink = document.getElementById('device-gmaps-link');
+      if (gmapsLink && rec.lat && rec.lng) {
+        gmapsLink.href = "https://www.google.com/maps?q=" + rec.lat + "," + rec.lng;
+      } else if (gmapsLink) {
+        gmapsLink.href = "#";
+      }
+
+      // Botao toggle ativo/inativo
+      const btnToggle = document.getElementById('btn-toggle-active');
+      if (btnToggle) {
+        const isActive = rec.is_active !== false;
+        btnToggle.textContent = isActive ? 'Desativar' : 'Reativar';
+        btnToggle.className = isActive ? 'btn btn-warning btn-sm' : 'btn btn-success btn-sm';
+        btnToggle.dataset.recordId = rec.id;
+        btnToggle.dataset.isActive = isActive ? '1' : '0';
+      }
+      const btnDelete = document.getElementById('btn-delete-device');
+      if (btnDelete) btnDelete.dataset.recordId = rec.id;
+
+      const modal = new bootstrap.Modal(document.getElementById('deviceModal'));
+      modal.show();
+    }
+
+    async function toggleDeviceActive() {
+      const btn = document.getElementById('btn-toggle-active');
+      const recId = btn && btn.dataset.recordId;
+      if (!recId) return;
+      if (!confirm('Confirma ' + (btn.dataset.isActive === '1' ? 'desativar' : 'reativar') + ' este dispositivo?')) return;
+      const resp = await fetch('/api/records/' + recId + '/toggle-active', { method: 'POST' });
+      const data = await resp.json();
+      if (data.ok) {
+        // Atualiza o registro local e redesenha o pin
+        const rec = allRecords.find(r => r.id == recId);
+        if (rec) {
+          rec.is_active = data.is_active;
+          refreshMarkers();
+        }
+        bootstrap.Modal.getInstance(document.getElementById('deviceModal')).hide();
+      } else {
+        alert(data.error || 'Erro ao alterar status.');
+      }
+    }
+
+    async function deleteDeviceFromMap() {
+      const btn = document.getElementById('btn-delete-device');
+      const recId = btn && btn.dataset.recordId;
+      if (!recId) return;
+      if (!confirm('EXCLUIR este dispositivo do mapa permanentemente? Esta ação não pode ser desfeita.')) return;
+      const resp = await fetch('/api/records/' + recId + '/delete-from-map', { method: 'POST' });
+      const data = await resp.json();
+      if (data.ok) {
+        // Remove do array local e redesenha
+        const idx = allRecords.findIndex(r => r.id == recId);
+        if (idx !== -1) allRecords.splice(idx, 1);
+        refreshMarkers();
+        bootstrap.Modal.getInstance(document.getElementById('deviceModal')).hide();
+      } else {
+        alert(data.error || 'Erro ao excluir dispositivo.');
+      }
+    }
+
+    const kmzForm = document.getElementById('kmz-form');
+    if (kmzForm) kmzForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const formData = new FormData(ev.target);
+
+      const resp = await fetch(importKmzUrl, {
+        method: 'POST',
+        body: formData
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        alert('Importados/atualizados ' + data.imported + ' dispositivos');
+        loadMarkers();
+      } else {
+        alert('Falha ao importar KMZ.');
+      }
+    });
+
+    const hafForm = document.getElementById('haf-form');
+    if (hafForm) hafForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const btn = hafForm.querySelector('button[type="submit"]');
+      const origText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Importando...';
+
+      try {
+        const formData = new FormData(ev.target);
+        const resp = await fetch(importHafUrl, {
+          method: 'POST',
+          body: formData
+        });
+        const data = await resp.json();
+        if (data.ok) {
+          alert(`✅ Importados ${data.imported} dispositivos novos.` +
+                (data.skipped > 0 ? `\n⚠️ ${data.skipped} linha(s) ignoradas (sem coordenadas).` : ''));
+          loadMarkers();
+        } else {
+          alert('Erro ao importar planilha HAF: ' + (data.error || 'Falha desconhecida.'));
+        }
+      } catch (err) {
+        alert('Erro de rede ao importar planilha HAF.');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = origText;
+        ev.target.reset();
+      }
+    });
+
+    const spliceReportForm = document.getElementById('splice-report-form');
+    if (spliceReportForm) spliceReportForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const btn = spliceReportForm.querySelector('button[type="submit"]');
+      const origText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Processando...';
+
+      try {
+        const formData = new FormData(ev.target);
+        const resp = await fetch(importSpliceReportUrl, {
+          method: 'POST',
+          body: formData
+        });
+        const data = await resp.json();
+        if (data.ok) {
+          // Build PON map summary
+          let ponSummary = '';
+          if (data.pon_map && Object.keys(data.pon_map).length > 0) {
+            ponSummary = '\n\nMapeamento de PONs:\n' +
+              Object.entries(data.pon_map).map(([se, pon]) => `  ${pon} → ${se}`).join('\n');
+          }
+          let notFoundMsg = '';
+          if (data.not_found && data.not_found.length > 0) {
+            notFoundMsg = `\n⚠️ ${data.not_found.length} dispositivo(s) não encontrado(s) no mapa.`;
+          }
+          alert(`✅ ${data.updated} dispositivo(s) atualizados com PON, splitter e fibras.${notFoundMsg}${ponSummary}`);
+          loadMarkers();
+        } else {
+          alert('Erro ao importar Splice Report: ' + (data.error || 'Falha desconhecida.'));
+        }
+      } catch (err) {
+        alert('Erro de rede ao importar Splice Report.');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = origText;
+        ev.target.reset();
+      }
+    });
+
+    document.getElementById('device-form').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+
+      const recId = document.getElementById('device-record-id').value;
+      const splices = document.getElementById('device-splices').value;
+      const info = document.getElementById('device-info').value;
+      const deviceType = document.getElementById('device-type').value;
+      const deviceAddress = document.getElementById('device-address').value;
+      const ponName = document.getElementById('device-pon-name').value;
+      const splitterName = document.getElementById('device-splitter-name').value;
+      const sourceFrom = document.getElementById('device-source-from').value;
+      const sourceOut = document.getElementById('device-source-out').value;
+      const oteLabel = document.getElementById('device-ote-label').value;
+      const portLabel = document.getElementById('device-port-label').value;
+      const section = document.getElementById('device-section').value;
+      const photosInput = document.getElementById('device-photos');
+
+      const deviceNameVal = document.getElementById('device-name').value.trim();
+      const formData = new FormData();
+      formData.append('splices', splices);
+      formData.append('device_name', deviceNameVal);
+      formData.append('device_info', info);
+      formData.append('device_type', deviceType);
+      formData.append('geo_address', deviceAddress);
+      formData.append('pon_name', ponName);
+      formData.append('splitter_name', splitterName);
+      formData.append('source_from', sourceFrom);
+      formData.append('source_out', sourceOut);
+      formData.append('ote_label', oteLabel);
+      formData.append('port_label', portLabel);
+      formData.append('section', section);
+      for (let i = 0; i < photosInput.files.length; i++) {
+        formData.append('photos', photosInput.files[i]);
+      }
+
+      const resp = await fetch('/api/records/' + recId + '/update-from-map', {
+        method: 'POST',
+        body: formData
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        // Atualiza nome local imediatamente sem reload completo
+        if (deviceNameVal) {
+          const rec = allRecords.find(r => r.id == recId);
+          if (rec) rec.device = deviceNameVal;
+        }
+        const modalEl = document.getElementById('deviceModal');
+        const modal = bootstrap.Modal.getInstance(modalEl);
+        modal.hide();
+        loadMarkers();
+      } else {
+        alert('Erro ao salvar dispositivo.');
+      }
+    });
+
+
+    const refreshAddressBtn = document.getElementById('refresh-address-btn');
+    if (refreshAddressBtn) refreshAddressBtn.addEventListener('click', async () => {
+      const recId = document.getElementById('device-record-id').value;
+      if (!recId) return;
+      refreshAddressBtn.disabled = true;
+      try {
+        const resp = await fetch('/api/records/' + recId + '/refresh-address', { method: 'POST' });
+        const data = await resp.json();
+        if (data.ok) {
+          document.getElementById('device-address').value = data.address || '';
+        } else {
+          alert(data.error || 'Não foi possível buscar endereço.');
+        }
+      } finally {
+        refreshAddressBtn.disabled = false;
+      }
+    });
+
+    const autoNetworkBtn = document.getElementById('auto-network-btn');
+    if (autoNetworkBtn) autoNetworkBtn.addEventListener('click', async () => {
+      autoNetworkBtn.disabled = true;
+      try {
+        const resp = await fetch(autoNetworkUrl, { method: 'POST' });
+        const data = await resp.json();
+        if (data.ok) {
+          alert('Rede atualizada. Campos FROM/OUT alterados: ' + (data.updated || 0));
+          loadMarkers();
+        } else {
+          alert(data.error || 'Falha ao montar rede automática.');
+        }
+      } finally {
+        autoNetworkBtn.disabled = false;
+      }
+    });
+
+    const manualForm = document.getElementById('manual-device-form');
+    if (manualForm) manualForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+
+      const name = document.getElementById('manual-device-name').value.trim();
+      const lat = document.getElementById('manual-device-lat').value.trim();
+      const lng = document.getElementById('manual-device-lng').value.trim();
+      const info = document.getElementById('manual-device-info').value.trim();
+
+      const formData = new FormData();
+      formData.append('device', name);
+      formData.append('lat', lat);
+      formData.append('lng', lng);
+      formData.append('device_info', info);
+
+      const resp = await fetch(addRecordUrl, {
+        method: 'POST',
+        body: formData
+      });
+      const data = await resp.json();
+
+      if (data.ok) {
+        document.getElementById('manual-device-name').value = '';
+        document.getElementById('manual-device-lat').value = '';
+        document.getElementById('manual-device-lng').value = '';
+        document.getElementById('manual-device-info').value = '';
+        if (data.id) {
+          currentFocusRecordId = data.id;
+        }
+        loadMarkers();
+      } else {
+        alert(data.error || 'Erro ao adicionar dispositivo.');
+      }
+    });
+
+
+
+    const testForm = document.getElementById('test-form');
+    if (testForm) testForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+
+      const recId = document.getElementById('test-record-id').value;
+      const levelsInputs = Array.from(document.querySelectorAll('#test-levels-container .test-level-input'));
+      const levels = levelsInputs.map(i => i.value.trim()).join(',');
+
+      const formData = new FormData();
+      formData.append('levels', levels);
+
+      const photosInput = document.getElementById('test-photos');
+      if (photosInput && photosInput.files) {
+        Array.from(photosInput.files).slice(0, 5).forEach(f => {
+          formData.append('photos', f);
+        });
+      }
+
+      const url = '/api/records/' + recId + '/save-test';
+      const resp = await fetch(url, {
+        method: 'POST',
+        body: formData
+      });
+      const data = await resp.json();
+
+      if (data.ok) {
+        const modalEl = document.getElementById('testModal');
+        const modal = bootstrap.Modal.getInstance(modalEl);
+        if (modal) modal.hide();
+        loadMarkers();
+      } else {
+        alert(data.error || 'Erro ao salvar teste.');
+      }
+    });
+
+    // Handler: Subir dispositivo (placed)
+    const placedForm = document.getElementById('placed-form');
+    if (placedForm) placedForm.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+
+      const recId = document.getElementById('placed-record-id').value;
+      if (!recId) return;
+
+      const forceCheck = document.getElementById('placed-force-check');
+      const force = (forceCheck && forceCheck.checked) ? '1' : '0';
+
+      const formData = new FormData();
+      formData.append('force', force);
+
+      const photosInput = document.getElementById('placed-photos');
+      if (photosInput && photosInput.files) {
+        Array.from(photosInput.files).slice(0, 5).forEach(f => {
+          formData.append('photos', f);
+        });
+      }
+
+      const submitBtn = placedForm.querySelector('[type=submit]');
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Salvando...';
+      }
+
+      try {
+        const resp = await fetch('/api/records/' + recId + '/set-placed', {
+          method: 'POST',
+          body: formData
+        });
+        const data = await resp.json();
+
+        if (data.ok) {
+          const modalEl = document.getElementById('placedModal');
+          const modal = bootstrap.Modal.getInstance(modalEl);
+          if (modal) modal.hide();
+          loadMarkers();
+        } else {
+          alert(data.error || 'Erro ao registrar subida.');
+        }
+      } catch (e) {
+        alert('Erro de conexão ao registrar subida.');
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '⬆ Confirmar subida';
+        }
+      }
+    });
+
+    document.addEventListener('DOMContentLoaded', initMap);
+
+    document.addEventListener('DOMContentLoaded', function () {
+      try { setupDeviceSearch(); } catch(e) {}
+      const saveBtn = document.getElementById('save-section-colors-btn');
+      if (saveBtn) {
+        saveBtn.addEventListener('click', async function () {
+          const panel = document.getElementById('section-colors-panel');
+          if (!panel) return;
+
+          const inputs = panel.querySelectorAll('input[data-section-name]');
+          const payload = { colors: {} };
+          inputs.forEach(inp => {
+            const name = inp.getAttribute('data-section-name');
+            const val = inp.value;
+            if (name && val) {
+              payload.colors[name] = val;
+            }
+          });
+
+          try {
+            const resp = await fetch(sectionColorsUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            });
+            const data = await resp.json();
+            if (data.ok) {
+              // Atualiza objeto local SECTION_COLORS
+              Object.keys(payload.colors).forEach(k => {
+                SECTION_COLORS[k] = payload.colors[k];
+              });
+              alert('Cores dos PONs salvas com sucesso!');
+              // Recarrega marcadores para aplicar as novas cores
+              loadMarkers();
+            } else {
+              alert(data.error || 'Erro ao salvar cores das seções.');
+            }
+          } catch (e) {
+            alert('Erro ao salvar cores das seções.');
+          }
+        });
+      }
+    });
+
+
+
+  /* ═══════════════════════════════════════════════
+     BOTÃO FLUTUANTE: 📷 Foto Automático
+  ═══════════════════════════════════════════════ */
+  (function setupAutoPhoto() {
+    // Cria botão FAB
+    const fab = document.createElement('button');
+    fab.id = 'fab-auto-photo';
+    fab.innerHTML = '📷';
+    fab.title = 'Foto Automático — lançar produção pela foto';
+    fab.style.cssText = `
+      position: fixed;
+      bottom: 28px;
+      right: 22px;
+      z-index: 9999;
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      background: #198754;
+      color: #fff;
+      border: none;
+      font-size: 26px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.45);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.2s;
+    `;
+    fab.addEventListener('mouseenter', () => fab.style.background = '#157347');
+    fab.addEventListener('mouseleave', () => fab.style.background = '#198754');
+    document.body.appendChild(fab);
+
+    // Cria modal
+    const modalHtml = `
+    <div class="modal fade" id="autoPhotoModal" tabindex="-1" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content bg-dark text-light">
+          <div class="modal-header border-secondary">
+            <h5 class="modal-title">📷 Foto Automático</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <p class="text-muted small mb-3">
+              Suba as fotos Timemark. O sistema usa IA para ler o dispositivo,
+              número de fusões, feet IN/OUT e tipo (MEIO/PONTA) — e lança automaticamente.
+            </p>
+            <div class="mb-3">
+              <label class="form-label fw-semibold">Fotos (pode selecionar várias)</label>
+              <input type="file" id="auto-photo-input" class="form-control bg-secondary text-light border-0"
+                     accept="image/*" multiple>
+            </div>
+            <div id="auto-photo-preview" class="d-flex flex-wrap gap-2 mb-3"></div>
+            <div id="auto-photo-progress" class="d-none">
+              <div class="d-flex align-items-center gap-2 mb-2">
+                <div class="spinner-border spinner-border-sm text-success" role="status"></div>
+                <span id="auto-photo-status">Lendo fotos com IA...</span>
+              </div>
+              <div class="progress" style="height:6px">
+                <div id="auto-photo-bar" class="progress-bar bg-success progress-bar-striped progress-bar-animated"
+                     style="width:0%"></div>
+              </div>
+            </div>
+            <div id="auto-photo-results" class="mt-3"></div>
+          </div>
+          <div class="modal-footer border-secondary">
+            <button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Fechar</button>
+            <button type="button" id="auto-photo-btn-send" class="btn btn-success px-4">
+              ⬆ Lançar automaticamente
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+    const modal = new bootstrap.Modal(document.getElementById('autoPhotoModal'));
+    fab.addEventListener('click', () => {
+      document.getElementById('auto-photo-results').innerHTML = '';
+      document.getElementById('auto-photo-preview').innerHTML = '';
+      document.getElementById('auto-photo-input').value = '';
+      document.getElementById('auto-photo-progress').classList.add('d-none');
+      modal.show();
+    });
+
+    // Preview de miniaturas ao selecionar fotos
+    document.getElementById('auto-photo-input').addEventListener('change', function () {
+      const preview = document.getElementById('auto-photo-preview');
+      preview.innerHTML = '';
+      Array.from(this.files).forEach(file => {
+        const url = URL.createObjectURL(file);
+        const img = document.createElement('img');
+        img.src = url;
+        img.style.cssText = 'width:72px;height:72px;object-fit:cover;border-radius:6px;border:2px solid #444';
+        preview.appendChild(img);
+      });
+    });
+
+    // Envio
+    document.getElementById('auto-photo-btn-send').addEventListener('click', async () => {
+      const input = document.getElementById('auto-photo-input');
+      const files = Array.from(input.files);
+      if (!files.length) {
+        alert('Selecione pelo menos uma foto.');
+        return;
+      }
+
+      const progress = document.getElementById('auto-photo-progress');
+      const bar = document.getElementById('auto-photo-bar');
+      const status = document.getElementById('auto-photo-status');
+      const resultsDiv = document.getElementById('auto-photo-results');
+      const btnSend = document.getElementById('auto-photo-btn-send');
+
+      progress.classList.remove('d-none');
+      resultsDiv.innerHTML = '';
+      btnSend.disabled = true;
+      bar.style.width = '5%';
+
+      // Envia uma foto por vez (compatível com iOS Safari)
+      const allResults = [];
+      let anyOk = false;
+      let testPhotoCount = 0; // controla reset na 1a foto de teste do lote
+
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        const pct = Math.round(((i + 0.5) / files.length) * 90) + 5;
+        bar.style.width = pct + '%';
+        status.textContent = 'Foto ' + (i + 1) + ' de ' + files.length + ': ' + f.name.slice(0, 30) + '...';
+
+        try {
+          const fd = new FormData();
+          fd.append('photos', f, f.name);
+          // reset_test=1 na primeira foto de teste do lote para sobrescrever anterior
+          if (testPhotoCount === 0) fd.append('reset_test', '1');
+          const resp = await fetch(autoPhotoLaunchUrl, { method: 'POST', body: fd });
+          if (!resp.ok) {
+            allResults.push({ file: f.name, ok: false, error: 'HTTP ' + resp.status });
+            continue;
+          }
+          const data = await resp.json();
+          (data.results || []).forEach(r => {
+            allResults.push(r);
+            if (r.ok) {
+              anyOk = true;
+              if (r.action === 'test') testPhotoCount++;
+            }
+          });
+        } catch (e) {
+          allResults.push({ file: f.name, ok: false, error: 'Erro: ' + e.message });
+        }
+      }
+
+      bar.style.width = '100%';
+      status.textContent = 'Concluído!';
+
+      try {
+        let html = '<div class="list-group list-group-flush">';
+        allResults.forEach(r => {
+          const icon = r.ok ? '✅' : '❌';
+          const color = r.ok ? 'success' : 'danger';
+          let detail = '';
+          if (r.ok) {
+            const action = r.action || 'splice';
+            if (action === 'test') {
+              detail = '<span class="text-muted small">' + r.device + ' · 📊 Teste · ' + (r.power_dbm != null ? r.power_dbm + ' dBm' : '') + '</span>';
+            } else if (action === 'placed') {
+              detail = '<span class="text-muted small">' + r.device + ' · 📍 Subido</span>';
+            } else if (action === 'created') {
+              detail = '<span class="text-success small">✨ Novo dispositivo criado · ' + (r.map_role || '') + ' · ' + (r.splices || 0) + ' fusões' +
+                (r.ft_in ? ' · IN: ' + r.ft_in : '') +
+                (r.lat ? ' · 📍 ' + r.lat.toFixed(5) + ',' + r.lon.toFixed(5) : '') + '</span>';
+            } else {
+              detail = '<span class="text-muted small">' + r.device + ' · ' + (r.map_role || '') + ' · ' + (r.splices || 0) + ' fusões' +
+                (r.ft_in ? ' · IN: ' + r.ft_in : '') + (r.ft_out ? ' · OUT: ' + r.ft_out : '') + '</span>';
+            }
+          } else {
+            detail = '<span class="text-danger small">' + (r.error || 'Erro desconhecido') + '</span>';
+          }
+          html += '<div class="list-group-item bg-dark border-secondary py-2">' +
+            icon + ' <strong class="text-' + color + '">' + r.file + '</strong><br>' + detail +
+            '</div>';
+        });
+        html += '</div>';
+        resultsDiv.innerHTML = html;
+
+        if (anyOk) setTimeout(() => loadMarkers(), 800);
+      } catch (e) {
+        status.textContent = 'Erro ao exibir resultados.';
+        resultsDiv.innerHTML = '<div class="alert alert-danger">Erro: ' + e + '</div>';
+      } finally {
+        btnSend.disabled = false;
+      }
+    });
+  })();
+
+
+  /* ── Admin: apagar teste de um dispositivo ── */
+  function clearRecordTest(recordId) {
+    if (!confirm('Apagar TODOS os testes deste dispositivo? Esta ação não pode ser desfeita.')) return;
+    fetch('/api/records/' + recordId + '/clear-test', { method: 'POST' })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) {
+          alert('Teste apagado com sucesso.');
+          loadMarkers();
+        } else {
+          alert('Erro: ' + (d.error || 'desconhecido'));
+        }
+      })
+      .catch(e => alert('Erro de conexão: ' + e));
+  }
+
+  </script>
+{% endblock %}

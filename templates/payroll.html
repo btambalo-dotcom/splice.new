@@ -1,0 +1,189 @@
+{% extends 'base.html' %}
+{% block title %}Payroll · SPLICER{% endblock %}
+{% block content %}
+<style>
+  .pay-card { background:#1e1e2e; border:1px solid #2a2a3e; border-radius:12px; }
+  .section-title { font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; color:#555; font-weight:600; margin-bottom:.75rem; }
+  .badge-pending   { background:rgba(251,191,36,.12); color:#fbbf24; border:1px solid rgba(251,191,36,.25); }
+  .badge-paid      { background:rgba(16,185,129,.12); color:#10b981; border:1px solid rgba(16,185,129,.25); }
+  .badge-cancelled { background:rgba(107,114,128,.1); color:#6b7280; border:1px solid rgba(107,114,128,.2); }
+  .badge-pay { font-size:.7rem; padding:.3em .7em; border-radius:20px; font-weight:500; display:inline-block; }
+  .overdue { color:#ef4444 !important; }
+  tr.pay-row { border-color:#1e1e2e !important; }
+  tr.pay-row:hover { background:rgba(139,92,246,.04); }
+  .form-control, .form-select { background:#12121c !important; border-color:#2a2a3e !important; color:#ddd !important; }
+  .form-control:focus, .form-select:focus { border-color:#8b5cf6 !important; box-shadow:0 0 0 2px rgba(139,92,246,.18) !important; }
+</style>
+
+<div class="d-flex align-items-center justify-content-between mb-4 flex-wrap gap-2">
+  <div>
+    <h4 class="mb-0 fw-semibold">💰 Payroll</h4>
+    <p class="text-secondary mb-0" style="font-size:.82rem;">Controle de folhas de pagamento dos splicers</p>
+  </div>
+  <a href="{{ url_for('payroll_new') }}" class="btn btn-sm px-3" style="background:#8b5cf6;color:#fff;border:none;border-radius:8px;">+ Novo Payroll</a>
+</div>
+
+<!-- Filtros -->
+<div class="pay-card p-3 mb-4">
+  <form method="get" class="row g-2 align-items-end">
+    <div class="col-md-4">
+      <label class="form-label small text-secondary mb-1">Splicer</label>
+      <select class="form-select form-select-sm" name="user_id">
+        <option value="">Todos</option>
+        {% for s in splicers %}
+        <option value="{{ s.id }}" {% if user_filter == s.id %}selected{% endif %}>{{ s.splicer_name or s.username }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label small text-secondary mb-1">Status</label>
+      <select class="form-select form-select-sm" name="status">
+        <option value="">Todos</option>
+        <option value="pending"   {% if status_filter=='pending'   %}selected{% endif %}>⏳ Pendente</option>
+        <option value="paid"      {% if status_filter=='paid'      %}selected{% endif %}>✅ Pago</option>
+        <option value="cancelled" {% if status_filter=='cancelled' %}selected{% endif %}>✕ Cancelado</option>
+      </select>
+    </div>
+    <div class="col-md-4">
+      <button class="btn btn-sm btn-outline-secondary w-100">Filtrar</button>
+    </div>
+  </form>
+</div>
+
+<!-- Totais rápidos -->
+{% set total_pending = payrolls | selectattr('status','eq','pending') | list %}
+{% set total_paid    = payrolls | selectattr('status','eq','paid')    | list %}
+<div class="row g-3 mb-4">
+  <div class="col-md-3">
+    <div class="pay-card p-3 text-center">
+      <div class="text-secondary" style="font-size:.75rem;">Total de folhas</div>
+      <div class="fw-bold fs-4" style="color:#a78bfa;">{{ payrolls|length }}</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="pay-card p-3 text-center">
+      <div class="text-secondary" style="font-size:.75rem;">Pendentes</div>
+      <div class="fw-bold fs-4" style="color:#fbbf24;">{{ total_pending|length }}</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="pay-card p-3 text-center">
+      <div class="text-secondary" style="font-size:.75rem;">Pagas</div>
+      <div class="fw-bold fs-4" style="color:#10b981;">{{ total_paid|length }}</div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="pay-card p-3 text-center">
+      <div class="text-secondary" style="font-size:.75rem;">Valor pendente (USD)</div>
+      <div class="fw-bold fs-4" style="color:#f59e0b;">
+        $ {{ '%.2f'|format(total_pending | sum(attribute='total_amount_usd')) }}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Tabela -->
+<div class="pay-card p-4">
+  <p class="section-title">Folhas de pagamento</p>
+  {% if payrolls %}
+  <div class="table-responsive">
+    <table class="table table-sm table-dark align-middle mb-0" style="font-size:.85rem;--bs-table-bg:#1e1e2e;--bs-table-border-color:#2a2a3e;--bs-table-color:#ccc;">
+      <thead>
+        <tr style="font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:#444;">
+          <th>#</th>
+          <th>Splicer</th>
+          <th>Período</th>
+          <th>Projeto / Empresa</th>
+          <th>Lançamentos</th>
+          <th>Fusões</th>
+          <th>Valor USD</th>
+          <th>Vencimento</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in payrolls %}
+        {% set today = namespace(d=none) %}
+        <tr class="pay-row">
+          <td style="color:#555;">{{ p.id }}</td>
+          <td style="font-weight:500;color:#e0e0e0;">{{ p.user.splicer_name or p.user.username }}</td>
+          <td style="color:#888;white-space:nowrap;">
+            {{ p.start_date.strftime('%d/%m/%y') }} → {{ p.end_date.strftime('%d/%m/%y') }}
+          </td>
+          <td style="color:#777;font-size:.8rem;">
+            {% if p.project %}
+              {{ p.project.name }}<br><span style="color:#555;">{{ p.company }}</span>
+            {% elif p.company %}
+              {{ p.company }}
+            {% else %}
+              <span style="color:#444;">—</span>
+            {% endif %}
+          </td>
+          <td style="text-align:center;">{{ p.total_records }}</td>
+          <td style="text-align:center;">{{ p.total_splices }}</td>
+          <td style="color:#a78bfa;font-weight:500;">$ {{ '%.2f'|format(p.total_amount_usd or 0) }}</td>
+          <td style="white-space:nowrap;">
+            {% if p.due_date %}
+              <span>{{ p.due_date.strftime('%d/%m/%Y') }}</span>
+              {% if p.status == 'pending' %}
+                <br><span style="font-size:.7rem;color:#ef4444;">{{ p.payment_days }}d prazo</span>
+              {% endif %}
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            {% if p.status == 'pending' %}
+              <span class="badge-pay badge-pending">⏳ Pendente</span>
+            {% elif p.status == 'paid' %}
+              <span class="badge-pay badge-paid">✅ Pago</span>
+              {% if p.paid_at %}
+              <br><span style="font-size:.68rem;color:#555;">{{ p.paid_at.strftime('%d/%m/%y') }}</span>
+              {% endif %}
+            {% else %}
+              <span class="badge-pay badge-cancelled">✕ Cancelado</span>
+            {% endif %}
+          </td>
+          <td class="text-end">
+            <div class="d-flex gap-1 justify-content-end flex-wrap">
+              <a href="{{ url_for('payroll_detail', pid=p.id) }}"
+                 class="btn btn-sm btn-outline-secondary"
+                 style="font-size:.68rem;padding:.18rem .5rem;" title="Ver lançamentos">🔍</a>
+              <a href="{{ url_for('payroll_pdf', pid=p.id) }}"
+                 class="btn btn-sm btn-outline-info"
+                 style="font-size:.68rem;padding:.18rem .5rem;" title="Baixar PDF">📄</a>
+              {% if p.status == 'pending' %}
+              <form method="post" action="{{ url_for('payroll_mark_paid', pid=p.id) }}" style="display:inline;">
+                <button type="submit" class="btn btn-sm btn-outline-success"
+                        style="font-size:.68rem;padding:.18rem .5rem;"
+                        onclick="return confirm('Confirmar pagamento deste payroll?');"
+                        title="Marcar como pago">✅</button>
+              </form>
+              <form method="post" action="{{ url_for('payroll_cancel', pid=p.id) }}" style="display:inline;">
+                <button type="submit" class="btn btn-sm btn-outline-warning"
+                        style="font-size:.68rem;padding:.18rem .5rem;"
+                        onclick="return confirm('Cancelar este payroll?');"
+                        title="Cancelar">⏸</button>
+              </form>
+              {% endif %}
+              <form method="post" action="{{ url_for('payroll_delete', pid=p.id) }}" style="display:inline;">
+                <button type="submit" class="btn btn-sm btn-outline-danger"
+                        style="font-size:.68rem;padding:.18rem .5rem;"
+                        onclick="return confirm('Remover este payroll permanentemente?');"
+                        title="Remover">✕</button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="text-center py-5" style="color:#444;font-size:.875rem;">
+    <div style="font-size:2.5rem;margin-bottom:.75rem;opacity:.3;">💰</div>
+    Nenhum payroll encontrado.<br>
+    <a href="{{ url_for('payroll_new') }}" style="color:#8b5cf6;">Criar o primeiro →</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

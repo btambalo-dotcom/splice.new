@@ -1,0 +1,149 @@
+{% extends 'base.html' %}
+{% block title %}Lançar Serviço{% endblock %}
+{% block content %}
+
+<div class="d-flex align-items-center gap-3 mb-4">
+  <h3 class="mb-0">📋 Lançar Código de Serviço</h3>
+</div>
+
+<div class="row g-4">
+  <!-- Formulário -->
+  <div class="col-lg-5">
+    <div class="card bg-dark border-secondary p-4">
+      <form method="post">
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Data do serviço</label>
+          <input type="date" name="entry_date" value="{{ today }}"
+                 class="form-control bg-secondary text-light border-0" required>
+        </div>
+
+        {% if is_admin %}
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Empresa</label>
+          <input name="company" list="company-list" class="form-control bg-secondary text-light border-0"
+                 placeholder="Empresa">
+          <datalist id="company-list">
+            {% for c in companies %}<option value="{{ c }}">{% endfor %}
+          </datalist>
+        </div>
+        {% else %}
+        <input type="hidden" name="company" value="{{ user_company or '' }}">
+        {% endif %}
+
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Mapa (opcional)</label>
+          <input name="map_name" list="map-list" class="form-control bg-secondary text-light border-0"
+                 placeholder="Ex: WIRED">
+          <datalist id="map-list">
+            {% for m in maps %}<option value="{{ m }}">{% endfor %}
+          </datalist>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Código de serviço *</label>
+          <select name="service_code_id" id="sc-select"
+                  class="form-select bg-secondary text-light border-0" required>
+            <option value="">Selecione...</option>
+            {% for sc in service_codes %}
+            <option value="{{ sc.id }}"
+                    data-price="{{ sc.unit_price }}"
+                    data-by-qty="{{ '1' if sc.by_quantity else '0' }}">
+              {{ sc.code }} — {{ sc.description }} (${{ "%.2f"|format(sc.unit_price) }})
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Quantidade</label>
+          <input type="number" name="quantity" id="qty-input" value="1" min="0.5" step="0.5"
+                 class="form-control bg-secondary text-light border-0">
+          <div class="form-text text-muted" id="price-preview"></div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Observação (opcional)</label>
+          <input name="notes" class="form-control bg-secondary text-light border-0"
+                 placeholder="Ex: Emergency call - 3am">
+        </div>
+
+        <button type="submit" class="btn btn-success w-100 fw-semibold">
+          ➕ Lançar
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Lançamentos recentes -->
+  <div class="col-lg-7">
+    <h5 class="text-light mb-3">Lançamentos recentes</h5>
+    <div class="table-responsive">
+      <table class="table table-dark table-sm table-hover align-middle">
+        <thead class="table-secondary">
+          <tr>
+            <th>Data</th>
+            <th>Código</th>
+            <th>Descrição</th>
+            <th>Mapa</th>
+            <th>Splicer</th>
+            <th class="text-end">Qty</th>
+            <th class="text-end">Total</th>
+            {% if is_admin %}<th></th>{% endif %}
+          </tr>
+        </thead>
+        <tbody>
+        {% for e in recent %}
+          <tr id="entry-row-{{ e.id }}">
+            <td class="text-muted small">{{ e.entry_date.strftime('%m/%d/%Y') if e.entry_date else '—' }}</td>
+            <td><span class="badge bg-secondary font-monospace">{{ e.code }}</span></td>
+            <td class="small">{{ e.description }}{% if e.notes %} <span class="text-muted">· {{ e.notes }}</span>{% endif %}</td>
+            <td class="small text-muted">{{ e.map_name or '—' }}</td>
+            <td class="small">{{ e.splicer or '—' }}</td>
+            <td class="text-end">{{ e.quantity }}</td>
+            <td class="text-end fw-bold">${{ "%.2f"|format(e.total_usd) }}</td>
+            {% if is_admin %}
+            <td>
+              <button class="btn btn-sm btn-outline-danger py-0 px-1"
+                      onclick="deleteEntry({{ e.id }})">🗑</button>
+            </td>
+            {% endif %}
+          </tr>
+        {% else %}
+          <tr><td colspan="8" class="text-center text-muted py-3">Nenhum lançamento ainda.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+// Preview do valor
+const scSelect = document.getElementById('sc-select');
+const qtyInput = document.getElementById('qty-input');
+const preview  = document.getElementById('price-preview');
+
+function updatePreview() {
+  const opt = scSelect.selectedOptions[0];
+  if (!opt || !opt.value) { preview.textContent = ''; return; }
+  const price   = parseFloat(opt.dataset.price) || 0;
+  const byQty   = opt.dataset.byQty === '1';
+  const qty     = parseFloat(qtyInput.value) || 1;
+  const total   = byQty ? price * qty : price;
+  preview.textContent = byQty
+    ? `${qty} × $${price.toFixed(2)} = $${total.toFixed(2)}`
+    : `Valor fixo: $${total.toFixed(2)}`;
+}
+scSelect.addEventListener('change', updatePreview);
+qtyInput.addEventListener('input', updatePreview);
+
+// Apagar lançamento
+async function deleteEntry(id) {
+  if (!confirm('Remover este lançamento?')) return;
+  const r = await fetch('/service-entry/' + id + '/delete', { method: 'POST' });
+  const d = await r.json();
+  if (d.ok) document.getElementById('entry-row-' + id).remove();
+  else alert('Erro ao remover.');
+}
+</script>
+{% endblock %}
