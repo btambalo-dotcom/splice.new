@@ -58,84 +58,214 @@
     .splicer-pin-icon div {
       overflow: visible !important;
     }
+    /* ===== Layout novo da tela do mapa ===== */
+    .mv-page { --mv-bg:#0b1220; --mv-card:#111a2b; --mv-line:#1f2a3d; --mv-muted:#8b97ab; --mv-accent:#22b8cf; }
+    .mv-muted { color: var(--mv-muted) !important; }
+    .mv-header { display:flex; flex-wrap:wrap; align-items:flex-end; justify-content:space-between; gap:12px; margin-bottom:16px; }
+    .mv-eyebrow { font-size:.78rem; letter-spacing:.04em; text-transform:uppercase; color:var(--mv-muted, #8b97ab); }
+    .mv-eyebrow a { color:inherit; text-decoration:none; }
+    .mv-eyebrow a:hover { color:#fff; }
+    .mv-sep { opacity:.5; margin:0 4px; }
+    .mv-title h1 { font-size:1.6rem; font-weight:700; margin:2px 0 0; letter-spacing:-.01em; }
+    .mv-actions { display:flex; flex-wrap:wrap; gap:8px; }
+    .mv-btn { background:var(--mv-card); border:1px solid var(--mv-line); color:#e6ebf3; }
+    .mv-btn:hover { background:#17223a; border-color:#2b3a55; color:#fff; }
+    .mv-btn-primary { background:var(--mv-accent); border-color:var(--mv-accent); color:#06121a; font-weight:600; }
+    .mv-btn-primary:hover { background:#3cc9dd; border-color:#3cc9dd; color:#06121a; }
+    .mv-btn-ghost { background:transparent; border:1px solid transparent; color:var(--mv-muted); }
+    .mv-btn-ghost:hover { color:#fff; border-color:var(--mv-line); }
+
+    .mv-stats { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:12px; margin-bottom:12px; }
+    .mv-stat { background:var(--mv-card); border:1px solid var(--mv-line); border-radius:12px; padding:12px 14px; }
+    .mv-stat-top { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px; }
+    .mv-stat-label { font-size:.8rem; color:var(--mv-muted); text-transform:uppercase; letter-spacing:.04em; }
+    .mv-stat-pct { font-size:1.35rem; font-weight:700; color:#fff; line-height:1; }
+    .mv-progress { height:6px !important; background:#1c2638 !important; border-radius:99px; }
+    .mv-progress .progress-bar { border-radius:99px; }
+    .mv-stat-foot { display:flex; justify-content:space-between; margin-top:6px; }
+
+    .mv-alert { background:rgba(255,193,7,.08); border:1px solid rgba(255,193,7,.35); border-radius:10px; padding:10px 12px; }
+
+    .mv-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:10px; }
+    .mv-search { max-width:420px; flex:1 1 260px; }
+    .mv-search .input-group-text, .mv-search .form-control { background:var(--mv-card); border-color:var(--mv-line); color:#e6ebf3; }
+    .mv-search .form-control::placeholder { color:#6f7c91; }
+    .mv-search .form-control:focus { box-shadow:none; border-color:var(--mv-accent); }
+
+    .mv-map-wrap { position:relative; }
+    .mv-page #map { height:calc(100vh - 330px); min-height:460px; border-radius:14px; border:1px solid var(--mv-line); box-shadow:0 8px 30px rgba(0,0,0,.35); }
+
+    .mv-legend { position:absolute; left:12px; bottom:12px; z-index:500; background:rgba(11,18,32,.92); border:1px solid var(--mv-line); border-radius:10px; font-size:.8rem; color:#dfe6f0; backdrop-filter:blur(4px); }
+    .mv-legend-toggle { background:none; border:0; color:#dfe6f0; padding:6px 10px; font-weight:600; font-size:.78rem; width:100%; text-align:left; }
+    .mv-legend-body { display:none; padding:0 12px 10px; }
+    .mv-legend.open .mv-legend-body { display:block; }
+    .mv-legend-body > div { display:flex; align-items:center; gap:8px; padding:2px 0; }
+    .mv-dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+    .mv-ico { width:10px; text-align:center; display:inline-block; }
+    .mv-legend-hint { color:var(--mv-muted); margin-top:4px; font-size:.74rem; }
+
+    .mv-offcanvas { --bs-offcanvas-width:420px; background:#0e1626; color:#e6ebf3; border-left:1px solid #1f2a3d; }
+    .mv-offcanvas .offcanvas-header { border-bottom:1px solid #1f2a3d; }
+    .mv-accordion { --bs-accordion-bg:transparent; --bs-accordion-color:#e6ebf3; --bs-accordion-border-color:#1f2a3d;
+                    --bs-accordion-btn-color:#e6ebf3; --bs-accordion-active-bg:#132035; --bs-accordion-active-color:#fff;
+                    --bs-accordion-btn-focus-box-shadow:none; }
+    .mv-accordion .accordion-button { font-weight:600; font-size:.92rem; }
+    .mv-accordion .accordion-button::after { filter:invert(1) brightness(1.4); }
+    .mv-tool { padding:12px 0; border-bottom:1px dashed #1f2a3d; }
+    .mv-tool:last-child { border-bottom:0; }
+    .mv-tool-title { font-weight:600; margin-bottom:2px; }
+    .mv-tool-help { font-size:.8rem; color:#8b97ab; margin-bottom:8px; }
+    .mv-offcanvas .form-label, .mv-offcanvas label { color:#aeb8c8; font-size:.8rem; }
+    .mv-offcanvas .text-muted { color:#8b97ab !important; }
+
+    /* Botões +/- do zoom estavam brancos no branco (regra global do style.css pinta todo span de branco) */
+    .leaflet-bar a, .leaflet-bar a span { color:#1b2433 !important; }
+    .leaflet-control-attribution, .leaflet-control-attribution span { color:#333 !important; }
+    /* Botão de câmera some enquanto o painel de ferramentas está aberto */
+    body:has(.mv-offcanvas.show) #fab-auto-photo { display:none !important; }
+
+    @media (max-width: 767.98px) {
+      .mv-title h1 { font-size:1.3rem; }
+      .mv-stats { grid-template-columns:1fr 1fr; gap:8px; }
+      .mv-stat { padding:10px; }
+      .mv-stat-foot { flex-direction:column; }
+      .mv-page #map { height:65vh; min-height:360px; }
+      .mv-offcanvas { --bs-offcanvas-width:100%; }
+    }
   </style>
 {% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <div>
-    <h3 class="mb-0">Mapa – {{ map_obj.company }} · {{ map_obj.name }}</h3>
-    <small class="text-muted" data-i18n="map_admin">Administração do mapa interativo para este projeto.</small>
-  </div>
-  {% if map_obj.project_id %}
-  <a href="{{ url_for('settings_project_detail', pid=map_obj.project_id) }}"
-     class="btn btn-outline-light btn-sm">
-    <span data-i18n="back_project">← Voltar para o projeto</span>
-  </a>
-  {% endif %}
-</div>
+<div class="mv-page">
 
-{% if current_user.is_admin %}
-<div id="map-progress-panel" class="row g-3 mb-3" style="display:none!important;">
-  <div class="col-md-6">
-    <div class="card bg-black border-secondary p-3">
-      <div class="d-flex justify-content-between align-items-center mb-1">
-        <span class="fw-bold text-light" style="font-size:13px;">📡 Testes (OTEs)</span>
-        <span id="prog-test-label" class="small text-muted"></span>
+  {# ---------- Cabeçalho ---------- #}
+  <div class="mv-header">
+    <div class="mv-title">
+      <div class="mv-eyebrow">
+        {% if map_obj.project_id %}<a href="{{ url_for('settings_project_detail', pid=map_obj.project_id) }}">{{ map_obj.company }}</a>{% else %}{{ map_obj.company }}{% endif %}
+        <span class="mv-sep">/</span> Mapa
       </div>
-      <div class="progress" style="height:10px;background:#333;">
-        <div id="prog-test-bar" class="progress-bar" role="progressbar"
-             style="width:0%;background:linear-gradient(90deg,#e53935,#ff7043);"
+      <h1>{{ map_obj.name }}</h1>
+    </div>
+    <div class="mv-actions">
+      <a href="{{ url_for('map_services', map_id=map_obj.id) }}" class="btn btn-sm mv-btn">Serviços</a>
+      {% if current_user.is_admin %}
+      <a href="{{ url_for('export_map_tests_report', map_id=map_obj.id) }}" class="btn btn-sm mv-btn" data-i18n="tests_report">Relatório testes</a>
+      <button type="button" class="btn btn-sm mv-btn mv-btn-primary" data-bs-toggle="offcanvas" data-bs-target="#mapTools" aria-controls="mapTools">
+        Ferramentas
+      </button>
+      {% endif %}
+      {% if map_obj.project_id %}
+      <a href="{{ url_for('settings_project_detail', pid=map_obj.project_id) }}" class="btn btn-sm mv-btn-ghost">
+        <span data-i18n="back_project">← Voltar para o projeto</span>
+      </a>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ---------- Indicadores (preenchidos pelo JS; só admin) ---------- #}
+  {% if current_user.is_admin %}
+  <div id="map-progress-panel" class="mv-stats" style="display:none!important;">
+    <div class="mv-stat">
+      <div class="mv-stat-top">
+        <span class="mv-stat-label">Testes (OTEs)</span>
+        <span id="prog-test-label" class="mv-stat-pct"></span>
+      </div>
+      <div class="progress mv-progress">
+        <div id="prog-test-bar" class="progress-bar" role="progressbar" style="width:0%;"
              aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
       </div>
-      <div class="d-flex justify-content-between mt-1">
+      <div class="mv-stat-foot">
         <small id="prog-test-done" class="text-success"></small>
-        <small id="prog-test-missing" class="text-danger"></small>
+        <small id="prog-test-missing" class="mv-muted"></small>
       </div>
     </div>
-  </div>
-  <div class="col-md-6">
-    <div class="card bg-black border-secondary p-3">
-      <div class="d-flex justify-content-between align-items-center mb-1">
-        <span class="fw-bold text-light" style="font-size:13px;">⬆ Subidas (todos)</span>
-        <span id="prog-placed-label" class="small text-muted"></span>
+    <div class="mv-stat">
+      <div class="mv-stat-top">
+        <span class="mv-stat-label">Subidas</span>
+        <span id="prog-placed-label" class="mv-stat-pct"></span>
       </div>
-      <div class="progress" style="height:10px;background:#333;">
-        <div id="prog-placed-bar" class="progress-bar" role="progressbar"
-             style="width:0%;background:linear-gradient(90deg,#2ecc40,#00b894);"
+      <div class="progress mv-progress">
+        <div id="prog-placed-bar" class="progress-bar" role="progressbar" style="width:0%;"
              aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
       </div>
-      <div class="d-flex justify-content-between mt-1">
+      <div class="mv-stat-foot">
         <small id="prog-placed-done" class="text-success"></small>
-        <small id="prog-placed-missing" class="text-warning"></small>
+        <small id="prog-placed-missing" class="mv-muted"></small>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if current_user.is_admin %}
+  <div id="invalid-devices-box" class="mb-3" style="display:none;">
+      <div class="mv-alert">
+        <div style="font-weight:700; margin-bottom:6px;">Dispositivos com coordenadas inválidas</div>
+        <div id="invalid-devices-list" style="font-size: 13px; line-height: 1.3;"></div>
+        <div style="opacity:0.75; font-size:12px; margin-top:6px;">
+          Dica: edite o dispositivo e corrija Latitude/Longitude para voltar a aparecer no mapa.
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+  {# ---------- Busca ---------- #}
+  <div class="mv-toolbar">
+    <div class="input-group input-group-sm mv-search">
+      <span class="input-group-text">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.868-3.834zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/></svg>
+      </span>
+      <input id="deviceSearch" class="form-control" data-i18n-placeholder="search_device_placeholder" placeholder="Buscar device (ex: FT61, RN51E)..." />
+      <button id="deviceSearchBtn" class="btn mv-btn" data-i18n="search">Buscar</button>
+    </div>
+    <button id="showAllBtn" class="btn btn-sm mv-btn-ghost" data-i18n="show_all">Mostrar tudo</button>
+    <span id="deviceSearchHint" class="small mv-muted"></span>
+  </div>
+
+  {# ---------- Mapa ---------- #}
+  <div class="mv-map-wrap">
+    <div id="map"></div>
+
+    <div class="mv-legend" id="mv-legend">
+      <button type="button" class="mv-legend-toggle" onclick="document.getElementById('mv-legend').classList.toggle('open')">
+        Legenda
+      </button>
+      <div class="mv-legend-body">
+        <div><span class="mv-dot" style="background:#2f80ed"></span> Sem lançamento</div>
+        <div><span class="mv-dot" style="background:#2ecc40"></span> Lançado ✓</div>
+        <div><span class="mv-ico">📡</span> Teste lançado</div>
+        <div><span class="mv-ico" style="color:#2ecc40">↑</span> Dispositivo subido</div>
+        <div class="mv-legend-hint">Clique em um ponto para editar.</div>
       </div>
     </div>
   </div>
 </div>
-{% endif %}
 
-{% if current_user.is_company_owner and not current_user.is_admin %}
-<div class="row g-4">
-  <div class="col-12">
-        <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
-      <input id="deviceSearch" class="form-control form-control-sm" style="max-width: 340px" data-i18n-placeholder="search_device_placeholder" placeholder="Buscar device (ex: FT61, RN51E)..." />
-      <button id="deviceSearchBtn" class="btn btn-outline-light btn-sm" data-i18n="search">Buscar</button>
-      <button id="showAllBtn" class="btn btn-outline-secondary btn-sm" data-i18n="show_all">Mostrar tudo</button>
-      {% if current_user.is_admin %}<a href="{{ url_for('export_map_tests_report', map_id=map_obj.id) }}" class="btn btn-outline-success btn-sm" data-i18n="tests_report">Relatório testes</a>{% endif %}
-      <a href="{{ url_for('map_services', map_id=map_obj.id) }}" class="btn btn-outline-info btn-sm">📋 Serviços</a>
-      <span id="deviceSearchHint" class="small text-muted"></span>
+{# ---------- Painel lateral de ferramentas (admin) ---------- #}
+{% if current_user.is_admin %}
+<div class="offcanvas offcanvas-end mv-offcanvas" tabindex="-1" id="mapTools" aria-labelledby="mapToolsLabel">
+  <div class="offcanvas-header">
+    <div>
+      <div class="mv-eyebrow">{{ map_obj.name }}</div>
+      <h5 class="offcanvas-title" id="mapToolsLabel">Ferramentas do mapa</h5>
     </div>
-    <div id="map"></div>
+    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas" aria-label="Fechar"></button>
   </div>
-</div>
-{% else %}
-<div class="row g-4">
-  <div class="col-lg-4 order-2 order-lg-1">
-    <div class="card bg-black border-secondary h-100">
-      <div class="card-body">
-        {% if current_user.is_admin %}
-<h5 class="card-title mb-3" data-i18n="import_devices_kmz">Importar dispositivos via KMZ</h5>
-        <form id="kmz-form" class="mb-2" enctype="multipart/form-data">
+  <div class="offcanvas-body">
+    <div class="accordion mv-accordion" id="mvToolsAcc">
+
+      <div class="accordion-item">
+        <h2 class="accordion-header">
+          <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#mvImport">
+            Importar dispositivos
+          </button>
+        </h2>
+        <div id="mvImport" class="accordion-collapse collapse show" data-bs-parent="#mvToolsAcc">
+          <div class="accordion-body">
+            <div class="mv-tool">
+              <div class="mv-tool-title" data-i18n="import_devices_kmz">Importar dispositivos via KMZ</div>
+              <div class="mv-tool-help" data-i18n="kmz_help">O sistema vai criar ou atualizar os dispositivos deste mapa com base nos pontos do arquivo KMZ.</div>
+              <form id="kmz-form" class="mb-2" enctype="multipart/form-data">
           <div class="mb-2">
             <input type="file" name="kmz_file" accept=".kmz" class="form-control form-control-sm bg-dark text-light border-secondary" required>
           </div>
@@ -143,14 +273,11 @@
             Importar KMZ
           </button>
         </form>
-        <small class="text-muted d-block mb-3">
-          <span data-i18n="kmz_help">O sistema vai criar ou atualizar os dispositivos deste mapa com base nos pontos do arquivo KMZ.</span>
-        </small>
-
-        <hr class="border-secondary">
-
-        <h5 class="card-title mb-3">Importar via planilha HAF (.xlsx)</h5>
-        <form id="haf-form" class="mb-2" enctype="multipart/form-data">
+            </div>
+            <div class="mv-tool">
+              <div class="mv-tool-title">Planilha HAF (.xlsx)</div>
+              <div class="mv-tool-help">Usa as colunas <strong>LAT</strong>, <strong>LONG</strong>, <strong>COMMENT</strong> (nome do dispositivo) e o endereço de cada residência.</div>
+              <form id="haf-form" class="mb-2" enctype="multipart/form-data">
           <div class="mb-2">
             <input type="file" name="haf_file" accept=".xlsx,.xls" class="form-control form-control-sm bg-dark text-light border-secondary" required>
           </div>
@@ -158,14 +285,11 @@
             Importar planilha HAF
           </button>
         </form>
-        <small class="text-muted d-block mb-3">
-          Importa dispositivos a partir da planilha HAF FIBER. Usa as colunas <strong>LAT</strong>, <strong>LONG</strong>, <strong>COMMENT</strong> (nome do dispositivo) e o endereço completo da residência que cada dispositivo vai alimentar.
-        </small>
-
-        <hr class="border-secondary">
-
-        <h5 class="card-title mb-3">Importar Splice Report (.xlsx)</h5>
-        <form id="splice-report-form" class="mb-2" enctype="multipart/form-data">
+            </div>
+            <div class="mv-tool">
+              <div class="mv-tool-title">Splice Report / SIGNAL (.xlsx)</div>
+              <div class="mv-tool-help">Cada aba vira um PON (a ordem das abas define PON 1, PON 2…). Preenche <strong>PON</strong>, <strong>splitter</strong> e <strong>fibras</strong>.</div>
+              <form id="splice-report-form" class="mb-2" enctype="multipart/form-data">
           <div class="mb-2">
             <label class="form-label small text-muted mb-1">Arquivo SIGNAL (.xlsx)</label>
             <input type="file" name="splice_file" accept=".xlsx,.xls" class="form-control form-control-sm bg-dark text-light border-secondary" required>
@@ -184,19 +308,25 @@
             Importar SIGNAL
           </button>
         </form>
-        <small class="text-muted d-block mb-3">
-          Usa o arquivo SIGNAL gerado pelo sistema. Cada aba vira um PON — a ordem das abas define PON 1, PON 2, etc. Preenche <strong>PON</strong>, <strong>splitter</strong> e <strong>fibras</strong> de cada dispositivo no mapa.
-        </small>
         {% if current_user.is_admin %}
-        <button type="button" class="btn btn-outline-warning btn-sm w-100 mb-3" id="auto-network-btn">
+        <button type="button" class="btn btn-outline-warning btn-sm w-100 mt-1" id="auto-network-btn">
           Montar rede automática
         </button>
         {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
 
-        <hr class="border-secondary">
-
-        <h5 class="card-title mb-2" data-i18n="pon_colors">Cores dos PONs</h5>
-        <p class="small text-muted">
+      <div class="accordion-item">
+        <h2 class="accordion-header">
+          <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#mvPons">
+            <span data-i18n="pon_colors">Cores dos PONs</span>
+          </button>
+        </h2>
+        <div id="mvPons" class="accordion-collapse collapse" data-bs-parent="#mvToolsAcc">
+          <div class="accordion-body">
+            <p class="small text-muted">
           <span data-i18n="pon_colors_help">Os dispositivos agora usam cor por PON. Cada PON recebe uma cor automática para facilitar a leitura da rede no mapa.</span>
         </p>
         <div id="section-colors-panel" class="d-flex flex-column gap-2 small mb-2"></div>
@@ -207,11 +337,19 @@
         {% else %}
         <p class="small text-muted">Apenas o admin ou dono da empresa pode atualizar a lista.</p>
         {% endif %}
+          </div>
+        </div>
+      </div>
 
-        <hr class="border-secondary">
-
-        <h5 class="card-title mb-2" data-i18n="manual_add">Adicionar dispositivo manualmente</h5>
-        <form id="manual-device-form" class="row g-2">
+      <div class="accordion-item">
+        <h2 class="accordion-header">
+          <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#mvManual">
+            <span data-i18n="manual_add">Adicionar dispositivo manualmente</span>
+          </button>
+        </h2>
+        <div id="mvManual" class="accordion-collapse collapse" data-bs-parent="#mvToolsAcc">
+          <div class="accordion-body">
+            <form id="manual-device-form" class="row g-2">
           <div class="col-12">
             <label class="form-label" data-i18n="device_name">Nome do dispositivo</label>
             <input type="text" class="form-control form-control-sm bg-dark text-light border-secondary"
@@ -239,48 +377,15 @@
             </button>
           </div>
         </form>
-    <div id="invalid-devices-box" class="mt-3" style="display:none;">
-      <div class="card p-2" style="background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.12); border-radius: 10px;">
-        <div style="font-weight:700; margin-bottom:6px;">Dispositivos com coordenadas inválidas</div>
-        <div id="invalid-devices-list" style="font-size: 13px; line-height: 1.3;"></div>
-        <div style="opacity:0.75; font-size:12px; margin-top:6px;">
-          Dica: edite o dispositivo e corrija Latitude/Longitude para voltar a aparecer no mapa.
+          </div>
         </div>
       </div>
-    </div>
-    
 
-        <hr class="border-secondary">
-{% endif %}
-
-        <p class="small text-muted mb-0">
-          • Pin <span class="text-primary">azul</span> = sem lançamento<br>
-          • Pin <span style="color:#2ecc40;">verde ✓</span> = lançado<br>
-          • 📡 Anteninha vermelha = teste lançado<br>
-          • ↑ Seta verde = dispositivo subido (placed)
-        </p>
-        <p class="small text-muted mb-0 mt-2">
-          Para editar um dispositivo existente, clique no ponto correspondente no mapa ao lado.
-        </p>
-      </div>
     </div>
-  </div>
-
-  <div class="col-lg-8 order-1 order-lg-2">
-        <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
-      <input id="deviceSearch" class="form-control form-control-sm" style="max-width: 340px" data-i18n-placeholder="search_device_placeholder" placeholder="Buscar device (ex: FT61, RN51E)..." />
-      <button id="deviceSearchBtn" class="btn btn-outline-light btn-sm" data-i18n="search">Buscar</button>
-      <button id="showAllBtn" class="btn btn-outline-secondary btn-sm" data-i18n="show_all">Mostrar tudo</button>
-      {% if current_user.is_admin %}<a href="{{ url_for('export_map_tests_report', map_id=map_obj.id) }}" class="btn btn-outline-success btn-sm" data-i18n="tests_report">Relatório testes</a>{% endif %}
-      <a href="{{ url_for('map_services', map_id=map_obj.id) }}" class="btn btn-outline-info btn-sm">📋 Serviços</a>
-      <span id="deviceSearchHint" class="small text-muted"></span>
-    </div>
-    <div id="map"></div>
   </div>
 </div>
-
-
 {% endif %}
+
 <!-- Modal para editar dispositivo -->
 <div class="modal fade" id="deviceModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered">
@@ -757,7 +862,7 @@ const IS_ADMIN = {{ "true" if current_user.is_admin else "false" }};
       panel.style.setProperty('display', 'flex', 'important');
       panel.style.removeProperty('display'); // força reflow
       panel.removeAttribute('style');
-      panel.style.display = 'flex';
+      panel.style.display = 'grid';
     }
 
     // Atualiza o painel lateral com os PONs encontrados

@@ -3871,10 +3871,12 @@ def settings_backup_db():
     Gera um .zip com:
       - splice-backup.sqlite : cópia de TODAS as tabelas e linhas (abre no DB Browser for SQLite)
       - manifest.json        : lista de tabelas e quantidade de linhas de cada uma
-    Obs.: as fotos ficam no Cloudflare R2 e não entram neste arquivo.
+    Colunas binárias (arquivos de foto/PDF guardados no banco) ficam VAZIAS no backup:
+    elas ocupam centenas de MB e estouravam a memória do servidor (512MB). As fotos estão
+    no Cloudflare R2 e o banco inteiro (com binários) fica no Export/Recovery do Render.
     """
     import tempfile, sqlite3, zipfile, json as _json, datetime as _dt, decimal as _dec
-    from sqlalchemy import MetaData, select
+    from sqlalchemy import MetaData, select, LargeBinary
 
     def _conv(v):
         if v is None or isinstance(v, (int, float, str, bytes)):
@@ -3902,19 +3904,28 @@ def settings_backup_db():
             "generated_utc": _dt.datetime.utcnow().isoformat(),
             "source": db.engine.dialect.name,
             "tables": {},
+            "binary_columns_skipped": [],
         }
 
         with db.engine.connect() as conn:
             for table in meta.sorted_tables:
-                cols = [c.name for c in table.columns]
+                data_cols = []
+                for c in table.columns:
+                    if isinstance(c.type, LargeBinary):
+                        manifest["binary_columns_skipped"].append(f"{table.name}.{c.name}")
+                    else:
+                        data_cols.append(c)
+                if not data_cols:
+                    continue
+                cols = [c.name for c in data_cols]
                 col_sql = ", ".join('"%s"' % c.replace('"', '""') for c in cols)
                 tname = table.name.replace('"', '""')
                 out.execute('CREATE TABLE "%s" (%s)' % (tname, col_sql))
                 placeholders = ", ".join("?" for _ in cols)
                 count = 0
-                result = conn.execution_options(stream_results=True).execute(select(table))
+                result = conn.execution_options(stream_results=True, max_row_buffer=200).execute(select(*data_cols))
                 while True:
-                    batch = result.fetchmany(500)
+                    batch = result.fetchmany(200)
                     if not batch:
                         break
                     out.executemany(
