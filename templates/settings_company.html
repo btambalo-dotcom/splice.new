@@ -206,8 +206,8 @@
                 {% else %}
                   <strong>${{ '%.2f'|format(d.value_usd) }}</strong>
                 {% endif %}
-                <a href="{{ url_for('settings_device_delete', did=d.id, next=url_for('settings_company_detail', cid=company.id)) }}"
-                   class="btn btn-sm btn-outline-danger" onclick="return confirm('Remover dispositivo?')">✕</a>
+                <a href="#" data-post="{{ url_for('settings_device_delete', did=d.id, next=url_for('settings_company_detail', cid=company.id)) }}"
+                   class="btn btn-sm btn-outline-danger" data-confirm="Remover dispositivo?">✕</a>
               </div>
             </div>
             {% endfor %}
@@ -259,8 +259,8 @@
               </span>
               <div class="d-flex align-items-center gap-2">
                 <strong>${{ '%.2f'|format(t.price_per_splice_usd) }}/fusão</strong>
-                <a href="{{ url_for('settings_tier_delete', tid=t.id, next=url_for('settings_company_detail', cid=company.id)) }}"
-                   class="btn btn-sm btn-outline-danger" onclick="return confirm('Remover faixa?')">✕</a>
+                <a href="#" data-post="{{ url_for('settings_tier_delete', tid=t.id, next=url_for('settings_company_detail', cid=company.id)) }}"
+                   class="btn btn-sm btn-outline-danger" data-confirm="Remover faixa?">✕</a>
               </div>
             </div>
             {% endfor %}

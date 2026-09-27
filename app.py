@@ -506,7 +506,25 @@ def from_json_filter(value):
         return json.loads(value)
     except Exception:
         return []
-app.config["SECRET_KEY"] = os.environ.get("FLASK_SECRET_KEY", "dev-key")
+# Chave de sessão: usa FLASK_SECRET_KEY ou SECRET_KEY do Render. Antes, se só SECRET_KEY
+# estivesse definida, esta linha sobrescrevia com "dev-key" (qualquer um poderia forjar login).
+app.config["SECRET_KEY"] = (
+    os.environ.get("FLASK_SECRET_KEY")
+    or os.environ.get("SECRET_KEY")
+    or "dev-key"
+)
+app.secret_key = app.config["SECRET_KEY"]
+if app.config["SECRET_KEY"] in ("dev-key", "dev-secret-key-change-me"):
+    print("AVISO DE SEGURANCA: defina SECRET_KEY no Render (Environment).")
+
+# Cookies de sessão: bloqueiam envio de formulário a partir de outro site (proteção CSRF básica).
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["REMEMBER_COOKIE_SAMESITE"] = "Lax"
+app.config["REMEMBER_COOKIE_HTTPONLY"] = True
+if os.environ.get("RENDER"):
+    app.config["SESSION_COOKIE_SECURE"] = True
+    app.config["REMEMBER_COOKIE_SECURE"] = True
 
 # Database configuration: prefer DATABASE_URL/RENDER_DATABASE_URL (e.g. Render PostgreSQL),
 # fallback to local SQLite for development.
@@ -2169,6 +2187,13 @@ def admin_required(f):
         return f(*args, **kwargs)
     return wrapper
 
+def _safe_next(url):
+    """Aceita só redirecionamento interno (ex.: /settings/company/5). Evita redirecionar para outro site."""
+    url = (url or "").strip()
+    if url.startswith("/") and not url.startswith("//") and "\\" not in url:
+        return url
+    return None
+
 # --------- Rotas ---------
 @app.route("/", methods=["GET", "POST"])
 @login_required
@@ -2301,10 +2326,21 @@ def index():
     all_rows.sort(key=lambda r: (r.created_date or datetime.min), reverse=True)
 
     total_rows = len(all_rows)
-    total_amount = sum((r.total_usd or 0) for r in all_rows)
+    total_amount = sum((r.total_usd or 0) for r in all_rows)  # total SEMPRE de todos os registros filtrados
 
-    # Substitui records pela lista mesclada para o template
-    records = all_rows
+    # Paginação: a tela mostra 100 por vez (antes montava os 1000+ registros e fotos de uma vez).
+    # Exportações (PDF/Excel/Invoice/ZIP) continuam usando TODOS os registros do filtro.
+    PER_PAGE = 100
+    try:
+        page = max(1, int(request.args.get("page") or 1))
+    except ValueError:
+        page = 1
+    total_pages = max(1, (total_rows + PER_PAGE - 1) // PER_PAGE)
+    page = min(page, total_pages)
+    page_start = (page - 1) * PER_PAGE
+    records = all_rows[page_start:page_start + PER_PAGE]
+    page_first = page_start + 1 if total_rows else 0
+    page_last = page_start + len(records)
 
     companies = [c.name for c in CompanyConfig.query.order_by(CompanyConfig.name).all()]
     companies_from_records = {
@@ -2356,6 +2392,10 @@ def index():
         end=end_raw or "",
         editable_maps=editable_maps,
         can_view_values=is_admin or getattr(current_user, 'can_view_values', True),
+        page=page,
+        total_pages=total_pages,
+        page_first=page_first,
+        page_last=page_last,
     )
 
 def build_filtered_record_query_from_request():
@@ -3825,53 +3865,79 @@ def settings():
 @login_required
 @admin_required
 def settings_backup_db():
-    """Gera um backup do arquivo de banco de dados SQLite e envia para download."""
-    try:
-        from auto_migrate_all_dbs import find_candidate_dbs
-    except ImportError:
-        find_candidate_dbs = None
+    """Backup COMPLETO do banco que o sistema está usando de verdade (PostgreSQL no Render
+    ou SQLite local). Só LÊ o banco — não altera nada.
 
-    db_path = None
+    Gera um .zip com:
+      - splice-backup.sqlite : cópia de TODAS as tabelas e linhas (abre no DB Browser for SQLite)
+      - manifest.json        : lista de tabelas e quantidade de linhas de cada uma
+    Obs.: as fotos ficam no Cloudflare R2 e não entram neste arquivo.
+    """
+    import tempfile, sqlite3, zipfile, json as _json, datetime as _dt, decimal as _dec
+    from sqlalchemy import MetaData, select
 
-    # Primeiro, tenta localizar o mesmo caminho usado pelo SQLAlchemy.
-    db_url = app.config.get("SQLALCHEMY_DATABASE_URI", "") or ""
-    if db_url.startswith("sqlite:///"):
-        rel_path = db_url[len("sqlite:///"):]
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        candidate = os.path.join(base_dir, rel_path)
-        if os.path.exists(candidate):
-            db_path = candidate
-
-    # Se ainda não encontrou, tenta usar o utilitário de migração (procura *.db* dentro do projeto).
-    if db_path is None and find_candidate_dbs is not None:
-        try:
-            dbs = find_candidate_dbs()
-        except Exception:
-            dbs = []
-        if dbs:
-            # Se existir mais de um, pega o primeiro por simplicidade.
-            db_path = dbs[0]
-
-    if not db_path or not os.path.exists(db_path):
-        flash("Não foi possível localizar um arquivo de banco de dados (.db) para backup.", "error")
-        return redirect(url_for("settings"))
-
-    import tempfile, shutil, datetime
-
-    tmp_dir = tempfile.mkdtemp(prefix="splice-backup-")
-    timestamp = datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-    base_name = os.path.basename(db_path)
-    backup_name = f"splice-backup-{timestamp}-{base_name}"
-    backup_path = os.path.join(tmp_dir, backup_name)
+    def _conv(v):
+        if v is None or isinstance(v, (int, float, str, bytes)):
+            return v
+        if isinstance(v, bool):
+            return int(v)
+        if isinstance(v, _dec.Decimal):
+            return float(v)
+        if isinstance(v, (_dt.datetime, _dt.date, _dt.time)):
+            return v.isoformat()
+        if isinstance(v, memoryview):
+            return v.tobytes()
+        if isinstance(v, (dict, list)):
+            return _json.dumps(v, ensure_ascii=False, default=str)
+        return str(v)
 
     try:
-        shutil.copy2(db_path, backup_path)
+        meta = MetaData()
+        meta.reflect(bind=db.engine)
+
+        tmp_dir = tempfile.mkdtemp(prefix="splice-backup-")
+        sqlite_path = os.path.join(tmp_dir, "splice-backup.sqlite")
+        out = sqlite3.connect(sqlite_path)
+        manifest = {
+            "generated_utc": _dt.datetime.utcnow().isoformat(),
+            "source": db.engine.dialect.name,
+            "tables": {},
+        }
+
+        with db.engine.connect() as conn:
+            for table in meta.sorted_tables:
+                cols = [c.name for c in table.columns]
+                col_sql = ", ".join('"%s"' % c.replace('"', '""') for c in cols)
+                tname = table.name.replace('"', '""')
+                out.execute('CREATE TABLE "%s" (%s)' % (tname, col_sql))
+                placeholders = ", ".join("?" for _ in cols)
+                count = 0
+                result = conn.execution_options(stream_results=True).execute(select(table))
+                while True:
+                    batch = result.fetchmany(500)
+                    if not batch:
+                        break
+                    out.executemany(
+                        'INSERT INTO "%s" (%s) VALUES (%s)' % (tname, col_sql, placeholders),
+                        [tuple(_conv(v) for v in row) for row in batch],
+                    )
+                    count += len(batch)
+                manifest["tables"][table.name] = count
+        out.commit()
+        out.close()
+
+        timestamp = _dt.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+        zip_name = f"splice-backup-{timestamp}.zip"
+        zip_path = os.path.join(tmp_dir, zip_name)
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(sqlite_path, "splice-backup.sqlite")
+            zf.writestr("manifest.json", _json.dumps(manifest, indent=2, ensure_ascii=False))
     except Exception as e:
-        flash(f"Erro ao gerar backup: {e}", "error")
+        app.logger.exception("Falha no backup")
+        flash(f"Erro ao gerar backup: {e}", "danger")
         return redirect(url_for("settings"))
 
-    # Envia o arquivo para o navegador fazer o download.
-    return send_file(backup_path, as_attachment=True, download_name=backup_name, mimetype="application/octet-stream")
+    return send_file(zip_path, as_attachment=True, download_name=zip_name, mimetype="application/zip")
 
 
 @app.route("/settings/company/add", methods=["POST"])
@@ -4427,10 +4493,10 @@ def settings_device_add():
     return redirect(next_url or url_for("settings"))
 
 
-@app.route("/settings/device/<int:did>/delete")
-@login_required
+@app.route("/settings/device/<int:did>/delete", methods=["POST"])
+@admin_required
 def settings_device_delete(did: int):
-    next_url = request.args.get("next") or None
+    next_url = _safe_next(request.form.get("next") or request.args.get("next"))
     dt = DeviceType.query.get_or_404(did)
     db.session.delete(dt)
     db.session.commit()
@@ -4488,10 +4554,10 @@ def settings_tier_add():
     return redirect(next_url or url_for("settings"))
 
 
-@app.route("/settings/tier/<int:tid>/delete")
-@login_required
+@app.route("/settings/tier/<int:tid>/delete", methods=["POST"])
+@admin_required
 def settings_tier_delete(tid: int):
-    next_url = request.args.get("next") or None
+    next_url = _safe_next(request.form.get("next") or request.args.get("next"))
     tier = SpliceTier.query.get_or_404(tid)
     db.session.delete(tier)
     db.session.commit()
@@ -4692,7 +4758,7 @@ def user_pricing_summary(uid: int):
 
 
 
-@app.route("/users/<int:uid>/delete")
+@app.route("/users/<int:uid>/delete", methods=["POST"])
 @admin_required
 def user_delete(uid: int):
     user = User.query.get_or_404(uid)
@@ -5964,7 +6030,7 @@ def export_excel():
 
     filename = f"splicer_{company_filter or 'all'}_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"
     return send_file(buf, as_attachment=True, download_name=filename, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-@app.route("/record/<int:rid>/delete")
+@app.route("/record/<int:rid>/delete", methods=["POST"])
 @login_required
 def record_delete(rid: int):
     rec = Record.query.get_or_404(rid)
@@ -7609,10 +7675,10 @@ def settings_hourly_rate_add():
     return redirect(next_url or url_for("settings"))
 
 
-@app.route("/settings/hourly-rate/<int:rid>/delete")
+@app.route("/settings/hourly-rate/<int:rid>/delete", methods=["POST"])
 @admin_required
 def settings_hourly_rate_delete(rid: int):
-    next_url = request.args.get("next") or None
+    next_url = _safe_next(request.form.get("next") or request.args.get("next"))
     hr = HourlyRate.query.get_or_404(rid)
     db.session.delete(hr)
     db.session.commit()

@@ -83,7 +83,7 @@
           </div>
           <div class="col-6">
             <label class="form-label">Data</label>
-            <input name="created" type="date" class="form-control" value="{{ form_created|default(today) }}">
+            <input name="created" type="date" class="form-control" value="{{ form_created|default(today) }}" id="splices-date-input">
           </div>
         </div>
 
@@ -94,7 +94,7 @@
           </div>
           <div class="col-6">
             <label class="form-label">Data</label>
-            <input name="created" type="date" class="form-control" value="{{ form_created|default(today) }}" id="ribbon-date-input" style="display:none;">
+            <input name="created" type="date" class="form-control" value="{{ form_created|default(today) }}" id="ribbon-date-input" disabled>
           </div>
         </div>
 
@@ -249,6 +249,15 @@
     const ribbonWrap = document.getElementById('ribbon-wrap');
     if (splicesWrap) splicesWrap.style.display = isRib ? 'none' : '';
     if (ribbonWrap) ribbonWrap.style.display = isRib ? '' : 'none';
+    // Só o campo Data visível é enviado (antes os dois eram enviados e o de RIBBON nem aparecia).
+    const dSpl = document.getElementById('splices-date-input');
+    const dRib = document.getElementById('ribbon-date-input');
+    if (dSpl && dRib) {
+      if (isRib && dRib.disabled) dRib.value = dSpl.value;
+      if (!isRib && dSpl.disabled) dSpl.value = dRib.value;
+      dSpl.disabled = isRib;
+      dRib.disabled = !isRib;
+    }
     if (singleFtWrap) if (isRib) singleFtWrap.style.display = 'none';
     if (canCablesWrap) if (isRib) canCablesWrap.style.display = 'none';
   }

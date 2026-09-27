@@ -244,11 +244,11 @@
                                 onclick="return confirm('Ativar o usuário {{ u.username }}?');">▶</button>
                       {% endif %}
                     </form>
-                    <a href="{{ url_for('user_delete', uid=u.id) }}"
+                    <a href="#" data-post="{{ url_for('user_delete', uid=u.id) }}"
                        class="btn btn-sm btn-outline-danger"
                        style="font-size:.68rem; padding:.18rem .45rem; line-height:1.4;"
                        title="Remover usuário"
-                       onclick="return confirm('Remover o usuário {{ u.username }}? Esta ação não pode ser desfeita.');">✕</a>
+                       data-confirm="Remover o usuário {{ u.username }}? Esta ação não pode ser desfeita.">✕</a>
                   {% else %}
                     <span style="font-size:.7rem; color:#333;">—</span>
                   {% endif %}

@@ -223,8 +223,8 @@
                 {% endif %}
                 <button type="button" class="btn btn-sm btn-outline-secondary"
                   onclick="openDeviceEdit({{ d.id }}, '{{ d.name }}', {{ d.value_usd }}, {{ d.value_meio_usd or 'null' }}, {{ d.value_ponta_usd or 'null' }}, {{ d.is_ribbon|int }}, {{ d.ribbon_price_usd or 'null' }}, '{{ d.billing_code or '' }}', '{{ d.billing_code_meio or '' }}', '{{ d.billing_code_ponta or '' }}')">✎</button>
-                <a href="{{ url_for('settings_device_delete', did=d.id, next=url_for('settings_project_detail', pid=project.id)) }}"
-                   class="btn btn-sm btn-outline-danger" onclick="return confirm('Remover dispositivo?')">✕</a>
+                <a href="#" data-post="{{ url_for('settings_device_delete', did=d.id, next=url_for('settings_project_detail', pid=project.id)) }}"
+                   class="btn btn-sm btn-outline-danger" data-confirm="Remover dispositivo?">✕</a>
               </div>
             </div>
             {% endfor %}
@@ -286,8 +286,8 @@
                 {% if t.code_splice %}<span class="badge bg-info text-dark ms-1">{{ t.code_splice }}</span>{% endif %}
                 <button type="button" class="btn btn-sm btn-outline-secondary"
                   onclick="openTierEdit({{ t.id }}, {{ t.min_splices }}, {{ t.max_splices or 'null' }}, {{ t.price_per_splice_usd }}, '{{ t.code_splice or '' }}')">✎</button>
-                <a href="{{ url_for('settings_tier_delete', tid=t.id, next=url_for('settings_project_detail', pid=project.id)) }}"
-                   class="btn btn-sm btn-outline-danger" onclick="return confirm('Remover faixa?')">✕</a>
+                <a href="#" data-post="{{ url_for('settings_tier_delete', tid=t.id, next=url_for('settings_project_detail', pid=project.id)) }}"
+                   class="btn btn-sm btn-outline-danger" data-confirm="Remover faixa?">✕</a>
               </div>
             </div>
             {% endfor %}
@@ -340,8 +340,8 @@
               <div class="d-flex align-items-center gap-2">
                 <strong>${{ '%.2f'|format(r.rate_usd) }}/h</strong>
                 {% if r.billing_code %}<span class="badge bg-info text-dark">{{ r.billing_code }}</span>{% endif %}
-                <a href="{{ url_for('settings_hourly_rate_delete', rid=r.id, next=url_for('settings_project_detail', pid=project.id)) }}"
-                   class="btn btn-sm btn-outline-danger" onclick="return confirm('Remover taxa?')">✕</a>
+                <a href="#" data-post="{{ url_for('settings_hourly_rate_delete', rid=r.id, next=url_for('settings_project_detail', pid=project.id)) }}"
+                   class="btn btn-sm btn-outline-danger" data-confirm="Remover taxa?">✕</a>
               </div>
             </div>
             {% endfor %}

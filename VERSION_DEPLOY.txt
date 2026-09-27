@@ -1,1 +1,1 @@
-SPLICER v118 - fix panel ReferenceError
+SPLICER v119 - backup real do PostgreSQL, exclusoes via POST, paginacao Producao, menu celular, fix data RIBBON

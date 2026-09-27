@@ -7,7 +7,7 @@
 <div class="row mb-4 g-3">
   <div class="col-md-4">
     <div class="card p-3">
-      <span class="text-secondary">Registros no banco</span>
+      <span class="text-secondary">Registros (filtro atual)</span>
       <h2 class="mb-0">{{ total_rows }}</h2>
     </div>
   </div>
@@ -82,7 +82,9 @@
           <button class="btn btn-outline-light w-100 mt-2">Aplicar filtros</button>
         </div>
       </form>
-mb-3">Registros</h5>
+    </div>
+    <div class="card p-4 mt-2">
+  <h5 class="mb-3">Registros</h5>
   
   <div class="mb-2 text-end">
     {% if current_user.is_admin %}
@@ -229,7 +231,7 @@ mb-3">Registros</h5>
               <a href="{{ url_for('record_edit', rid=r.id) }}" class="btn btn-sm btn-outline-primary me-1">Editar</a>
               {% endif %}
               {% if (not current_user.is_company_owner) or current_user.is_admin %}
-              <a href="{{ url_for('record_delete', rid=r.id) }}" class="btn btn-sm btn-outline-danger" onclick="return confirm('Excluir este registro?');">✕</a>
+              <a href="#" data-post="{{ url_for('record_delete', rid=r.id) }}" class="btn btn-sm btn-outline-danger" data-confirm="Excluir este registro?">✕</a>
               {% endif %}
             </td>
           </tr>
@@ -238,7 +240,26 @@ mb-3">Registros</h5>
         {% endfor %}
       </tbody>
     </table>
-  
+  </div>
+
+  {% if total_pages > 1 %}
+  {% set qargs = request.args.to_dict() %}
+  <nav class="mt-3" aria-label="Páginas">
+    <div class="d-flex flex-wrap align-items-center gap-2 justify-content-center">
+      {% if page > 1 %}
+        {% set _ = qargs.update({'page': page - 1}) %}
+        <a class="btn btn-sm btn-outline-light" href="{{ url_for('index', **qargs) }}">← Anterior</a>
+      {% endif %}
+      <span class="text-secondary small">
+        Página {{ page }} de {{ total_pages }} · mostrando {{ page_first }}–{{ page_last }} de {{ total_rows }}
+      </span>
+      {% if page < total_pages %}
+        {% set _ = qargs.update({'page': page + 1}) %}
+        <a class="btn btn-sm btn-outline-light" href="{{ url_for('index', **qargs) }}">Próxima →</a>
+      {% endif %}
+    </div>
+  </nav>
+  {% endif %}
 
 {# Modais de fotos por registro #}
 {% for r in records %}
