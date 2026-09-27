@@ -1,1 +1,1 @@
-SPLICER v119.2 - novo layout da tela do mapa, backup sem colunas binarias (evita estouro de memoria), exclusoes via POST, paginacao, menu celular, fix data RIBBON
+SPLICER v120 - empresas e projetos simplificados (preco so no projeto), novo layout da tela do mapa, backup sem colunas binarias (evita estouro de memoria), exclusoes via POST, paginacao, menu celular, fix data RIBBON

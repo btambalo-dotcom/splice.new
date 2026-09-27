@@ -4087,19 +4087,44 @@ def settings_company_delete(cid: int):
 def settings_company_detail(cid: int):
     company = CompanyConfig.query.get_or_404(cid)
 
-    # exclusão de mapa via querystring
-    del_map_id = request.args.get("del_map")
-    if del_map_id:
-        mp = CompanyMap.query.get(int(del_map_id))
-        if mp and mp.company == company.name:
-            db.session.delete(mp)
-            db.session.commit()
-            flash("Mapa removido.", "success")
-        return redirect(url_for("settings_company_detail", cid=company.id))
-
     # inclusão de mapa via POST
     if request.method == "POST":
         action = (request.form.get("action") or "").strip()
+
+        # ── Excluir mapa (antes era por link/GET ?del_map=) ──
+        if action == "delete_map":
+            mid = (request.form.get("map_id") or "").strip()
+            mp = CompanyMap.query.get(int(mid)) if mid.isdigit() else None
+            if mp and mp.company == company.name:
+                db.session.delete(mp)
+                db.session.commit()
+                flash("Mapa removido.", "success")
+            return redirect(url_for("settings_company_detail", cid=company.id))
+
+        # ── Colocar mapa (e lançamentos dele sem projeto) em um projeto ──
+        if action == "assign_map_group":
+            map_name = (request.form.get("map_name") or "").strip()
+            pid_raw = (request.form.get("project_id") or "").strip()
+            pr = Project.query.get(int(pid_raw)) if pid_raw.isdigit() else None
+            if not map_name or not pr or pr.company != company.name:
+                flash("Escolha um projeto válido.", "danger")
+                return redirect(url_for("settings_company_detail", cid=company.id))
+            n_maps = CompanyMap.query.filter_by(company=company.name, name=map_name, project_id=None).update(
+                {"project_id": pr.id}, synchronize_session=False)
+            n_recs = Record.query.filter(Record.company == company.name, Record.map == map_name,
+                                         Record.project_id.is_(None)).update(
+                {"project_id": pr.id}, synchronize_session=False)
+            db.session.commit()
+            flash(f"Mapa {map_name}: {n_recs} lançamento(s) e {n_maps} mapa(s) colocados no projeto {pr.name}. "
+                  f"Os valores já lançados não mudaram.", "success")
+            return redirect(url_for("settings_company_detail", cid=company.id))
+
+        # ── Endereço da invoice ──
+        if action == "update_invoice":
+            company.invoice_address = (request.form.get("invoice_address") or "").strip() or None
+            db.session.commit()
+            flash("Dados da invoice salvos.", "success")
+            return redirect(url_for("settings_company_detail", cid=company.id))
 
         # ── Renomear empresa ──
         if action == "rename":
@@ -4114,13 +4139,18 @@ def settings_company_detail(cid: int):
                 return redirect(url_for("settings_company_detail", cid=cid))
             old_name = company.name
             for model_cls, col_attr in [
-                (Project,    Project.company),
-                (Invoice,    Invoice.company),
-                (DeviceType, DeviceType.company),
-                (SpliceTier, SpliceTier.company),
-                (CompanyMap, CompanyMap.company),
-                (Record,     Record.company),
-                (Payroll,    Payroll.company),
+                (Project,     Project.company),
+                (Invoice,     Invoice.company),
+                (DeviceType,  DeviceType.company),
+                (SpliceTier,  SpliceTier.company),
+                (CompanyMap,  CompanyMap.company),
+                (Record,      Record.company),
+                (Payroll,     Payroll.company),
+                # antes ficavam de fora e perdiam o vínculo ao renomear:
+                (HourlyRate,  HourlyRate.company),
+                (HourRecord,  HourRecord.company),
+                (ServiceCode, ServiceCode.company),
+                (ServiceEntry, ServiceEntry.company),
             ]:
                 try:
                     model_cls.query.filter(col_attr == old_name).update(
@@ -4194,13 +4224,42 @@ def settings_company_detail(cid: int):
     tiers = SpliceTier.query.filter_by(company=company.name, project_id=None).order_by(SpliceTier.min_splices).all()
     maps = CompanyMap.query.filter_by(company=company.name, project_id=None).order_by(CompanyMap.name).all()
     projects = Project.query.filter_by(company=company.name).order_by(Project.name).all()
+
+    # Resumo por projeto (mapas / lançamentos / dispositivos / faixas)
+    project_stats = {}
+    for p in projects:
+        project_stats[p.id] = {
+            "maps": CompanyMap.query.filter_by(project_id=p.id).count(),
+            "records": Record.query.filter_by(project_id=p.id).count(),
+            "devices": DeviceType.query.filter_by(project_id=p.id).count(),
+            "tiers": SpliceTier.query.filter_by(project_id=p.id).count(),
+        }
+
+    # Mapas / lançamentos SEM projeto (agrupados pelo nome do mapa)
+    orphan_groups = {}
+    for m in maps:
+        orphan_groups.setdefault(m.name, {"map_name": m.name, "records": 0, "has_map": True})
+    rows = (db.session.query(Record.map, db.func.count(Record.id))
+            .filter(Record.company == company.name, Record.project_id.is_(None))
+            .group_by(Record.map).all())
+    for map_name, cnt in rows:
+        g = orphan_groups.setdefault(map_name or "", {"map_name": map_name or "", "records": 0, "has_map": False})
+        g["records"] = cnt
+    orphan_groups = sorted(orphan_groups.values(), key=lambda g: (-g["records"], g["map_name"]))
+    orphan_records = sum(g["records"] for g in orphan_groups)
+
+    all_projects = Project.query.order_by(Project.company, Project.name).all()
     return render_template(
         "settings_company.html",
         company=company,
         projects=projects,
+        project_stats=project_stats,
         types=types,
         tiers=tiers,
         maps=maps,
+        orphan_groups=orphan_groups,
+        orphan_records=orphan_records,
+        all_projects=all_projects,
     )
 
 
@@ -4235,6 +4294,57 @@ def settings_system_update():
     return redirect(url_for("settings"))
 
 
+def _clone_device_type(dt, company, project_id):
+    return DeviceType(
+        name=dt.name, company=company, project_id=project_id,
+        value_usd=dt.value_usd, value_meio_usd=dt.value_meio_usd, value_ponta_usd=dt.value_ponta_usd,
+        owner_value_usd=dt.owner_value_usd, owner_value_meio_usd=dt.owner_value_meio_usd,
+        owner_value_ponta_usd=dt.owner_value_ponta_usd,
+        is_ribbon=bool(dt.is_ribbon), ribbon_price_usd=dt.ribbon_price_usd,
+        billing_code=dt.billing_code, billing_code_meio=dt.billing_code_meio,
+        billing_code_ponta=dt.billing_code_ponta,
+    )
+
+
+def _clone_tier(t, company, project_id):
+    return SpliceTier(
+        company=company, project_id=project_id,
+        min_splices=t.min_splices, max_splices=t.max_splices,
+        price_per_splice_usd=t.price_per_splice_usd,
+        owner_price_per_splice_usd=t.owner_price_per_splice_usd,
+        code_splice=t.code_splice,
+    )
+
+
+def _copy_project_pricing(src, dst):
+    """Copia a tabela de preços completa de um projeto para outro (não apaga nada do destino)."""
+    for dt in DeviceType.query.filter_by(project_id=src.id).all():
+        db.session.add(_clone_device_type(dt, dst.company, dst.id))
+    for t in SpliceTier.query.filter_by(project_id=src.id).all():
+        db.session.add(_clone_tier(t, dst.company, dst.id))
+    for r in HourlyRate.query.filter_by(project_id=src.id).all():
+        db.session.add(HourlyRate(rate_usd=r.rate_usd, billing_code=r.billing_code,
+                                  description=r.description, company=dst.company, project_id=dst.id))
+    for sc in ServiceCode.query.filter_by(project_id=src.id).all():
+        db.session.add(ServiceCode(code=sc.code, description=sc.description, unit_price=sc.unit_price,
+                                   owner_price=sc.owner_price, by_quantity=sc.by_quantity,
+                                   company=dst.company, project_id=dst.id))
+    dst.included_splices = src.included_splices
+    dst.payment_days = src.payment_days
+
+
+def _tier_overlaps(tiers):
+    """Lista pares de faixas que se sobrepõem (ex.: 1-99 e 1-1000)."""
+    out = []
+    ts = sorted(tiers, key=lambda t: (t.min_splices or 0))
+    for i, a in enumerate(ts):
+        a_max = a.max_splices if a.max_splices is not None else 10**9
+        for b in ts[i + 1:]:
+            if (b.min_splices or 0) <= a_max:
+                out.append((a, b))
+    return out
+
+
 @app.route("/settings/project/add", methods=["POST"])
 @admin_required
 def settings_project_add():
@@ -4255,25 +4365,28 @@ def settings_project_add():
     db.session.add(pr)
     db.session.commit()
 
-    # Copia dispositivos e faixas da empresa (defaults) para servir como base do projeto
-    base_types = DeviceType.query.filter_by(company=company, project_id=None).all()
-    for dt in base_types:
-        db.session.add(DeviceType(name=dt.name, value_usd=dt.value_usd, company=company, project_id=pr.id))
-
-    base_tiers = SpliceTier.query.filter_by(company=company, project_id=None).all()
-    for t in base_tiers:
-        db.session.add(
-            SpliceTier(
-                company=company,
-                project_id=pr.id,
-                min_splices=t.min_splices,
-                max_splices=t.max_splices,
-                price_per_splice_usd=t.price_per_splice_usd,
-            )
-        )
-
+    # Origem da tabela de preços:
+    #   "p:<id>"  -> copia TUDO de outro projeto (dispositivos, faixas, horas, códigos, inclusas, prazo)
+    #   "company" -> copia os valores antigos da empresa (compatibilidade)
+    #   ""        -> projeto vazio
+    copy_from = (request.form.get("copy_from") or "company").strip()
+    msg = "Projeto criado."
+    if copy_from.startswith("p:") and copy_from[2:].isdigit():
+        src = Project.query.get(int(copy_from[2:]))
+        if src:
+            _copy_project_pricing(src, pr)
+            msg = f"Projeto criado com a tabela de preços de {src.company} / {src.name}."
+    elif copy_from == "company":
+        for dt in DeviceType.query.filter_by(company=company, project_id=None).all():
+            db.session.add(_clone_device_type(dt, company, pr.id))
+        for t in SpliceTier.query.filter_by(company=company, project_id=None).all():
+            db.session.add(_clone_tier(t, company, pr.id))
+        cfg = CompanyConfig.query.filter_by(name=company).first()
+        if cfg:
+            pr.included_splices = cfg.included_splices
+        msg = "Projeto criado (valores copiados da empresa)."
     db.session.commit()
-    flash("Projeto criado (valores copiados da empresa).", "success")
+    flash(msg, "success")
     return redirect(url_for("settings_project_detail", pid=pr.id))
 
 
@@ -4286,16 +4399,37 @@ def settings_project_detail(pid: int):
     comp_cfg = CompanyConfig.query.filter_by(name=project.company).first()
     company_id = comp_cfg.id if comp_cfg else 0
 
-    del_map_id = request.args.get("del_map")
-    if del_map_id:
-        mp = CompanyMap.query.get(int(del_map_id))
-        if mp and mp.project_id == project.id:
-            db.session.delete(mp)
-            db.session.commit()
-            flash("Mapa removido.", "success")
-        return redirect(url_for("settings_project_detail", pid=project.id))
-
     if request.method == "POST":
+        if request.form.get("action") == "delete_map":
+            mid = (request.form.get("map_id") or "").strip()
+            mp = CompanyMap.query.get(int(mid)) if mid.isdigit() else None
+            if mp and mp.project_id == project.id:
+                db.session.delete(mp)
+                db.session.commit()
+                flash("Mapa removido.", "success")
+            return redirect(url_for("settings_project_detail", pid=project.id, tab="mapas"))
+
+        if request.form.get("action") == "copy_inherited":
+            # Copia para o projeto os dispositivos que hoje vêm "escondidos" da empresa.
+            names = {d.name.strip().upper() for d in DeviceType.query.filter_by(project_id=project.id).all()}
+            added = []
+            for dt in DeviceType.query.filter_by(company=project.company, project_id=None).all():
+                if dt.name.strip().upper() not in names:
+                    db.session.add(_clone_device_type(dt, project.company, project.id))
+                    added.append(dt.name)
+            if not SpliceTier.query.filter_by(project_id=project.id).count():
+                for t in SpliceTier.query.filter_by(company=project.company, project_id=None).all():
+                    db.session.add(_clone_tier(t, project.company, project.id))
+                    added.append(f"faixa {t.min_splices}-{t.max_splices or '∞'}")
+            if project.included_splices is None:
+                cfg = CompanyConfig.query.filter_by(name=project.company).first()
+                if cfg:
+                    project.included_splices = cfg.included_splices
+                    added.append(f"{cfg.included_splices} fusões inclusas")
+            db.session.commit()
+            flash(("Copiado para o projeto: " + ", ".join(added)) if added else "Nada para copiar.", "success")
+            return redirect(url_for("settings_project_detail", pid=project.id))
+
         if request.form.get("action") == "update_project":
             inc_raw = (request.form.get("included_splices") or "").strip()
             project.included_splices = int(inc_raw) if inc_raw != "" else None
@@ -4371,6 +4505,19 @@ def settings_project_detail(pid: int):
     service_codes = ServiceCode.query.filter_by(company=project.company, project_id=project.id).order_by(ServiceCode.code).all()
     is_mo = bool(getattr(current_user, "is_master_owner", False))
 
+    # O que o projeto ainda está puxando "escondido" da empresa
+    own_names = {d.name.strip().upper() for d in types}
+    inherited_types = [d for d in DeviceType.query.filter_by(company=project.company, project_id=None)
+                       .order_by(DeviceType.name).all() if d.name.strip().upper() not in own_names]
+    inherited_tiers = [] if tiers else SpliceTier.query.filter_by(
+        company=project.company, project_id=None).order_by(SpliceTier.min_splices).all()
+    comp_included = comp_cfg.included_splices if comp_cfg else 1
+    inherits_included = project.included_splices is None
+    has_mid_end = any(bool(m.mid_end_enabled) for m in maps) or any(
+        (d.value_meio_usd is not None or d.value_ponta_usd is not None or d.billing_code_meio or d.billing_code_ponta)
+        for d in types)
+    overlaps = _tier_overlaps(tiers)
+
     return render_template(
         "settings_project.html",
         project=project,
@@ -4380,6 +4527,12 @@ def settings_project_detail(pid: int):
         service_codes=service_codes,
         is_mo=is_mo,
         company_id=company_id,
+        inherited_types=inherited_types,
+        inherited_tiers=inherited_tiers,
+        comp_included=comp_included,
+        inherits_included=inherits_included,
+        has_mid_end=has_mid_end,
+        overlaps=overlaps,
     )
 
 
@@ -4599,6 +4752,10 @@ def settings_device_edit(did: int):
     is_ribbon = bool(request.form.get("is_ribbon"))
     dt.is_ribbon = is_ribbon
     dt.ribbon_price_usd = _float("ribbon_price_usd") if is_ribbon else None
+    if getattr(current_user, "is_master_owner", False) and request.form.get("owner_fields") == "1":
+        dt.owner_value_usd = _float("owner_value_usd")
+        dt.owner_value_meio_usd = _float("owner_value_meio_usd")
+        dt.owner_value_ponta_usd = _float("owner_value_ponta_usd")
     db.session.commit()
 
     # Recalcula billing_codes_json de todos os lancamentos que usam este dispositivo
@@ -4625,6 +4782,12 @@ def settings_tier_edit(tid: int):
     except ValueError:
         pass
     tier.code_splice = (request.form.get("code_splice") or "").strip() or None
+    if getattr(current_user, "is_master_owner", False) and request.form.get("owner_fields") == "1":
+        ov = (request.form.get("owner_price") or "").strip()
+        try:
+            tier.owner_price_per_splice_usd = float(ov) if ov else None
+        except ValueError:
+            pass
     db.session.commit()
 
     # Recalcula billing_codes_json de todos os lancamentos afetados por esta faixa

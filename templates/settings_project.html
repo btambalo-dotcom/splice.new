@@ -59,6 +59,21 @@
     <!-- ── Visão Geral ── -->
     <div id="section-geral" class="cfg-panel active">
       <p class="section-header">Configurações do projeto</p>
+      {% if inherited_types or inherited_tiers or inherits_included %}
+      <div class="card p-3 mb-3" style="background:rgba(255,193,7,.07);border:1px solid rgba(255,193,7,.35);">
+        <div class="fw-bold mb-1">Este projeto está puxando valores escondidos da empresa</div>
+        <div style="font-size:.83rem;" class="mb-2">
+          {% if inherited_types %}Dispositivos: {% for d in inherited_types %}<b>{{ d.name }}</b> (${{ '%.2f'|format(d.value_usd) }}){% if not loop.last %}, {% endif %}{% endfor %}.<br>{% endif %}
+          {% if inherited_tiers %}Faixas de fusão: {% for t in inherited_tiers %}{{ t.min_splices }}–{{ t.max_splices or '∞' }} = ${{ '%.2f'|format(t.price_per_splice_usd) }}{% if not loop.last %}, {% endif %}{% endfor %}.<br>{% endif %}
+          {% if inherits_included %}Fusões inclusas: {{ comp_included }}.<br>{% endif %}
+          Copie para o projeto para que tudo fique num lugar só. Os valores continuam os mesmos.
+        </div>
+        <form method="post" action="{{ url_for('settings_project_detail', pid=project.id) }}">
+          <input type="hidden" name="action" value="copy_inherited">
+          <button class="btn btn-warning btn-sm" type="submit">Copiar para o projeto</button>
+        </form>
+      </div>
+      {% endif %}
       <div class="row g-4">
         <div class="col-md-5">
           <div class="card p-4">
@@ -69,8 +84,8 @@
                 <label class="form-label form-label-sm">Fusões inclusas por lançamento</label>
                 <input class="form-control form-control-sm" name="included_splices" type="number" min="0"
                   value="{{ project.included_splices if project.included_splices is not none else '' }}"
-                  placeholder="(vazio = usa o padrão da empresa)">
-                <div class="form-text" style="font-size:.75rem;">Deixe vazio para herdar o valor da empresa ({{ project.company }}).</div>
+                  placeholder="vazio = {{ comp_included }} (valor antigo da empresa)">
+                {% if inherits_included %}<div class="form-text text-warning" style="font-size:.75rem;">Vazio: hoje está usando {{ comp_included }} (valor antigo da empresa). Preencha para o projeto ter o próprio valor.</div>{% endif %}
               </div>
               <div class="col-12 mt-1">
                 <label class="form-label form-label-sm">Prazo de pagamento (dias)</label>
@@ -93,18 +108,18 @@
             </div>
             <div class="d-flex justify-content-between py-2 border-bottom" style="font-size:.85rem;">
               <span class="text-secondary">Fusões inclusas</span>
-              <strong>{{ project.included_splices if project.included_splices is not none else '— usa empresa' }}</strong>
+              <strong>{% if project.included_splices is not none %}{{ project.included_splices }}{% else %}{{ comp_included }} <span class="text-warning" style="font-size:.75rem;">(da empresa)</span>{% endif %}</strong>
             </div>
             <div class="d-flex justify-content-between py-2 border-bottom" style="font-size:.85rem;">
               <span class="text-secondary">Prazo de pagamento</span>
               <strong>{{ project.payment_days or 30 }} dias</strong>
             </div>
             <div class="d-flex justify-content-between py-2 border-bottom" style="font-size:.85rem;">
-              <span class="text-secondary">Dispositivos próprios</span>
+              <span class="text-secondary">Dispositivos</span>
               <strong>{{ types|length }}</strong>
             </div>
             <div class="d-flex justify-content-between py-2 border-bottom" style="font-size:.85rem;">
-              <span class="text-secondary">Faixas próprias</span>
+              <span class="text-secondary">Faixas de fusão</span>
               <strong>{{ tiers|length }}</strong>
             </div>
             <div class="d-flex justify-content-between py-2" style="font-size:.85rem;">
@@ -126,7 +141,7 @@
             <form method="post" action="{{ url_for('settings_device_add') }}" class="row g-2">
               <input type="hidden" name="company" value="{{ project.company }}">
               <input type="hidden" name="project_id" value="{{ project.id }}">
-              <input type="hidden" name="next" value="{{ url_for('settings_project_detail', pid=project.id) }}">
+              <input type="hidden" name="next" value="{{ url_for('settings_project_detail', pid=project.id, tab='dispositivos') }}">
               <div class="col-12">
                 <label class="form-label form-label-sm">Nome do dispositivo</label>
                 <input class="form-control form-control-sm" name="name" placeholder="Ex.: CAM, CTO, ONT" required>
@@ -136,17 +151,17 @@
                 <div class="input-group input-group-sm">
                   <span class="input-group-text">$</span>
                   <input class="form-control" name="value_usd" type="number" step="0.01" min="0" required>
+                </div>
                 {% if current_user.is_master_owner %}
                 <div class="mt-2 p-2 border border-warning rounded">
                   <small class="text-warning fw-bold">🔐 Preço OWNER (só você vê)</small>
-                  <input class="form-control mt-1" name="owner_value_usd" type="number" step="0.01" min="0" placeholder="Padrão owner">
-                  <input class="form-control mt-1" name="owner_value_meio_usd" type="number" step="0.01" min="0" placeholder="MEIO owner (opcional)">
-                  <input class="form-control mt-1" name="owner_value_ponta_usd" type="number" step="0.01" min="0" placeholder="PONTA owner (opcional)">
+                  <input class="form-control form-control-sm mt-1" name="owner_value_usd" type="number" step="0.01" min="0" placeholder="Padrão owner">
+                  <input class="form-control form-control-sm mt-1" name="owner_value_meio_usd" type="number" step="0.01" min="0" placeholder="MEIO owner (opcional)">
+                  <input class="form-control form-control-sm mt-1" name="owner_value_ponta_usd" type="number" step="0.01" min="0" placeholder="PONTA owner (opcional)">
                 </div>
                 {% endif %}
-                </div>
-                <div class="form-text" style="font-size:.75rem;">Usado quando não há MEIO/PONTA ou quando os valores abaixo não forem preenchidos.</div>
               </div>
+              <div class="col-12"><details {% if has_mid_end %}open{% endif %}><summary class="text-secondary" style="font-size:.8rem;cursor:pointer;">Valores e códigos MEIO/PONTA (opcional)</summary><div class="row g-2 mt-1">
               <div class="col-6">
                 <label class="form-label form-label-sm">Valor MEIO (USD)</label>
                 <div class="input-group input-group-sm">
@@ -161,6 +176,15 @@
                   <input class="form-control" name="value_ponta_usd" type="number" step="0.01" min="0" placeholder="Opcional">
                 </div>
               </div>
+              <div class="col-6">
+                <label class="form-label form-label-sm">Cód. MEIO</label>
+                <input class="form-control form-control-sm" name="billing_code_meio" type="text" placeholder="Ex.: FS07" maxlength="30">
+              </div>
+              <div class="col-6">
+                <label class="form-label form-label-sm">Cód. PONTA</label>
+                <input class="form-control form-control-sm" name="billing_code_ponta" type="text" placeholder="Ex.: FS08" maxlength="30">
+              </div>
+              </div></details></div>
               <div class="col-12 mt-1">
                 <div class="form-check">
                   <input class="form-check-input" type="checkbox" name="is_ribbon" id="is_ribbon_proj" value="1" onchange="document.getElementById('ribbon_price_proj').closest('.col-12').style.display=this.checked?'':'none'">
@@ -174,19 +198,10 @@
                   <input class="form-control" name="ribbon_price_usd" id="ribbon_price_proj" type="number" step="0.01" min="0" placeholder="Ex.: 2.50">
                 </div>
               </div>
-              <div class="col-4">
-                <label class="form-label form-label-sm">Cód. cobrança</label>
+              <div class="col-12">
+                <label class="form-label form-label-sm">Cód. cobrança (opcional)</label>
                 <input class="form-control form-control-sm" name="billing_code" type="text" placeholder="Ex.: FS15" maxlength="30">
               </div>
-              <div class="col-4">
-                <label class="form-label form-label-sm">Cód. MEIO</label>
-                <input class="form-control form-control-sm" name="billing_code_meio" type="text" placeholder="Ex.: FS07" maxlength="30">
-              </div>
-              <div class="col-4">
-                <label class="form-label form-label-sm">Cód. PONTA</label>
-                <input class="form-control form-control-sm" name="billing_code_ponta" type="text" placeholder="Ex.: FS08" maxlength="30">
-              </div>
-              <div class="form-text col-12" style="font-size:.75rem;">Código de cobrança do dispositivo. MEIO/PONTA substituem o geral quando o mapa tiver essa configuração.</div>
               <div class="col-12">
                 <button class="btn btn-primary btn-sm w-100" type="submit">Adicionar</button>
               </div>
@@ -195,42 +210,43 @@
         </div>
         <div class="col-md-7">
           {% if types %}
+          <div class="card p-0" style="overflow-x:auto;">
+          <table class="table table-dark table-sm align-middle mb-0" style="font-size:.86rem;">
+            <thead><tr>
+              <th>Dispositivo</th><th class="text-end">Valor</th>
+              {% if has_mid_end %}<th class="text-end">MEIO</th><th class="text-end">PONTA</th>{% endif %}
+              {% if is_mo %}<th class="text-end text-warning">Owner 🔐</th>{% endif %}
+              <th>Código</th><th></th>
+            </tr></thead>
+            <tbody>
             {% for d in types %}
-            <div class="device-row">
-              <span>{{ d.name }}</span>
-              <div class="d-flex align-items-center gap-2">
-                {% if d.billing_code %}
-                  <span class="badge bg-info text-dark me-1" title="Cód. geral">{{ d.billing_code }}</span>
+              <tr>
+                <td><strong>{{ d.name }}</strong>{% if d.is_ribbon %} <span class="badge" style="background:#6f42c1;">RIBBON</span>{% endif %}</td>
+                <td class="text-end">{% if d.is_ribbon %}${{ '%.2f'|format(d.value_usd) }} + ${{ '%.2f'|format(d.ribbon_price_usd or 0) }}/fita{% else %}${{ '%.2f'|format(d.value_usd) }}{% endif %}</td>
+                {% if has_mid_end %}
+                <td class="text-end">{{ ('$%.2f'|format(d.value_meio_usd)) if d.value_meio_usd is not none else '—' }}</td>
+                <td class="text-end">{{ ('$%.2f'|format(d.value_ponta_usd)) if d.value_ponta_usd is not none else '—' }}</td>
                 {% endif %}
-                {% if d.billing_code_meio %}
-                  <span class="badge" style="background:#0d6efd;color:#fff;" title="Cód. MEIO">M:{{ d.billing_code_meio }}</span>
-                {% endif %}
-                {% if d.billing_code_ponta %}
-                  <span class="badge" style="background:#198754;color:#fff;" title="Cód. PONTA">P:{{ d.billing_code_ponta }}</span>
-                {% endif %}
-                {% if d.is_ribbon %}
-                  <span class="badge" style="background:#6f42c1;" title="Ribbon">RIBBON ${{ '%.2f'|format(d.ribbon_price_usd or 0) }}/fita</span>
-                {% elif d.value_meio_usd is not none or d.value_ponta_usd is not none %}
-                  <span class="badge bg-secondary" title="Padrão">${{ '%.2f'|format(d.value_usd) }}</span>
-                  {% if d.value_meio_usd is not none %}
-                    <span class="badge" style="background:#0d6efd;" title="MEIO">M ${{ '%.2f'|format(d.value_meio_usd) }}</span>
-                  {% endif %}
-                  {% if d.value_ponta_usd is not none %}
-                    <span class="badge" style="background:#198754;" title="PONTA">P ${{ '%.2f'|format(d.value_ponta_usd) }}</span>
-                  {% endif %}
-                {% else %}
-                  <strong>${{ '%.2f'|format(d.value_usd) }}</strong>
-                {% endif %}
-                <button type="button" class="btn btn-sm btn-outline-secondary"
-                  onclick="openDeviceEdit({{ d.id }}, '{{ d.name }}', {{ d.value_usd }}, {{ d.value_meio_usd or 'null' }}, {{ d.value_ponta_usd or 'null' }}, {{ d.is_ribbon|int }}, {{ d.ribbon_price_usd or 'null' }}, '{{ d.billing_code or '' }}', '{{ d.billing_code_meio or '' }}', '{{ d.billing_code_ponta or '' }}')">✎</button>
-                <a href="#" data-post="{{ url_for('settings_device_delete', did=d.id, next=url_for('settings_project_detail', pid=project.id)) }}"
-                   class="btn btn-sm btn-outline-danger" data-confirm="Remover dispositivo?">✕</a>
-              </div>
-            </div>
+                {% if is_mo %}<td class="text-end text-warning">{{ ('$%.2f'|format(d.owner_value_usd)) if d.owner_value_usd is not none else '—' }}</td>{% endif %}
+                <td>
+                  {% if d.billing_code %}<span class="badge bg-info text-dark">{{ d.billing_code }}</span>{% endif %}
+                  {% if d.billing_code_meio %}<span class="badge" style="background:#0d6efd;">M:{{ d.billing_code_meio }}</span>{% endif %}
+                  {% if d.billing_code_ponta %}<span class="badge" style="background:#198754;">P:{{ d.billing_code_ponta }}</span>{% endif %}
+                </td>
+                <td class="text-end text-nowrap">
+                  <button type="button" class="btn btn-sm btn-outline-secondary"
+                    onclick='openDeviceEdit({{ d.id }}, {{ d.name|tojson }}, {{ d.value_usd }}, {{ d.value_meio_usd|tojson }}, {{ d.value_ponta_usd|tojson }}, {{ d.is_ribbon|int }}, {{ d.ribbon_price_usd|tojson }}, {{ (d.billing_code or "")|tojson }}, {{ (d.billing_code_meio or "")|tojson }}, {{ (d.billing_code_ponta or "")|tojson }}, {{ d.owner_value_usd|tojson }}, {{ d.owner_value_meio_usd|tojson }}, {{ d.owner_value_ponta_usd|tojson }})'>✎</button>
+                  <a href="#" data-post="{{ url_for('settings_device_delete', did=d.id, next=url_for('settings_project_detail', pid=project.id, tab='dispositivos')) }}"
+                     class="btn btn-sm btn-outline-danger" data-confirm="Remover dispositivo {{ d.name }}?">✕</a>
+                </td>
+              </tr>
             {% endfor %}
+            </tbody>
+          </table>
+          </div>
           {% else %}
             <div class="card p-3 text-center text-secondary" style="font-size:.85rem;">
-              Sem dispositivos específicos. O projeto herda os dispositivos de {{ project.company }}.
+              Nenhum dispositivo neste projeto ainda.
             </div>
           {% endif %}
         </div>
@@ -277,15 +293,23 @@
           </div>
         </div>
         <div class="col-md-7">
+          {% if overlaps %}
+          <div class="card p-2 mb-2" style="background:rgba(220,53,69,.08);border:1px solid rgba(220,53,69,.4);font-size:.83rem;">
+            <b>Faixas sobrepostas:</b>
+            {% for a, b in overlaps %}{{ a.min_splices }}–{{ a.max_splices or '∞' }} e {{ b.min_splices }}–{{ b.max_splices or '∞' }}{% if not loop.last %}; {% endif %}{% endfor %}.
+            Cada quantidade de fusões deve cair em uma faixa só. Ajuste ou remova uma delas.
+          </div>
+          {% endif %}
           {% if tiers %}
             {% for t in tiers %}
             <div class="tier-row">
               <span>{{ t.min_splices }} – {% if t.max_splices %}{{ t.max_splices }}{% else %}∞{% endif %} fusões</span>
               <div class="d-flex align-items-center gap-2">
                 <strong>${{ '%.2f'|format(t.price_per_splice_usd) }}/fusão</strong>
+                {% if is_mo and t.owner_price_per_splice_usd is not none %}<span class="text-warning" style="font-size:.8rem;">🔐 ${{ '%.2f'|format(t.owner_price_per_splice_usd) }}</span>{% endif %}
                 {% if t.code_splice %}<span class="badge bg-info text-dark ms-1">{{ t.code_splice }}</span>{% endif %}
                 <button type="button" class="btn btn-sm btn-outline-secondary"
-                  onclick="openTierEdit({{ t.id }}, {{ t.min_splices }}, {{ t.max_splices or 'null' }}, {{ t.price_per_splice_usd }}, '{{ t.code_splice or '' }}')">✎</button>
+                  onclick='openTierEdit({{ t.id }}, {{ t.min_splices }}, {{ t.max_splices|tojson }}, {{ t.price_per_splice_usd }}, {{ (t.code_splice or "")|tojson }}, {{ t.owner_price_per_splice_usd|tojson }})'>✎</button>
                 <a href="#" data-post="{{ url_for('settings_tier_delete', tid=t.id, next=url_for('settings_project_detail', pid=project.id)) }}"
                    class="btn btn-sm btn-outline-danger" data-confirm="Remover faixa?">✕</a>
               </div>
@@ -293,7 +317,7 @@
             {% endfor %}
           {% else %}
             <div class="card p-3 text-center text-secondary" style="font-size:.85rem;">
-              Sem faixas específicas. O projeto herda as faixas de {{ project.company }}.
+              Nenhuma faixa neste projeto{% if inherited_tiers %} — hoje está usando as faixas antigas da empresa (veja Visão geral){% endif %}.
             </div>
           {% endif %}
         </div>
@@ -383,8 +407,12 @@
                   <a href="{{ url_for('map_view', map_id=m.id) }}" class="btn btn-sm btn-outline-info">Abrir mapa</a>
                   <a href="{{ url_for('settings_map_access', map_id=m.id) }}" class="btn btn-sm btn-outline-secondary">Splicers</a>
                   {% endif %}
-                  <a href="{{ url_for('settings_project_detail', pid=project.id) }}?del_map={{ m.id }}"
-                     class="btn btn-sm btn-outline-danger" onclick="return confirm('Remover mapa?')">✕</a>
+                  <form method="post" action="{{ url_for('settings_project_detail', pid=project.id) }}" class="d-inline"
+                        onsubmit="return confirm('Remover o mapa {{ m.name }}?')">
+                    <input type="hidden" name="action" value="delete_map">
+                    <input type="hidden" name="map_id" value="{{ m.id }}">
+                    <button class="btn btn-sm btn-outline-danger" type="submit">✕</button>
+                  </form>
                 </div>
               </div>
 
@@ -396,12 +424,14 @@
                   <div class="col-12">
                     <div class="form-check form-check-sm">
                       <input class="form-check-input" type="checkbox" name="mid_end_enabled"
-                        id="midEnd{{ m.id }}" {% if m.mid_end_enabled %}checked{% endif %}>
+                        id="midEnd{{ m.id }}" {% if m.mid_end_enabled %}checked{% endif %}
+                        onchange="document.getElementById('midEndFields{{ m.id }}').style.display=this.checked?'':'none'">
                       <label class="form-check-label" for="midEnd{{ m.id }}" style="font-size:.83rem;">
                         Habilitar seleção MEIO/PONTA no lançamento
                       </label>
                     </div>
                   </div>
+                  <div class="col-12" id="midEndFields{{ m.id }}" style="{% if not m.mid_end_enabled %}display:none;{% endif %}"><div class="row g-2">
                   <div class="col-6">
                     <label class="form-label form-label-sm">Inclusas MEIO</label>
                     <input class="form-control form-control-sm" name="included_meio" type="number"
@@ -412,6 +442,7 @@
                     <input class="form-control form-control-sm" name="included_ponta" type="number"
                       min="0" value="{{ m.included_splices_ponta or 0 }}">
                   </div>
+                  </div></div>
                   <div class="col-12">
                     <button class="btn btn-outline-secondary btn-sm w-100" type="submit">Salvar regras</button>
                   </div>
@@ -559,6 +590,17 @@ if (urlTab) {
             <label class="form-label form-label-sm">Valor por fita ($)</label>
             <input class="form-control form-control-sm" name="ribbon_price_usd" id="ed_ribbon_price" type="number" step="0.01" min="0">
           </div>
+          {% if is_mo %}
+          <div class="col-12 p-2 border border-warning rounded">
+            <input type="hidden" name="owner_fields" value="1">
+            <small class="text-warning fw-bold">🔐 Preço OWNER</small>
+            <div class="row g-1 mt-1">
+              <div class="col-4"><input class="form-control form-control-sm" name="owner_value_usd" id="ed_owner" type="number" step="0.01" min="0" placeholder="Padrão"></div>
+              <div class="col-4"><input class="form-control form-control-sm" name="owner_value_meio_usd" id="ed_owner_meio" type="number" step="0.01" min="0" placeholder="MEIO"></div>
+              <div class="col-4"><input class="form-control form-control-sm" name="owner_value_ponta_usd" id="ed_owner_ponta" type="number" step="0.01" min="0" placeholder="PONTA"></div>
+            </div>
+          </div>
+          {% endif %}
           <div class="col-4">
             <label class="form-label form-label-sm">Cód. cobrança</label>
             <input class="form-control form-control-sm" name="billing_code" id="ed_billing_code" type="text" maxlength="30">
@@ -574,7 +616,8 @@ if (urlTab) {
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-          <button type="submit" class="btn btn-primary">Salvar e recalcular lançamentos</button>
+          <span class="me-auto text-secondary" style="font-size:.75rem;">Lançamentos já feitos mantêm o valor. Só os códigos de cobrança são atualizados.</span>
+          <button type="submit" class="btn btn-primary">Salvar</button>
         </div>
       </form>
     </div>
@@ -607,10 +650,18 @@ if (urlTab) {
             <label class="form-label form-label-sm">Cód. cobrança</label>
             <input class="form-control form-control-sm" name="code_splice" id="et_code" type="text" maxlength="30" placeholder="Ex.: FS01">
           </div>
+          {% if is_mo %}
+          <div class="col-12 p-2 border border-warning rounded">
+            <input type="hidden" name="owner_fields" value="1">
+            <small class="text-warning fw-bold">🔐 $/fusão OWNER</small>
+            <input class="form-control form-control-sm mt-1" name="owner_price" id="et_owner" type="number" step="0.001" min="0">
+          </div>
+          {% endif %}
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-          <button type="submit" class="btn btn-primary">Salvar e recalcular lançamentos</button>
+          <span class="me-auto text-secondary" style="font-size:.75rem;">Lançamentos já feitos mantêm o valor. Só os códigos de cobrança são atualizados.</span>
+          <button type="submit" class="btn btn-primary">Salvar</button>
         </div>
       </form>
     </div>
@@ -618,7 +669,9 @@ if (urlTab) {
 </div>
 
 <script>
-function openDeviceEdit(id, name, val, valMeio, valPonta, isRib, ribPrice, code, codeMeio, codePonta) {
+function openDeviceEdit(id, name, val, valMeio, valPonta, isRib, ribPrice, code, codeMeio, codePonta, own, ownMeio, ownPonta) {
+  const setv = (i, v) => { const e = document.getElementById(i); if (e) e.value = (v != null ? v : ''); };
+  setv('ed_owner', own); setv('ed_owner_meio', ownMeio); setv('ed_owner_ponta', ownPonta);
   document.getElementById('editDeviceName').textContent = name;
   document.getElementById('editDeviceForm').action = '/settings/device/' + id + '/edit';
   document.getElementById('ed_value_usd').value = val || '';
@@ -633,7 +686,8 @@ function openDeviceEdit(id, name, val, valMeio, valPonta, isRib, ribPrice, code,
   document.getElementById('ed_billing_ponta').value = codePonta || '';
   new bootstrap.Modal(document.getElementById('editDeviceModal')).show();
 }
-function openTierEdit(id, min, max, price, code) {
+function openTierEdit(id, min, max, price, code, own) {
+  const eo = document.getElementById('et_owner'); if (eo) eo.value = (own != null ? own : '');
   document.getElementById('editTierForm').action = '/settings/tier/' + id + '/edit';
   document.getElementById('et_min').value = min || '';
   document.getElementById('et_max').value = max != null ? max : '';
