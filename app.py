@@ -8014,6 +8014,8 @@ def _process_photo_result(rec, raw_bytes, fname, content_type, photo_type, parse
             CompanyMap.name == map_name,
             CompanyMap.project_id == project_id,
         ).order_by(CompanyMap.id.asc()).first()
+        # MEIO/PONTA só vale no preço se o mapa tiver essa regra ligada
+        price_role = map_role if (map_obj and bool(getattr(map_obj, "mid_end_enabled", False))) else None
 
         included_override, included_applied, _ = resolve_included_override(
             company=company, project_id=project_id,
@@ -8023,11 +8025,11 @@ def _process_photo_result(rec, raw_bytes, fname, content_type, photo_type, parse
         price_splices, price_device, total = compute_prices(
             splices=splices_val, device_name=device_for_price, company=company,
             project_id=project_id, included_override=included_override,
-            map_role=map_role, ribbon_count=None,
+            map_role=price_role, ribbon_count=None,
         )
         _bcodes = compute_billing_codes(
             splices_val, device_for_price, company, project_id,
-            map_role=map_role, ribbon_count=None,
+            map_role=price_role, ribbon_count=None,
         )
 
         # Data do lançamento = data da foto (não data do servidor)
@@ -8212,27 +8214,31 @@ def auto_photo_launch(map_id):
                 photo_device_type = (parsed.get("device_type") or "OTE").strip().upper()
                 auto_type = "CAN" if photo_device_type == "CAN" else "OTE"
 
-                # Calcula preços
+                # Fusões: só se confirmadas (etiqueta numerada visível na foto)
+                auto_splices_confirmed = bool(parsed.get('splices_confirmed', False))
+                auto_splices = int(parsed.get('splices') or 0) if auto_splices_confirmed else 0
+                # MEIO/PONTA só vale no preço se o mapa tiver essa regra ligada
+                price_role = map_role if bool(getattr(mp, "mid_end_enabled", False)) else None
+
+                # Calcula preços com a tabela do PROJETO do mapa (project_id = mp.project_id)
                 included_override, included_applied, _ = resolve_included_override(
                     company=company, project_id=project_id,
                     map_obj=mp, map_val=map_name, map_role=map_role,
                 )
                 is_rib, _ = device_is_ribbon(auto_type, company, project_id)
+                # Antes cobrava as fusões lidas mesmo sem confirmação, mas gravava 0 fusões.
                 price_splices, price_device, total = compute_prices(
-                    splices=splices_val, device_name=auto_type, company=company,
+                    splices=auto_splices, device_name=auto_type, company=company,
                     project_id=project_id, included_override=included_override,
-                    map_role=map_role, ribbon_count=None,
+                    map_role=price_role, ribbon_count=None,
                 )
                 _bcodes = compute_billing_codes(
-                    splices_val, auto_type, company, project_id,
-                    map_role=map_role, ribbon_count=None,
+                    auto_splices, auto_type, company, project_id,
+                    map_role=price_role, ribbon_count=None,
                 )
 
                 # Data do novo device = data da foto
                 auto_photo_dt = _parse_photo_datetime(parsed.get('photo_datetime'))
-                # Fusões: só se confirmadas
-                auto_splices_confirmed = bool(parsed.get('splices_confirmed', False))
-                auto_splices = int(parsed.get('splices') or 0) if auto_splices_confirmed else 0
 
                 rec = Record(
                     map=map_name,
@@ -8446,6 +8452,13 @@ def auto_photo_global_launch():
         company    = rec.company
         project_id = rec.project_id
         map_name   = rec.map
+        # Garantia: se o lançamento não tiver projeto, usa o projeto do mapa (tabela de preços certa)
+        if project_id is None and map_name:
+            _mp = CompanyMap.query.filter(CompanyMap.company == company, CompanyMap.name == map_name,
+                                          CompanyMap.project_id.isnot(None)).first()
+            if _mp:
+                project_id = _mp.project_id
+                rec.project_id = _mp.project_id
 
         # 3. Processa conforme tipo
         result = _process_photo_result(
