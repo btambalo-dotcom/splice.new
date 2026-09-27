@@ -1,23 +1,37 @@
-
 {% extends 'base.html' %}
 {% block title %}Login · SPLICER{% endblock %}
 {% block content %}
-<div class="row justify-content-center">
-  <div class="col-md-4">
-    <div class="card p-4 bg-secondary-subtle">
-      <h4 class="mb-3 text-dark">Login</h4>
-      <form method="post">
-        <div class="mb-3">
-          <label class="form-label text-dark">Usuário</label>
-          <input class="form-control" name="username" required>
-        </div>
-        <div class="mb-3">
-          <label class="form-label text-dark">Senha</label>
-          <input class="form-control" type="password" name="password" required>
-        </div>
-        <button class="btn btn-primary w-100">Entrar</button>
-      </form>
-    </div>
+<style>
+  .lg-wrap { min-height: calc(100vh - 180px); display:flex; align-items:center; justify-content:center; }
+  .lg-card { width:100%; max-width:380px; background:#111a2b; border:1px solid #1f2a3d; border-radius:18px; padding:28px 24px; }
+  .lg-logo { width:72px; height:72px; border-radius:18px; display:block; margin:0 auto 14px; }
+  .lg-title { text-align:center; font-size:1.4rem; font-weight:700; margin:0; }
+  .lg-sub { text-align:center; color:#8b97ab !important; font-size:.85rem; margin-bottom:22px; }
+  .lg-card .form-label { color:#aeb8c8 !important; font-size:.85rem; }
+  .lg-card .form-control { background:#0b1322 !important; border-color:#1f2a3d !important; color:#e6ebf3 !important; min-height:48px; font-size:16px; border-radius:12px; }
+  .lg-card .form-control:focus { border-color:#22b8cf !important; box-shadow:none; }
+  .lg-btn { background:#22b8cf; border:0; color:#06121a; font-weight:700; min-height:50px; border-radius:12px; }
+  .lg-btn:hover { background:#3cc9dd; color:#06121a; }
+  .lg-hint { text-align:center; color:#6f7c91 !important; font-size:.78rem; margin-top:16px; }
+</style>
+<div class="lg-wrap">
+  <div class="lg-card">
+    <img class="lg-logo" src="{{ url_for('static', filename='icons/icon-192.png') }}" alt="SPLICER">
+    <h1 class="lg-title">SPLICER</h1>
+    <div class="lg-sub">Entre para continuar</div>
+    <form method="post" autocomplete="on">
+      <div class="mb-3">
+        <label class="form-label" for="lg-user">Usuário</label>
+        <input class="form-control" id="lg-user" name="username" required
+               autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false">
+      </div>
+      <div class="mb-4">
+        <label class="form-label" for="lg-pass">Senha</label>
+        <input class="form-control" id="lg-pass" type="password" name="password" required autocomplete="current-password">
+      </div>
+      <button class="btn lg-btn w-100" type="submit">Entrar</button>
+    </form>
+    <div class="lg-hint">No iPhone: Safari › Compartilhar › <b>Adicionar à Tela de Início</b> para usar como app.</div>
   </div>
 </div>
 {% endblock %}

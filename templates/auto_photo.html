@@ -20,9 +20,20 @@
         <li>O lançamento é feito sozinho ✅</li>
       </ol>
 
-      <label class="form-label fw-semibold text-light">Selecione as fotos</label>
-      <input type="file" id="photo-input" class="form-control bg-secondary text-light border-0 mb-3"
-             accept="image/*" multiple>
+      <label class="form-label fw-semibold text-light">Adicione as fotos</label>
+      <div class="d-flex gap-2 mb-2">
+        <label class="btn btn-success flex-fill py-3 fw-semibold mb-0" for="camera-input" style="border-radius:12px;">
+          📷 Tirar foto
+        </label>
+        <label class="btn btn-outline-light flex-fill py-3 fw-semibold mb-0" for="photo-input" style="border-radius:12px;">
+          🖼 Galeria
+        </label>
+      </div>
+      <!-- câmera: abre direto a câmera traseira (uma foto por vez, pode repetir) -->
+      <input type="file" id="camera-input" accept="image/*" capture="environment" class="d-none">
+      <!-- galeria: várias fotos de uma vez (ex.: fotos do Timemark) -->
+      <input type="file" id="photo-input" accept="image/*" multiple class="d-none">
+      <div id="photo-count" class="small text-muted mb-3">Nenhuma foto selecionada.</div>
 
       <!-- Preview miniaturas -->
       <div id="preview-area" class="d-flex flex-wrap gap-2 mb-3"></div>
@@ -56,6 +67,9 @@
 const AUTO_LAUNCH_URL = "{{ url_for('auto_photo_global_launch') }}";
 
 const input     = document.getElementById('photo-input');
+const camInput  = document.getElementById('camera-input');
+const countEl   = document.getElementById('photo-count');
+let selected    = [];   // fotos escolhidas (galeria + câmera somadas)
 const btnLaunch = document.getElementById('btn-launch');
 const preview   = document.getElementById('preview-area');
 const progress  = document.getElementById('progress-area');
@@ -63,33 +77,38 @@ const pBar      = document.getElementById('progress-bar');
 const pStatus   = document.getElementById('progress-status');
 const results   = document.getElementById('results-area');
 
-// Preview ao selecionar fotos
-input.addEventListener('change', () => {
+// Preview: junta fotos da galeria e da câmera numa lista só
+function addFiles(list) {
+  Array.from(list || []).forEach(f => selected.push(f));
+  renderPreview();
+}
+function renderPreview() {
   preview.innerHTML = '';
-  const files = Array.from(input.files);
-  btnLaunch.disabled = files.length === 0;
-
-  files.forEach(file => {
+  btnLaunch.disabled = selected.length === 0;
+  countEl.textContent = selected.length ? (selected.length + ' foto(s) pronta(s) para lançar') : 'Nenhuma foto selecionada.';
+  selected.forEach((file, idx) => {
     const wrap = document.createElement('div');
-    wrap.style.cssText = 'position:relative;width:80px;height:80px';
-
+    wrap.style.cssText = 'position:relative;width:84px;height:84px';
     const img = document.createElement('img');
     img.src = URL.createObjectURL(file);
-    img.style.cssText = 'width:80px;height:80px;object-fit:cover;border-radius:8px;border:2px solid #444';
-
-    const label = document.createElement('div');
-    label.textContent = file.name.length > 10 ? file.name.slice(0,10)+'…' : file.name;
-    label.style.cssText = 'font-size:10px;color:#aaa;text-align:center;margin-top:2px;word-break:break-all';
-
+    img.style.cssText = 'width:84px;height:84px;object-fit:cover;border-radius:10px;border:2px solid #444';
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.textContent = '✕';
+    del.setAttribute('aria-label', 'Remover foto');
+    del.style.cssText = 'position:absolute;top:-6px;right:-6px;width:26px;height:26px;border-radius:50%;border:0;background:#dc3545;color:#fff;font-size:13px;line-height:26px;padding:0';
+    del.onclick = () => { selected.splice(idx, 1); renderPreview(); };
     wrap.appendChild(img);
+    wrap.appendChild(del);
     preview.appendChild(wrap);
-    preview.insertAdjacentElement('beforeend', label);
   });
-});
+}
+input.addEventListener('change', () => { addFiles(input.files); input.value = ''; });
+camInput.addEventListener('change', () => { addFiles(camInput.files); camInput.value = ''; });
 
 // Envio
 btnLaunch.addEventListener('click', async () => {
-  const files = Array.from(input.files);
+  const files = selected.slice();
   if (!files.length) return;
 
   btnLaunch.disabled = true;
@@ -119,8 +138,9 @@ btnLaunch.addEventListener('click', async () => {
       }
     }
     pBar.style.width = '100%';
-    pStatus.textContent = 'Concluido!';
+    pStatus.textContent = 'Concluído!';
     renderResults(allResults);
+    selected = []; renderPreview();
   } catch (e) {
     pStatus.textContent = 'Erro ao enviar.';
     results.innerHTML = '<div class="alert alert-danger">Erro: ' + e + '</div>';

@@ -5,17 +5,64 @@
     <meta charset="utf-8">
     <title>{% block title %}SPLICER{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <!-- App de celular (iPhone/Android): instalar pela opção "Adicionar à Tela de Início" -->
+    <link rel="manifest" href="/manifest.webmanifest">
+    <meta name="theme-color" content="#0b1220">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="SPLICER">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/apple-touch-icon.png') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='icons/icon-32.png') }}">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="{{ url_for('static', filename='css/app.css') }}" rel="stylesheet">
     <style>
       /* Menu: no celular vira lista em coluna; no PC quebra linha em vez de estourar a largura */
       .splicer-nav .me-2 { margin-right: 0 !important; }
       @media (max-width: 991.98px) { .splicer-nav .btn { width: 100%; text-align: left; } .splicer-nav select { width: 100% !important; } }
+
+      /* ===== Celular / app ===== */
+      body { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+      .navbar { padding-top: calc(.5rem + env(safe-area-inset-top)); }
+      .navbar-brand img { border-radius: 8px; }
+      .app-tabbar { display: none; }
+      @media (max-width: 991.98px) {
+        body.has-tabbar { padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
+        .app-tabbar {
+          display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 1040;
+          background: rgba(11,18,32,.97); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+          border-top: 1px solid #1f2a3d; padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+        }
+        .app-tab {
+          flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+          color: #8b97ab !important; text-decoration: none; font-size: .68rem; font-weight: 500;
+          min-height: 52px; border: 0; background: none; -webkit-tap-highlight-color: transparent;
+        }
+        .app-tab svg { width: 24px; height: 24px; }
+        .app-tab span { color: inherit !important; }
+        .app-tab.active { color: #22b8cf !important; }
+        .app-tab-main { flex: 0 0 72px; }
+        .app-tab-main .app-tab-bubble {
+          width: 56px; height: 56px; margin-top: -22px; border-radius: 50%;
+          background: #198754; color: #fff; display: flex; align-items: center; justify-content: center;
+          box-shadow: 0 6px 18px rgba(25,135,84,.45); border: 3px solid #0b1220;
+        }
+        .app-tab-main .app-tab-bubble svg { width: 26px; height: 26px; }
+        /* Botões e campos maiores para usar com o dedo (ou luva) */
+        .btn { min-height: 40px; }
+        .btn-sm { min-height: 36px; }
+        .form-control, .form-select { min-height: 44px; font-size: 16px; } /* 16px evita o zoom automático do iPhone */
+        .form-control-sm, .form-select-sm { min-height: 38px; font-size: 16px; }
+        /* Botão flutuante de câmera do mapa fica acima da barra */
+        #fab-auto-photo { bottom: calc(88px + env(safe-area-inset-bottom)) !important; }
+      }
+      /* Aberto como app (tela cheia): esconde o seletor de idioma e deixa o topo mais enxuto */
+      @media (display-mode: standalone) { .navbar { margin-bottom: 1rem !important; } }
     </style>
       {% block extra_head %}{% endblock %}
 </head>
-  <body class="bg-dark text-light">
+  <body class="bg-dark text-light{% if current_user.is_authenticated %} has-tabbar{% endif %}">
     <nav class="navbar navbar-expand-lg navbar-dark bg-black mb-4">
       <div class="container">
         <a class="navbar-brand" href="{{ url_for('index') }}">
@@ -73,6 +120,38 @@
       {% endwith %}
       {% block content %}{% endblock %}
     </div>
+
+    {% if current_user.is_authenticated %}
+    {# ---------- Barra de navegação do celular (estilo app) ---------- #}
+    {% set ep = request.endpoint or '' %}
+    <nav class="app-tabbar" aria-label="Navegação">
+      <a href="{{ url_for('index') }}" class="app-tab {% if ep == 'index' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg>
+        <span>Produção</span>
+      </a>
+      <a href="{{ url_for('my_maps') }}" class="app-tab {% if ep in ('my_maps', 'map_view') %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/></svg>
+        <span>Mapas</span>
+      </a>
+      {% if (not current_user.is_company_owner) or current_user.is_admin %}
+      <a href="{{ url_for('auto_photo_page') }}" class="app-tab app-tab-main {% if ep == 'auto_photo_page' %}active{% endif %}" aria-label="Foto Auto">
+        <span class="app-tab-bubble">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+        </span>
+        <span>Foto Auto</span>
+      </a>
+      <a href="{{ url_for('entry') }}" class="app-tab {% if ep == 'entry' %}active{% endif %}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+        <span>Lançar</span>
+      </a>
+      {% endif %}
+      <button type="button" class="app-tab" data-bs-toggle="collapse" data-bs-target="#mainNav" aria-label="Menu"
+              onclick="window.scrollTo({top:0,behavior:'smooth'})">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+        <span>Menu</span>
+      </button>
+    </nav>
+    {% endif %}
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{{ url_for('static', filename='js/lang.js') }}"></script>
     <script>
@@ -90,6 +169,14 @@
         document.body.appendChild(f);
         f.submit();
       });
+    </script>
+    <script>
+      // App de celular: registra o service worker (abre mais rápido e mostra aviso sem sinal)
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function () {
+          navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function () {});
+        });
+      }
     </script>
     {% block extra_js %}{% endblock %}
   </body>
