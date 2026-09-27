@@ -3190,6 +3190,9 @@ def photo_entry():
       - Se a IA estiver configurada (OPENAI_API_KEY), o sistema tenta ler os dados direto da foto.
       - Se algo falhar, cai no modo texto manual.
     """
+    # Tela antiga "Lançar (foto)" removida do sistema: tudo agora é feito pelo Foto Auto.
+    flash("A tela 'Lançar (foto)' foi substituída pelo Foto Auto.", "info")
+    return redirect(url_for("auto_photo_page"))
     is_owner = bool(getattr(current_user, "is_company_owner", False))
     is_admin = bool(getattr(current_user, "is_admin", False))
     if is_owner and not is_admin:
