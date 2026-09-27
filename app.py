@@ -2194,6 +2194,34 @@ def _safe_next(url):
         return url
     return None
 
+# --------- App de celular (PWA): arquivos na raiz do site ---------
+@app.route("/sw.js")
+def pwa_service_worker():
+    resp = make_response(send_file(os.path.join(app.static_folder, "sw.js"), mimetype="application/javascript"))
+    resp.headers["Service-Worker-Allowed"] = "/"
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
+@app.route("/manifest.webmanifest")
+def pwa_manifest():
+    resp = make_response(send_file(os.path.join(app.static_folder, "manifest.webmanifest"),
+                                   mimetype="application/manifest+json"))
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
+@app.route("/apple-touch-icon.png")
+@app.route("/apple-touch-icon-precomposed.png")
+def pwa_apple_icon():
+    return send_file(os.path.join(app.static_folder, "icons", "apple-touch-icon.png"), mimetype="image/png")
+
+
+@app.route("/favicon.ico")
+def pwa_favicon():
+    return send_file(os.path.join(app.static_folder, "icons", "icon-32.png"), mimetype="image/png")
+
+
 # --------- Rotas ---------
 @app.route("/", methods=["GET", "POST"])
 @login_required
