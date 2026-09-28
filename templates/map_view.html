@@ -1261,13 +1261,9 @@ function copyDeviceInfoFromRecord(recordId) {
         }
         const deviceName = rec.device || ('ID ' + recordId);
 
-        // 1) Copia o texto para usar no app de Timestamp (fluxo antigo).
+        // Copia o texto para usar no app de Timestamp.
+        // (A tela antiga "Lançar (foto)" foi removida — o lançamento por foto é feito no Foto Auto.)
         copyDeviceInfo(MAP_NAME, deviceName);
-
-        // 2) Abre a tela de lançamento por foto já com MAP/DEVICE preenchidos.
-        const url = '/photo-entry?map_name=' + encodeURIComponent(MAP_NAME) +
-                    '&device_name=' + encodeURIComponent(deviceName);
-        window.open(url, '_blank');
       } catch (e) {
         console.error('Erro ao preparar texto para copiar / abrir foto-entry:', e);
         alert('Não foi possível preparar as informações para copiar / abrir a tela de fotos.');
