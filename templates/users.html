@@ -87,6 +87,9 @@
 
           <input class="role-pill" type="radio" name="_role" id="role_admin" value="admin" onchange="syncRole()">
           <label for="role_admin">👑 Administrador</label>
+
+          <input class="role-pill" type="radio" name="_role" id="role_montador" value="montador" onchange="syncRole()">
+          <label for="role_montador">🧰 Montador</label>
         </div>
 
         <div id="company_block" class="mb-3" style="display:none;">
@@ -104,6 +107,11 @@
 
         <input type="hidden" name="is_admin" id="h_is_admin" value="">
         <input type="hidden" name="is_company_owner" id="h_is_owner" value="">
+        <input type="hidden" name="is_montador" id="h_is_montador" value="">
+        <div id="montador_info" class="mb-3" style="display:none; font-size:.78rem; color:#20c997;">
+          O Montador só acessa a tela de Montagem: lança data, projeto e quantidade de caixas e vê o próprio histórico.
+          O valor por caixa é definido por projeto em 🧰 Montagem.
+        </div>
 
         <hr class="divider">
 
@@ -183,6 +191,8 @@
               <td>
                 {% if u.is_admin %}
                   <span class="badge-role badge-admin">👑 Admin</span>
+                {% elif u.is_montador %}
+                  <span class="badge-role badge-active">🧰 Montador</span>
                 {% elif u.is_company_owner %}
                   <span class="badge-role badge-owner">🏢 Empresa</span>
                 {% else %}
@@ -212,7 +222,9 @@
               </td>
 
               <td>
-                {% if not u.is_admin and not u.is_company_owner %}
+                {% if u.is_montador %}
+                  <a href="{{ url_for('montagem_admin', user_id=u.id) }}" style="color:#20c997;font-size:.75rem;">ver produção →</a>
+                {% elif not u.is_admin and not u.is_company_owner %}
                   {% set u_sp = user_pricings.get(u.id, []) %}
                   {% if u_sp %}
                     {% for sp in u_sp %}
@@ -284,9 +296,12 @@ function syncRole() {
   const role = document.querySelector('input[name="_role"]:checked').value;
   const isAdmin = role === 'admin';
   const isOwner = role === 'owner';
+  const isMont  = role === 'montador';
 
   document.getElementById('h_is_admin').value = isAdmin ? '1' : '';
   document.getElementById('h_is_owner').value = isOwner ? '1' : '';
+  document.getElementById('h_is_montador').value = isMont ? '1' : '';
+  document.getElementById('montador_info').style.display = isMont ? '' : 'none';
 
   // Empresa: visível apenas para dono
   document.getElementById('company_block').style.display = isOwner ? '' : 'none';
@@ -301,6 +316,14 @@ function syncRole() {
     document.getElementById('perm_active').checked = true;
     document.getElementById('perm_expenses').checked = true;
     document.getElementById('perm_values').checked = true;
+  } else if (isMont) {
+    document.getElementById('perm_section').style.opacity = '1';
+    document.getElementById('perm_section').style.pointerEvents = '';
+    document.getElementById('perm_expenses').checked = false;
+    rowExp.style.opacity = '.3';
+    rowExp.style.pointerEvents = 'none';
+    rowVal.style.opacity = '.3';
+    rowVal.style.pointerEvents = 'none';
   } else if (isOwner) {
     document.getElementById('perm_section').style.opacity = '1';
     document.getElementById('perm_section').style.pointerEvents = '';

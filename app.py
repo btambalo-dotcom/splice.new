@@ -739,6 +739,8 @@ class User(UserMixin, db.Model):
     is_active = db.Column(db.Boolean, default=True, nullable=False)  # se False, login bloqueado
     can_access_expenses = db.Column(db.Boolean, default=False, nullable=False)  # pode acessar módulo de despesas
     can_view_values = db.Column(db.Boolean, default=True, nullable=False)  # pode ver valores financeiros nos lançamentos
+    # Montador: só lança caixas montadas e vê o próprio histórico (v122)
+    is_montador = db.Column(db.Boolean, default=False, nullable=True)
 
     # Mapas interativos aos quais o usuário (splicer) tem acesso explícito.
     maps_with_access = db.relationship(
@@ -765,6 +767,8 @@ class Project(db.Model):
     included_splices = db.Column(db.Integer, nullable=True)
     # Prazo de pagamento em dias após a criação do payroll
     payment_days = db.Column(db.Integer, nullable=True, default=30)
+    # Valor pago ao montador por caixa montada neste projeto (v122). None = projeto sem montagem.
+    montador_box_price_usd = db.Column(db.Float, nullable=True)
 
     __table_args__ = (
         db.UniqueConstraint('company', 'name', name='uq_project_company_name'),
@@ -1153,6 +1157,33 @@ class SplicerPricingAssignment(db.Model):
         db.UniqueConstraint("user_id", "project_id", name="uq_spa_user_project"),
     )
 
+class MontagemEntry(db.Model):
+    """Lançamento diário de caixas montadas por um Montador (v122).
+
+    O valor por caixa é copiado do projeto no momento do lançamento
+    (unit_price_usd), então mudar o preço do projeto depois NÃO altera
+    lançamentos antigos. Nome do montador, projeto e empresa também ficam
+    guardados, para o histórico nunca se perder.
+    user_id / project_id são inteiros simples (sem chave estrangeira no banco)
+    para que excluir um projeto/empresa não apague nem trave estes registros.
+    """
+    __tablename__ = "montagem_entry"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, nullable=False, index=True)
+    montador_name = db.Column(db.String(120), nullable=True)
+    project_id = db.Column(db.Integer, nullable=True, index=True)
+    project_name = db.Column(db.String(200), nullable=True)
+    company = db.Column(db.String(120), nullable=True)
+    work_date = db.Column(db.Date, nullable=False, index=True)
+    quantity = db.Column(db.Integer, nullable=False, default=0)
+    unit_price_usd = db.Column(db.Float, nullable=False, default=0.0)
+    total_usd = db.Column(db.Float, nullable=False, default=0.0)
+    notes = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=True)
+    updated_by = db.Column(db.Integer, nullable=True)
+
+
 # --------- User loader ---------
 @login_manager.user_loader
 def load_user(user_id: str):
@@ -1252,8 +1283,20 @@ with app.app_context():
         _ensure_user_col("can_access_expenses", "BOOLEAN", "FALSE")
         _ensure_user_col("can_view_values",     "BOOLEAN", "TRUE")
         _ensure_user_col("is_master_owner",     "BOOLEAN", "FALSE")
+        _ensure_user_col("is_montador",         "BOOLEAN", "FALSE")  # v122
     except Exception:
         pass
+
+    # ── v122 Montador: só ADICIONA coluna no projeto (nunca apaga/altera dados) ──
+    try:
+        _insp_m = inspect(db.engine)
+        _proj_cols = [c["name"] for c in _insp_m.get_columns("project")]
+        if "montador_box_price_usd" not in _proj_cols:
+            db.session.execute(text('ALTER TABLE "project" ADD COLUMN montador_box_price_usd DOUBLE PRECISION'))
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+    # A tabela montagem_entry é criada pelo db.create_all() (só cria se não existir).
 
     # garante usuário padrão
     if not User.query.filter_by(username="admin").first():
@@ -2193,6 +2236,34 @@ def _safe_next(url):
     if url.startswith("/") and not url.startswith("//") and "\\" not in url:
         return url
     return None
+
+# --------- App de celular (PWA): arquivos na raiz do site ---------
+@app.route("/sw.js")
+def pwa_service_worker():
+    resp = make_response(send_file(os.path.join(app.static_folder, "sw.js"), mimetype="application/javascript"))
+    resp.headers["Service-Worker-Allowed"] = "/"
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
+@app.route("/manifest.webmanifest")
+def pwa_manifest():
+    resp = make_response(send_file(os.path.join(app.static_folder, "manifest.webmanifest"),
+                                   mimetype="application/manifest+json"))
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
+@app.route("/apple-touch-icon.png")
+@app.route("/apple-touch-icon-precomposed.png")
+def pwa_apple_icon():
+    return send_file(os.path.join(app.static_folder, "icons", "apple-touch-icon.png"), mimetype="image/png")
+
+
+@app.route("/favicon.ico")
+def pwa_favicon():
+    return send_file(os.path.join(app.static_folder, "icons", "icon-32.png"), mimetype="image/png")
+
 
 # --------- Rotas ---------
 @app.route("/", methods=["GET", "POST"])
@@ -3190,6 +3261,9 @@ def photo_entry():
       - Se a IA estiver configurada (OPENAI_API_KEY), o sistema tenta ler os dados direto da foto.
       - Se algo falhar, cai no modo texto manual.
     """
+    # Tela antiga "Lançar (foto)" removida do sistema: tudo agora é feito pelo Foto Auto.
+    flash("A tela 'Lançar (foto)' foi substituída pelo Foto Auto.", "info")
+    return redirect(url_for("auto_photo_page"))
     is_owner = bool(getattr(current_user, "is_company_owner", False))
     is_admin = bool(getattr(current_user, "is_admin", False))
     if is_owner and not is_admin:
@@ -4553,6 +4627,7 @@ def settings_map_access(map_id):
     # Lista de possíveis splicers: todos os usuários não-admin
     splicers = (
         User.query.filter_by(is_admin=False)
+        .filter(or_(User.is_montador.is_(None), User.is_montador == False))
         .order_by(User.splicer_name, User.username)
         .all()
     )
@@ -4865,6 +4940,13 @@ def manage_users():
         is_active = bool(request.form.get("is_active"))
         can_access_expenses = bool(request.form.get("can_access_expenses"))
         can_view_values = bool(request.form.get("can_view_values"))
+        is_montador = bool(request.form.get("is_montador"))
+        if is_montador:
+            # Montador é um papel exclusivo: sem admin, sem empresa, sem despesas
+            is_admin = False
+            is_company_owner = False
+            company_name = None
+            can_access_expenses = False
 
         if not username or not password:
             flash("Usuário e senha são obrigatórios.", "danger")
@@ -4880,6 +4962,7 @@ def manage_users():
             user.is_active = is_active
             user.can_access_expenses = can_access_expenses
             user.can_view_values = can_view_values
+            user.is_montador = is_montador
         else:
             user = User(
                 username=username,
@@ -4891,6 +4974,7 @@ def manage_users():
                 is_active=is_active,
                 can_access_expenses=can_access_expenses,
                 can_view_values=can_view_values,
+                is_montador=is_montador,
             )
             db.session.add(user)
         db.session.commit()
@@ -4941,6 +5025,10 @@ def user_delete(uid: int):
         return redirect(url_for("manage_users"))
     if current_user.id == user.id:
         flash("Você não pode remover o próprio usuário logado.", "danger")
+        return redirect(url_for("manage_users"))
+    # v122: não remove montador que já tem lançamentos (histórico/pagamento não pode se perder)
+    if MontagemEntry.query.filter_by(user_id=user.id).count() > 0:
+        flash("Este montador já tem lançamentos de caixas. Para não perder o histórico, use o botão ⏸ para desativar em vez de remover.", "warning")
         return redirect(url_for("manage_users"))
     db.session.delete(user)
     db.session.commit()
@@ -5594,7 +5682,9 @@ def project_splicer_pricing(pid: int):
     # Splicers já atribuídos a alguma tabela neste projeto
     all_assignments = SplicerPricingAssignment.query.filter_by(project_id=pid).all()
     assigned_user_ids = {a.user_id for a in all_assignments}
-    all_splicers = User.query.filter_by(is_admin=False, is_company_owner=False, is_active=True).order_by(User.username).all()
+    all_splicers = (User.query.filter_by(is_admin=False, is_company_owner=False, is_active=True)
+                    .filter(or_(User.is_montador.is_(None), User.is_montador == False))
+                    .order_by(User.username).all())
     # Dispositivos do projeto (mesmo que o cliente vê)
     project_devices = DeviceType.query.filter_by(project_id=pid).order_by(DeviceType.name).all()
     # Fallback: dispositivos da empresa se projeto não tiver nenhum
@@ -5759,6 +5849,36 @@ def payroll_new():
         project = Project.query.get(project_id) if project_id else None
         company = project.company if project else None
 
+        # ── v122: Montador → folha pelas caixas montadas no período ──
+        if splicer_user and getattr(splicer_user, "is_montador", False):
+            entries = _montagem_query(splicer_user.id, start_date, end_date, project_id, company).all()
+            total_boxes = sum(int(e.quantity or 0) for e in entries)
+            total_amount = round(sum(float(e.total_usd or 0.0) for e in entries), 2)
+            payment_days = getattr(project, "payment_days", None) or 30
+            due_date = end_date + __import__("datetime").timedelta(days=payment_days)
+            payroll = Payroll(
+                user_id=splicer_user.id,
+                start_date=start_date,
+                end_date=end_date,
+                project_id=project_id,
+                company=company,
+                total_records=len(entries),
+                total_splices=total_boxes,      # para montador: total de CAIXAS
+                total_amount_usd=total_amount,
+                payment_days=payment_days,
+                due_date=due_date,
+                status="pending",
+                created_by=current_user.id,
+                notes=notes,
+                splicer_cost_usd=total_amount,
+                plan_name="Montagem (por caixa)",
+            )
+            db.session.add(payroll)
+            db.session.commit()
+            mname = splicer_user.splicer_name or splicer_user.username
+            flash(f"Payroll criado para o montador {mname}: {total_boxes} caixas em {len(entries)} lançamentos, $ {total_amount:.2f}.", "success")
+            return redirect(url_for("payroll_list"))
+
         # Calcular totais dos lançamentos do splicer no período
         splicer_name = splicer_user.splicer_name or splicer_user.username
         q = Record.query.filter(
@@ -5865,6 +5985,8 @@ def payroll_pdf(pid: int):
     import io
 
     p = Payroll.query.get_or_404(pid)
+    if getattr(p.user, "is_montador", False):
+        return _montador_payroll_pdf(p)  # v122
     syscfg = SystemConfig.query.first()
     splicer_name = p.user.splicer_name or p.user.username
 
@@ -6047,6 +6169,10 @@ def payroll_pdf(pid: int):
 def payroll_detail(pid: int):
     """Detalhe de um payroll: lista os lançamentos do período."""
     p = Payroll.query.get_or_404(pid)
+    if getattr(p.user, "is_montador", False):  # v122
+        entries = _montagem_query(p.user_id, p.start_date, p.end_date, p.project_id, p.company) \
+            .order_by(MontagemEntry.work_date, MontagemEntry.id).all()
+        return render_template("payroll_detail_montador.html", payroll=p, entries=entries)
     splicer_name = p.user.splicer_name or p.user.username
     q = Record.query.filter(
         Record.splicer == splicer_name,
@@ -9656,6 +9782,479 @@ Retorne APENAS o texto, sem explicações."""
         })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+# =====================================================================
+# v122 — MONTADOR (montagem de caixas, pago por caixa montada)
+# =====================================================================
+from datetime import timedelta as _m_timedelta
+
+
+def _is_montador_only(user=None) -> bool:
+    u = user or current_user
+    try:
+        return bool(getattr(u, "is_authenticated", False)) and bool(getattr(u, "is_montador", False)) \
+            and not bool(getattr(u, "is_admin", False))
+    except Exception:
+        return False
+
+
+# Telas que o Montador pode abrir. Qualquer outra rota é bloqueada.
+_MONTADOR_ALLOWED_ENDPOINTS = {
+    "montador_home", "logout", "login", "static",
+    "pwa_service_worker", "pwa_manifest", "pwa_apple_icon", "pwa_favicon",
+}
+
+
+@app.before_request
+def _montador_access_guard():
+    try:
+        if not _is_montador_only():
+            return None
+    except Exception:
+        return None
+    ep = request.endpoint or ""
+    if ep in _MONTADOR_ALLOWED_ENDPOINTS:
+        return None
+    if request.method == "GET" and not request.path.startswith("/api/"):
+        return redirect(url_for("montador_home"))
+    abort(403)
+
+
+def _parse_date(raw, default=None):
+    raw = (raw or "").strip()
+    if not raw:
+        return default
+    try:
+        return date.fromisoformat(raw)
+    except Exception:
+        return default
+
+
+def _month_start(d: date) -> date:
+    return d.replace(day=1)
+
+
+def _montagem_query(user_id=None, start=None, end=None, project_id=None, company=None):
+    q = MontagemEntry.query
+    if user_id:
+        q = q.filter(MontagemEntry.user_id == int(user_id))
+    if start:
+        q = q.filter(MontagemEntry.work_date >= start)
+    if end:
+        q = q.filter(MontagemEntry.work_date <= end)
+    if project_id:
+        q = q.filter(MontagemEntry.project_id == int(project_id))
+    elif company:
+        q = q.filter(MontagemEntry.company == company)
+    return q
+
+
+def _montagem_projects():
+    """Projetos que têm valor por caixa definido (> 0)."""
+    return (Project.query
+            .filter(Project.montador_box_price_usd.isnot(None))
+            .filter(Project.montador_box_price_usd > 0)
+            .order_by(Project.company, Project.name).all())
+
+
+def _montadores(active_only=False):
+    q = User.query.filter(User.is_montador == True)
+    if active_only:
+        q = q.filter(or_(User.is_active.is_(None), User.is_active == True))
+    return q.order_by(User.splicer_name, User.username).all()
+
+
+def _montador_display(u) -> str:
+    return (getattr(u, "splicer_name", None) or getattr(u, "username", None) or "?").strip()
+
+
+def _create_montagem_entry(user, form):
+    """Valida o formulário e grava um lançamento. Retorna (entry, erro)."""
+    work_date = _parse_date(form.get("work_date"))
+    if not work_date:
+        return None, "Informe a data."
+    if work_date > date.today() + _m_timedelta(days=1):
+        return None, "A data não pode ser no futuro."
+    pid_raw = (form.get("project_id") or "").strip()
+    if not pid_raw.isdigit():
+        return None, "Escolha o projeto."
+    project = Project.query.get(int(pid_raw))
+    price = float(getattr(project, "montador_box_price_usd", None) or 0) if project else 0.0
+    if not project or price <= 0:
+        return None, "Esse projeto não tem valor por caixa definido. Fale com o administrador."
+    qty_raw = (form.get("quantity") or "").strip()
+    try:
+        qty = int(qty_raw)
+    except Exception:
+        return None, "Digite a quantidade de caixas (número inteiro)."
+    if qty < 1 or qty > 10000:
+        return None, "Quantidade de caixas inválida."
+    notes = (form.get("notes") or "").strip()[:1000] or None
+    e = MontagemEntry(
+        user_id=user.id,
+        montador_name=_montador_display(user),
+        project_id=project.id,
+        project_name=project.name,
+        company=project.company,
+        work_date=work_date,
+        quantity=qty,
+        unit_price_usd=price,                 # valor congelado no momento do lançamento
+        total_usd=round(qty * price, 2),
+        notes=notes,
+        created_at=datetime.utcnow(),
+    )
+    db.session.add(e)
+    db.session.commit()
+    return e, None
+
+
+def _montagem_summary(entries):
+    return {
+        "count": len(entries),
+        "boxes": sum(int(e.quantity or 0) for e in entries),
+        "amount": round(sum(float(e.total_usd or 0) for e in entries), 2),
+    }
+
+
+# ---------------- Tela do Montador (celular) ----------------
+@app.route("/montagem", methods=["GET", "POST"])
+@login_required
+def montador_home():
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if not getattr(current_user, "is_montador", False):
+        return redirect(url_for("montagem_admin") if is_admin else url_for("index"))
+
+    if request.method == "POST":
+        e, err = _create_montagem_entry(current_user, request.form)
+        if err:
+            flash(err, "danger")
+        else:
+            flash(f"Lançamento salvo: {e.quantity} caixa(s) em {e.work_date.strftime('%d/%m/%Y')} — $ {e.total_usd:.2f}", "success")
+            session["montagem_last_project"] = e.project_id
+        return redirect(url_for("montador_home"))
+
+    today = date.today()
+    start = _parse_date(request.args.get("start"), _month_start(today))
+    end = _parse_date(request.args.get("end"), None)  # vazio = até hoje
+    pf_raw = (request.args.get("project") or "").strip()
+    project_filter = int(pf_raw) if pf_raw.isdigit() else None
+
+    entries = (_montagem_query(current_user.id, start, end, project_filter)
+               .order_by(MontagemEntry.work_date.desc(), MontagemEntry.id.desc()).all())
+    # Projetos para o filtro: os que têm preço + os que já aparecem no histórico dele
+    hist_projects = {}
+    for e in MontagemEntry.query.filter_by(user_id=current_user.id).all():
+        if e.project_id:
+            hist_projects[e.project_id] = e.project_name or f"Projeto {e.project_id}"
+    projects = _montagem_projects()
+    for pr in projects:
+        hist_projects.setdefault(pr.id, pr.name)
+
+    return render_template(
+        "montador_home.html",
+        projects=projects,
+        filter_projects=sorted(hist_projects.items(), key=lambda kv: (kv[1] or "").lower()),
+        entries=entries,
+        summary=_montagem_summary(entries),
+        start=start, end=end, project_filter=project_filter,
+        last_project=session.get("montagem_last_project"),
+        today_iso=today.isoformat(),
+    )
+
+
+# ---------------- Tela do Admin ----------------
+def _admin_montagem_filters():
+    today = date.today()
+    start = _parse_date(request.args.get("start"), _month_start(today))
+    end = _parse_date(request.args.get("end"), None)  # vazio = até hoje
+    uf = (request.args.get("user_id") or "").strip()
+    pf = (request.args.get("project") or "").strip()
+    return start, end, (int(uf) if uf.isdigit() else None), (int(pf) if pf.isdigit() else None)
+
+
+@app.route("/admin/montagem", methods=["GET", "POST"])
+@admin_required
+def montagem_admin():
+    if request.method == "POST":
+        # Admin lança em nome de um montador
+        uid = (request.form.get("user_id") or "").strip()
+        u = User.query.get(int(uid)) if uid.isdigit() else None
+        if not u or not getattr(u, "is_montador", False):
+            flash("Escolha o montador.", "danger")
+        else:
+            e, err = _create_montagem_entry(u, request.form)
+            if err:
+                flash(err, "danger")
+            else:
+                flash(f"Lançamento salvo para {e.montador_name}: {e.quantity} caixa(s) — $ {e.total_usd:.2f}", "success")
+        return redirect(url_for("montagem_admin", **request.args))
+
+    start, end, user_filter, project_filter = _admin_montagem_filters()
+    entries = (_montagem_query(user_filter, start, end, project_filter)
+               .order_by(MontagemEntry.work_date.desc(), MontagemEntry.id.desc()).all())
+
+    # Resumo por montador e por projeto
+    by_user, by_project = {}, {}
+    for e in entries:
+        k = (e.user_id, e.montador_name or "?")
+        d = by_user.setdefault(k, {"name": e.montador_name or "?", "user_id": e.user_id, "boxes": 0, "amount": 0.0, "count": 0})
+        d["boxes"] += int(e.quantity or 0); d["amount"] += float(e.total_usd or 0); d["count"] += 1
+        pk = e.project_id or 0
+        pdd = by_project.setdefault(pk, {"name": e.project_name or "—", "company": e.company or "", "boxes": 0, "amount": 0.0})
+        pdd["boxes"] += int(e.quantity or 0); pdd["amount"] += float(e.total_usd or 0)
+
+    montadores = _montadores()
+    names = {u.id: _montador_display(u) for u in montadores}
+    all_projects = Project.query.order_by(Project.company, Project.name).all()
+    return render_template(
+        "montagem_admin.html",
+        entries=entries,
+        summary=_montagem_summary(entries),
+        by_user=sorted(by_user.values(), key=lambda d: d["name"].lower()),
+        by_project=sorted(by_project.values(), key=lambda d: d["name"].lower()),
+        montadores=montadores, montador_names=names,
+        projects=all_projects, price_projects=_montagem_projects(),
+        start=start, end=end, user_filter=user_filter, project_filter=project_filter,
+        today_iso=date.today().isoformat(),
+    )
+
+
+@app.route("/admin/montagem/precos", methods=["POST"])
+@admin_required
+def montagem_prices_save():
+    """Salva o valor por caixa de cada projeto. Não altera lançamentos já feitos."""
+    changed = 0
+    for pr in Project.query.all():
+        key = f"price_{pr.id}"
+        if key not in request.form:
+            continue
+        raw = (request.form.get(key) or "").strip().replace(",", ".").replace("$", "")
+        if raw == "":
+            new_val = None
+        else:
+            try:
+                new_val = round(float(raw), 4)
+            except Exception:
+                flash(f"Valor inválido no projeto {pr.name}: {raw}", "danger")
+                continue
+            if new_val < 0:
+                flash(f"Valor negativo no projeto {pr.name} ignorado.", "danger")
+                continue
+        old_val = pr.montador_box_price_usd
+        if (old_val or None) != (new_val or None):
+            pr.montador_box_price_usd = new_val
+            changed += 1
+    db.session.commit()
+    flash(f"Valores por caixa salvos ({changed} projeto(s) alterado(s)). Lançamentos antigos mantêm o valor da época.", "success")
+    return redirect(url_for("montagem_admin", **request.args) + "#precos")
+
+
+@app.route("/admin/montagem/<int:eid>/edit", methods=["GET", "POST"])
+@admin_required
+def montagem_edit(eid: int):
+    e = MontagemEntry.query.get_or_404(eid)
+    back = _safe_next(request.args.get("next")) or url_for("montagem_admin")
+    if request.method == "POST":
+        wd = _parse_date(request.form.get("work_date"))
+        try:
+            qty = int((request.form.get("quantity") or "").strip())
+        except Exception:
+            qty = None
+        try:
+            unit = float((request.form.get("unit_price_usd") or "").strip().replace(",", "."))
+        except Exception:
+            unit = None
+        if not wd or qty is None or qty < 0 or qty > 10000 or unit is None or unit < 0:
+            flash("Confira data, quantidade e valor por caixa.", "danger")
+            return redirect(request.url)
+        pid_raw = (request.form.get("project_id") or "").strip()
+        if pid_raw.isdigit() and int(pid_raw) != (e.project_id or 0):
+            pr = Project.query.get(int(pid_raw))
+            if pr:
+                e.project_id, e.project_name, e.company = pr.id, pr.name, pr.company
+        e.work_date = wd
+        e.quantity = qty
+        e.unit_price_usd = unit
+        e.total_usd = round(qty * unit, 2)
+        e.notes = (request.form.get("notes") or "").strip()[:1000] or None
+        e.updated_at = datetime.utcnow()
+        e.updated_by = current_user.id
+        db.session.commit()
+        flash("Lançamento atualizado.", "success")
+        return redirect(back)
+    projects = Project.query.order_by(Project.company, Project.name).all()
+    return render_template("montagem_edit.html", e=e, projects=projects, back=back)
+
+
+@app.route("/admin/montagem/<int:eid>/delete", methods=["POST"])
+@admin_required
+def montagem_delete(eid: int):
+    e = MontagemEntry.query.get_or_404(eid)
+    info = f"{e.montador_name} · {e.work_date.strftime('%d/%m/%Y')} · {e.quantity} caixa(s)"
+    db.session.delete(e)
+    db.session.commit()
+    flash(f"Lançamento excluído: {info}", "success")
+    back = _safe_next(request.args.get("next")) or url_for("montagem_admin")
+    return redirect(back)
+
+
+# ---------------- PDF (relatório e folha de pagamento do montador) ----------------
+def _build_montagem_pdf(title_right, montador_name, period_str, project_str, entries,
+                        extra_cards=None, notes=None, footer_ref=""):
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors as rl_colors
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+    from xml.sax.saxutils import escape as _esc
+
+    syscfg = SystemConfig.query.first()
+    C_DARK = rl_colors.HexColor("#0f0f1a"); C_PURPLE = rl_colors.HexColor("#7c3aed")
+    C_GREY = rl_colors.HexColor("#6b7280"); C_LIGHT = rl_colors.HexColor("#f8f8fc")
+    C_WHITE = rl_colors.white; C_GREEN = rl_colors.HexColor("#059669")
+    C_ROW_ALT = rl_colors.HexColor("#f3f4f6"); C_BORDER = rl_colors.HexColor("#e5e7eb")
+    BASE = getSampleStyleSheet()["Normal"]
+
+    def PS(name, **kw):
+        d = dict(fontName="Helvetica", fontSize=10, textColor=C_DARK, leading=14, parent=BASE)
+        d.update(kw)
+        return ParagraphStyle(name, **d)
+
+    S_TH = PS("mth", fontName="Helvetica-Bold", fontSize=8, textColor=C_WHITE, leading=10, alignment=TA_CENTER)
+    S_TD = PS("mtd", fontSize=8, leading=10)
+    S_TDR = PS("mtdr", fontSize=8, leading=10, alignment=TA_RIGHT)
+    S_TDC = PS("mtdc", fontSize=8, leading=10, alignment=TA_CENTER)
+    S_TL = PS("mtl", fontName="Helvetica-Bold", fontSize=9, textColor=C_WHITE, leading=12)
+    S_TR = PS("mtr", fontName="Helvetica-Bold", fontSize=9, textColor=C_WHITE, leading=12, alignment=TA_RIGHT)
+    S_NOTE = PS("mnt", fontSize=8, textColor=C_GREY, leading=11)
+    S_LBL = PS("mlb", fontName="Helvetica-Bold", fontSize=8, textColor=C_GREY, leading=11, spaceAfter=1)
+    S_VAL = PS("mvl", fontSize=11, leading=15)
+    S_VLB = PS("mvb", fontName="Helvetica-Bold", fontSize=13, leading=18)
+
+    company_name = (syscfg.my_company_name if syscfg else None) or "SPLICER"
+    sub_parts = [x for x in [(syscfg.my_company_address if syscfg else None),
+                             (syscfg.my_company_email if syscfg else None),
+                             (syscfg.my_company_phone if syscfg else None)] if x]
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=20*mm, rightMargin=20*mm,
+                            topMargin=20*mm, bottomMargin=20*mm, title=f"{title_right} — {montador_name}")
+    W = A4[0] - 40*mm
+    story = []
+    hdr = Table([[Paragraph(_esc(company_name), PS("mcn", fontName="Helvetica-Bold", fontSize=16, leading=20)),
+                  Paragraph(_esc(title_right), PS("mpid", fontName="Helvetica-Bold", fontSize=18, textColor=C_PURPLE, leading=22, alignment=TA_RIGHT))]],
+                colWidths=[W*0.5, W*0.5])
+    hdr.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+    story.append(hdr)
+    if sub_parts:
+        story.append(Paragraph(_esc(" · ".join(sub_parts)), PS("mad", fontSize=9, textColor=C_GREY, leading=13)))
+    story += [Spacer(1, 4*mm), HRFlowable(width="100%", thickness=2, color=C_PURPLE, spaceAfter=5*mm)]
+
+    cw = W/3
+    def cell(lbl, val, vs=None):
+        return Table([[Paragraph(lbl, S_LBL)], [Paragraph(_esc(str(val)), vs or S_VAL)]], colWidths=[cw-4*mm])
+    def cards(row):
+        t = Table([row], colWidths=[cw]*3)
+        t.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), C_LIGHT),
+                               ("LEFTPADDING", (0, 0), (-1, -1), 5*mm), ("TOPPADDING", (0, 0), (-1, -1), 3*mm),
+                               ("BOTTOMPADDING", (0, 0), (-1, -1), 3*mm), ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                               ("LINEAFTER", (0, 0), (1, 0), 0.5, C_BORDER), ("BOX", (0, 0), (-1, -1), 0.5, C_BORDER)]))
+        return t
+    story.append(cards([cell("MONTADOR", montador_name, S_VLB), cell("PERÍODO", period_str), cell("PROJETO / EMPRESA", project_str)]))
+    if extra_cards:
+        story += [Spacer(1, 2*mm), cards([cell(a, b) for a, b in extra_cards[:3]])]
+    story.append(Spacer(1, 6*mm))
+
+    total_boxes = sum(int(e.quantity or 0) for e in entries)
+    total_amount = sum(float(e.total_usd or 0) for e in entries)
+    tw = W/3
+    tot = Table([
+        [Paragraph(str(len(entries)), PS("mv1", fontName="Helvetica-Bold", fontSize=26, textColor=C_PURPLE, leading=30, alignment=TA_CENTER)),
+         Paragraph(str(total_boxes), PS("mv2", fontName="Helvetica-Bold", fontSize=26, textColor=C_PURPLE, leading=30, alignment=TA_CENTER)),
+         Paragraph(f"$ {total_amount:,.2f}", PS("mv3", fontName="Helvetica-Bold", fontSize=20, textColor=C_GREEN, leading=24, alignment=TA_CENTER))],
+        [Paragraph("LANÇAMENTOS", PS("ml1", fontSize=8, textColor=rl_colors.HexColor("#9ca3af"), leading=10, alignment=TA_CENTER)),
+         Paragraph("CAIXAS MONTADAS", PS("ml2", fontSize=8, textColor=rl_colors.HexColor("#9ca3af"), leading=10, alignment=TA_CENTER)),
+         Paragraph("VALOR TOTAL USD", PS("ml3", fontSize=8, textColor=rl_colors.HexColor("#9ca3af"), leading=10, alignment=TA_CENTER))],
+    ], colWidths=[tw]*3)
+    tot.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), C_DARK),
+                             ("TOPPADDING", (0, 0), (-1, 0), 5*mm), ("BOTTOMPADDING", (0, 1), (-1, 1), 5*mm),
+                             ("LINEAFTER", (0, 0), (1, -1), 0.5, rl_colors.HexColor("#2d2d4e"))]))
+    story += [tot, Spacer(1, 6*mm),
+              Paragraph("DETALHAMENTO DOS LANÇAMENTOS", PS("msec", fontName="Helvetica-Bold", fontSize=9, textColor=C_PURPLE, leading=12, spaceAfter=3*mm))]
+
+    CW = [22*mm, 50*mm, 18*mm, 22*mm, 24*mm, W - 136*mm]
+    rows = [[Paragraph(h, S_TH) for h in ["DATA", "PROJETO", "CAIXAS", "$ / CAIXA", "$ TOTAL", "OBSERVAÇÃO"]]]
+    for e in entries:
+        rows.append([
+            Paragraph(e.work_date.strftime("%d/%m/%Y") if e.work_date else "—", S_TDC),
+            Paragraph(_esc((e.project_name or "—")[:40]), S_TD),
+            Paragraph(str(e.quantity or 0), S_TDC),
+            Paragraph(f"${float(e.unit_price_usd or 0):.2f}", S_TDR),
+            Paragraph(f"${float(e.total_usd or 0):.2f}", S_TDR),
+            Paragraph(_esc((e.notes or "")[:120]), S_NOTE),
+        ])
+    nr = len(rows)
+    rows.append([Paragraph("TOTAL GERAL", S_TL), Paragraph("", S_NOTE), Paragraph(str(total_boxes), S_TR),
+                 Paragraph("", S_NOTE), Paragraph(f"${total_amount:,.2f}", S_TR), Paragraph("", S_NOTE)])
+    rt = Table(rows, colWidths=CW, repeatRows=1)
+    ts = TableStyle([("BACKGROUND", (0, 0), (-1, 0), C_PURPLE),
+                     ("TOPPADDING", (0, 0), (-1, -1), 2*mm), ("BOTTOMPADDING", (0, 0), (-1, -1), 2*mm),
+                     ("LEFTPADDING", (0, 0), (-1, -1), 2*mm), ("RIGHTPADDING", (0, 0), (-1, -1), 2*mm),
+                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("GRID", (0, 0), (-1, -2), 0.3, C_BORDER),
+                     ("BACKGROUND", (0, nr), (-1, nr), C_DARK), ("SPAN", (0, nr), (1, nr))])
+    for i in range(1, nr):
+        if i % 2 == 0:
+            ts.add("BACKGROUND", (0, i), (-1, i), C_ROW_ALT)
+    rt.setStyle(ts)
+    story += [rt, Spacer(1, 8*mm)]
+    if not entries:
+        story.append(Paragraph("Nenhum lançamento no período.", S_NOTE))
+    if notes:
+        story += [Paragraph("OBSERVAÇÕES", S_LBL), Paragraph(_esc(notes), S_NOTE), Spacer(1, 6*mm)]
+    story.append(HRFlowable(width="100%", thickness=0.5, color=C_BORDER, spaceAfter=3*mm))
+    story.append(Paragraph(f"Gerado em {datetime.utcnow().strftime('%d/%m/%Y %H:%M')} UTC — {_esc(company_name)} {footer_ref}", S_NOTE))
+    doc.build(story)
+    buf.seek(0)
+    return buf
+
+
+def _montador_payroll_pdf(p):
+    """PDF da folha de pagamento de um Montador (usa o mesmo Payroll existente)."""
+    name = _montador_display(p.user)
+    entries = (_montagem_query(p.user_id, p.start_date, p.end_date, p.project_id, p.company)
+               .order_by(MontagemEntry.work_date, MontagemEntry.id).all())
+    status_map = {"pending": "PENDENTE", "paid": "PAGO", "cancelled": "CANCELADO"}
+    buf = _build_montagem_pdf(
+        f"PAYROLL  #{p.id:04d}", name,
+        f"{p.start_date.strftime('%d/%m/%Y')} → {p.end_date.strftime('%d/%m/%Y')}",
+        p.project.name if p.project else (p.company or "Todos os projetos"),
+        entries,
+        extra_cards=[("VENCIMENTO", p.due_date.strftime('%d/%m/%Y') if p.due_date else "—"),
+                     ("PRAZO DE PAGAMENTO", f"{p.payment_days} dias"),
+                     ("STATUS", status_map.get(p.status, (p.status or "").upper()))],
+        notes=p.notes, footer_ref=f" — Payroll #{p.id:04d}")
+    fn = f"payroll_{p.id:04d}_{name.replace(' ', '_')}_montagem.pdf"
+    return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=fn)
+
+
+@app.route("/admin/montagem/pdf")
+@admin_required
+def montagem_report_pdf():
+    """Relatório de pagamento da montagem com os filtros da tela do admin."""
+    start, end, user_filter, project_filter = _admin_montagem_filters()
+    entries = (_montagem_query(user_filter, start, end, project_filter)
+               .order_by(MontagemEntry.montador_name, MontagemEntry.work_date, MontagemEntry.id).all())
+    u = User.query.get(user_filter) if user_filter else None
+    pr = Project.query.get(project_filter) if project_filter else None
+    name = _montador_display(u) if u else "Todos os montadores"
+    buf = _build_montagem_pdf(
+        "RELATÓRIO DE MONTAGEM", name,
+        f"{start.strftime('%d/%m/%Y') if start else '—'} → {end.strftime('%d/%m/%Y') if end else 'hoje'}",
+        pr.name if pr else "Todos os projetos", entries)
+    fn = f"montagem_{start.isoformat() if start else 'inicio'}_{end.isoformat() if end else 'hoje'}_{name.replace(' ', '_')}.pdf"
+    return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=fn)
+
 
 @app.route('/__version')
 def __version__():

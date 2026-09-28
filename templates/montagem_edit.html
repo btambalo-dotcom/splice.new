@@ -1,0 +1,54 @@
+{% extends 'base.html' %}
+{% block title %}Editar montagem · SPLICER{% endblock %}
+{% block content %}
+<style>
+  .m-card { background:#1e1e2e; border:1px solid #2a2a3e; border-radius:12px; max-width:560px; }
+  .m-card .form-control, .m-card .form-select { background:#12121c !important; border-color:#2a2a3e !important; color:#ddd !important; }
+</style>
+<div class="d-flex align-items-center gap-3 mb-3">
+  <a href="{{ back }}" class="btn btn-sm btn-outline-secondary">← Voltar</a>
+  <h4 class="mb-0 fw-semibold">Editar lançamento #{{ e.id }}</h4>
+</div>
+<div class="m-card p-3 p-md-4">
+  <p class="text-secondary small mb-3">Montador: <b class="text-light">{{ e.montador_name }}</b> · lançado em {{ e.created_at.strftime('%d/%m/%Y %H:%M') if e.created_at else '—' }} UTC</p>
+  <form method="post">
+    <div class="row g-2 mb-3">
+      <div class="col-6">
+        <label class="form-label small text-secondary mb-1">Data</label>
+        <input type="date" class="form-control" name="work_date" value="{{ e.work_date.isoformat() }}" required>
+      </div>
+      <div class="col-6">
+        <label class="form-label small text-secondary mb-1">Caixas</label>
+        <input type="number" class="form-control" name="quantity" id="q" min="0" max="10000" value="{{ e.quantity }}" inputmode="numeric" required>
+      </div>
+    </div>
+    <div class="mb-3">
+      <label class="form-label small text-secondary mb-1">Projeto</label>
+      <select class="form-select" name="project_id">
+        {% set found = namespace(v=false) %}
+        {% for pr in projects %}
+          <option value="{{ pr.id }}" {% if pr.id == e.project_id %}selected{% set found.v = true %}{% endif %}>{{ pr.name }} · {{ pr.company }}</option>
+        {% endfor %}
+        {% if not found.v %}<option value="" selected>{{ e.project_name or '—' }} (projeto removido)</option>{% endif %}
+      </select>
+    </div>
+    <div class="mb-3">
+      <label class="form-label small text-secondary mb-1">Valor por caixa (USD) <span class="text-muted">— valor guardado no lançamento</span></label>
+      <input class="form-control" name="unit_price_usd" id="u" value="{{ '%.2f'|format(e.unit_price_usd or 0) }}" inputmode="decimal" required>
+      <div class="small mt-1" style="color:#20c997;" id="tot"></div>
+    </div>
+    <div class="mb-3">
+      <label class="form-label small text-secondary mb-1">Observação</label>
+      <textarea class="form-control" name="notes" rows="2" maxlength="1000">{{ e.notes or '' }}</textarea>
+    </div>
+    <button class="btn btn-warning w-100">Salvar alterações</button>
+  </form>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+  function t(){var q=parseFloat(document.getElementById('q').value||'0'),u=parseFloat((document.getElementById('u').value||'0').replace(',','.'));
+    document.getElementById('tot').textContent='Total: $ '+(q*u).toFixed(2);}
+  document.addEventListener('input',t); t();
+</script>
+{% endblock %}

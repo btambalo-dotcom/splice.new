@@ -31,7 +31,7 @@
       <select class="form-select form-select-sm" name="user_id">
         <option value="">Todos</option>
         {% for s in splicers %}
-        <option value="{{ s.id }}" {% if user_filter == s.id %}selected{% endif %}>{{ s.splicer_name or s.username }}</option>
+        <option value="{{ s.id }}" {% if user_filter == s.id %}selected{% endif %}>{{ s.splicer_name or s.username }}{% if s.is_montador %} (Montador){% endif %}</option>
         {% endfor %}
       </select>
     </div>
@@ -107,7 +107,7 @@
         {% set today = namespace(d=none) %}
         <tr class="pay-row">
           <td style="color:#555;">{{ p.id }}</td>
-          <td style="font-weight:500;color:#e0e0e0;">{{ p.user.splicer_name or p.user.username }}</td>
+          <td style="font-weight:500;color:#e0e0e0;">{{ p.user.splicer_name or p.user.username }}{% if p.user.is_montador %}<br><span style="font-size:.68rem;color:#20c997;">🧰 Montador</span>{% endif %}</td>
           <td style="color:#888;white-space:nowrap;">
             {{ p.start_date.strftime('%d/%m/%y') }} → {{ p.end_date.strftime('%d/%m/%y') }}
           </td>
@@ -121,7 +121,7 @@
             {% endif %}
           </td>
           <td style="text-align:center;">{{ p.total_records }}</td>
-          <td style="text-align:center;">{{ p.total_splices }}</td>
+          <td style="text-align:center;">{{ p.total_splices }}{% if p.user.is_montador %} <span style="font-size:.7rem;color:#20c997;">cx</span>{% endif %}</td>
           <td style="color:#a78bfa;font-weight:500;">$ {{ '%.2f'|format(p.total_amount_usd or 0) }}</td>
           <td style="white-space:nowrap;">
             {% if p.due_date %}

@@ -1,0 +1,215 @@
+{% extends 'base.html' %}
+{% block title %}Montagem · SPLICER{% endblock %}
+{% block content %}
+<style>
+  .m-card { background:#1e1e2e; border:1px solid #2a2a3e; border-radius:12px; }
+  .section-title { font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; color:#6c757d; font-weight:600; margin-bottom:.75rem; }
+  .m-card .form-control, .m-card .form-select { background:#12121c !important; border-color:#2a2a3e !important; color:#ddd !important; }
+  .stat { background:#12121c; border:1px solid #2a2a3e; border-radius:10px; padding:.8rem .3rem; text-align:center; height:100%; }
+  .stat .v { font-size:1.5rem; font-weight:700; }
+  .stat .l { font-size:.62rem; color:#8b97ab; text-transform:uppercase; letter-spacing:.06em; }
+  .m-table { font-size:.85rem; --bs-table-bg:#1e1e2e; --bs-table-border-color:#2a2a3e; --bs-table-color:#ccc; }
+  .m-table th { font-size:.7rem; text-transform:uppercase; letter-spacing:.06em; color:#8b97ab; }
+  .btn-xs { font-size:.72rem; padding:.2rem .5rem; min-height:0 !important; }
+</style>
+
+<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+  <div>
+    <h4 class="mb-0 fw-semibold">🧰 Montagem de caixas</h4>
+    <p class="text-secondary mb-0" style="font-size:.82rem;">Produção dos montadores, valores por caixa e pagamento</p>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    <a href="#precos" class="btn btn-sm btn-outline-warning">$ Valor por caixa</a>
+    <a href="{{ url_for('montagem_report_pdf', **request.args) }}" class="btn btn-sm btn-outline-info">📄 Relatório PDF</a>
+    {% if user_filter %}
+    <a href="{{ url_for('payroll_new', user_id=user_filter, start=(start.isoformat() if start else ''), end=(end.isoformat() if end else today_iso), project=(project_filter or '')) }}"
+       class="btn btn-sm" style="background:#8b5cf6;color:#fff;border:none;">💰 Gerar Payroll</a>
+    {% endif %}
+  </div>
+</div>
+
+{% if not montadores %}
+<div class="alert alert-info">Nenhum usuário Montador cadastrado. Crie em <a href="{{ url_for('manage_users') }}">Usuários</a> escolhendo o tipo <b>🧰 Montador</b>.</div>
+{% endif %}
+
+<!-- Filtros -->
+<div class="m-card p-3 mb-3">
+  <form method="get" class="row g-2 align-items-end">
+    <div class="col-6 col-md-3">
+      <label class="form-label small text-secondary mb-1">Montador</label>
+      <select class="form-select form-select-sm" name="user_id">
+        <option value="">Todos</option>
+        {% for u in montadores %}
+        <option value="{{ u.id }}" {% if user_filter == u.id %}selected{% endif %}>{{ u.splicer_name or u.username }}{% if u.is_active == false %} (inativo){% endif %}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-6 col-md-3">
+      <label class="form-label small text-secondary mb-1">Projeto</label>
+      <select class="form-select form-select-sm" name="project">
+        <option value="">Todos</option>
+        {% for pr in projects %}
+        <option value="{{ pr.id }}" {% if project_filter == pr.id %}selected{% endif %}>{{ pr.name }} · {{ pr.company }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label small text-secondary mb-1">De</label>
+      <input type="date" class="form-control form-control-sm" name="start" value="{{ start.isoformat() if start else '' }}">
+    </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label small text-secondary mb-1">Até</label>
+      <input type="date" class="form-control form-control-sm" name="end" value="{{ end.isoformat() if end else '' }}">
+    </div>
+    <div class="col-12 col-md-2 d-flex gap-2">
+      <button class="btn btn-sm btn-outline-info flex-fill">Filtrar</button>
+      <a href="{{ url_for('montagem_admin') }}" class="btn btn-sm btn-outline-secondary">Limpar</a>
+    </div>
+  </form>
+</div>
+
+<!-- Totais -->
+<div class="row g-2 mb-3">
+  <div class="col-4"><div class="stat"><div class="v" style="color:#a78bfa;">{{ summary.count }}</div><div class="l">Lançamentos</div></div></div>
+  <div class="col-4"><div class="stat"><div class="v" style="color:#22b8cf;">{{ summary.boxes }}</div><div class="l">Caixas</div></div></div>
+  <div class="col-4"><div class="stat"><div class="v" style="color:#20c997; font-size:1.15rem; line-height:2.2rem; white-space:nowrap;">$&nbsp;{{ '%.2f'|format(summary.amount) }}</div><div class="l">Valor total</div></div></div>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-md-6">
+    <div class="m-card p-3 h-100">
+      <p class="section-title">Por montador</p>
+      {% if by_user %}
+      <div class="table-responsive"><table class="table table-sm table-dark m-table mb-0">
+        <thead><tr><th>Montador</th><th class="text-center">Lanç.</th><th class="text-center">Caixas</th><th class="text-end">Valor</th><th></th></tr></thead>
+        <tbody>
+        {% for d in by_user %}
+          <tr>
+            <td>{{ d.name }}</td><td class="text-center">{{ d.count }}</td><td class="text-center">{{ d.boxes }}</td>
+            <td class="text-end" style="color:#20c997; white-space:nowrap;">$ {{ '%.2f'|format(d.amount) }}</td>
+            <td class="text-end"><a class="btn btn-xs btn-outline-secondary" href="{{ url_for('montagem_admin', user_id=d.user_id, project=(project_filter or ''), start=(start.isoformat() if start else ''), end=(end.isoformat() if end else '')) }}">ver</a></td>
+          </tr>
+        {% endfor %}
+        </tbody></table></div>
+      {% else %}<div class="text-secondary small">Sem lançamentos no período.</div>{% endif %}
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="m-card p-3 h-100">
+      <p class="section-title">Por projeto</p>
+      {% if by_project %}
+      <div class="table-responsive"><table class="table table-sm table-dark m-table mb-0">
+        <thead><tr><th>Projeto</th><th class="text-center">Caixas</th><th class="text-end">Valor</th></tr></thead>
+        <tbody>
+        {% for d in by_project %}
+          <tr><td>{{ d.name }} <span class="text-secondary small">{{ d.company }}</span></td><td class="text-center">{{ d.boxes }}</td>
+              <td class="text-end" style="color:#20c997;">$ {{ '%.2f'|format(d.amount) }}</td></tr>
+        {% endfor %}
+        </tbody></table></div>
+      {% else %}<div class="text-secondary small">Sem lançamentos no período.</div>{% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- Lançamentos -->
+<div class="m-card p-3 mb-3">
+  <p class="section-title">Lançamentos</p>
+  {% if entries %}
+  <div class="table-responsive">
+    <table class="table table-sm table-dark m-table align-middle mb-0">
+      <thead><tr><th>Data</th><th>Montador</th><th>Projeto</th><th class="text-center">Caixas</th><th class="text-end">$/caixa</th><th class="text-end">Total</th><th>Obs.</th><th></th></tr></thead>
+      <tbody>
+      {% for e in entries %}
+        <tr>
+          <td style="white-space:nowrap;">{{ e.work_date.strftime('%d/%m/%Y') }}</td>
+          <td>{{ montador_names.get(e.user_id, e.montador_name) }}</td>
+          <td>{{ e.project_name or '—' }}</td>
+          <td class="text-center fw-semibold">{{ e.quantity }}</td>
+          <td class="text-end">$ {{ '%.2f'|format(e.unit_price_usd or 0) }}</td>
+          <td class="text-end" style="color:#20c997;">$ {{ '%.2f'|format(e.total_usd or 0) }}</td>
+          <td class="text-secondary small" style="max-width:220px;">{{ e.notes or '' }}{% if e.updated_at %} <span title="Editado em {{ e.updated_at.strftime('%d/%m/%Y %H:%M') }} UTC">✎</span>{% endif %}</td>
+          <td class="text-end" style="white-space:nowrap;">
+            <a class="btn btn-xs btn-outline-warning" href="{{ url_for('montagem_edit', eid=e.id, next=request.full_path) }}" title="Editar">✎</a>
+            <a class="btn btn-xs btn-outline-danger" href="#" data-post="{{ url_for('montagem_delete', eid=e.id, next=request.full_path) }}"
+               data-confirm="Excluir o lançamento de {{ e.montador_name }} em {{ e.work_date.strftime('%d/%m/%Y') }} ({{ e.quantity }} caixas)?" title="Excluir">✕</a>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+    <div class="text-center py-4 text-secondary small">Nenhum lançamento encontrado com esses filtros.</div>
+  {% endif %}
+</div>
+
+<div class="row g-3">
+  <!-- Valores por caixa -->
+  <div class="col-lg-7" id="precos">
+    <div class="m-card p-3 h-100">
+      <p class="section-title">Valor por caixa montada (por projeto)</p>
+      <p class="text-secondary small mb-2">Deixe em branco os projetos sem montagem — eles não aparecem para o montador. Mudar o valor vale só para lançamentos novos.</p>
+      <form method="post" action="{{ url_for('montagem_prices_save', **request.args) }}">
+        <div class="table-responsive"><table class="table table-sm table-dark m-table align-middle mb-2">
+          <thead><tr><th>Empresa</th><th>Projeto</th><th style="width:140px;">$ por caixa</th></tr></thead>
+          <tbody>
+          {% for pr in projects %}
+            <tr>
+              <td class="text-secondary">{{ pr.company }}</td>
+              <td>{{ pr.name }}</td>
+              <td><input class="form-control form-control-sm" name="price_{{ pr.id }}" inputmode="decimal"
+                         value="{{ ('%.2f'|format(pr.montador_box_price_usd)) if pr.montador_box_price_usd is not none else '' }}" placeholder="—"></td>
+            </tr>
+          {% else %}
+            <tr><td colspan="3" class="text-secondary">Nenhum projeto cadastrado. Crie em Configurações.</td></tr>
+          {% endfor %}
+          </tbody>
+        </table></div>
+        {% if projects %}<button class="btn btn-sm btn-warning w-100">Salvar valores</button>{% endif %}
+      </form>
+    </div>
+  </div>
+
+  <!-- Lançar em nome do montador -->
+  <div class="col-lg-5">
+    <div class="m-card p-3 h-100">
+      <p class="section-title">Lançar para um montador</p>
+      {% if montadores and price_projects %}
+      <form method="post" action="{{ url_for('montagem_admin', **request.args) }}">
+        <div class="mb-2">
+          <label class="form-label small text-secondary mb-1">Montador</label>
+          <select class="form-select form-select-sm" name="user_id" required>
+            <option value="">— Escolha —</option>
+            {% for u in montadores %}<option value="{{ u.id }}" {% if user_filter == u.id %}selected{% endif %}>{{ u.splicer_name or u.username }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="row g-2 mb-2">
+          <div class="col-6">
+            <label class="form-label small text-secondary mb-1">Data</label>
+            <input type="date" class="form-control form-control-sm" name="work_date" value="{{ today_iso }}" required>
+          </div>
+          <div class="col-6">
+            <label class="form-label small text-secondary mb-1">Caixas</label>
+            <input type="number" class="form-control form-control-sm" name="quantity" min="1" max="10000" inputmode="numeric" required>
+          </div>
+        </div>
+        <div class="mb-2">
+          <label class="form-label small text-secondary mb-1">Projeto</label>
+          <select class="form-select form-select-sm" name="project_id" required>
+            <option value="">— Escolha —</option>
+            {% for pr in price_projects %}<option value="{{ pr.id }}">{{ pr.name }} · $ {{ '%.2f'|format(pr.montador_box_price_usd) }}/cx</option>{% endfor %}
+          </select>
+        </div>
+        <div class="mb-2">
+          <label class="form-label small text-secondary mb-1">Observação</label>
+          <input class="form-control form-control-sm" name="notes" maxlength="1000">
+        </div>
+        <button class="btn btn-sm btn-success w-100">Salvar lançamento</button>
+      </form>
+      {% else %}
+        <div class="text-secondary small">Cadastre um montador e defina o valor por caixa de pelo menos um projeto.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

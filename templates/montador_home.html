@@ -1,0 +1,173 @@
+{% extends 'base.html' %}
+{% block title %}Montagem · SPLICER{% endblock %}
+{% block content %}
+<style>
+  .m-card { background:#1e1e2e; border:1px solid #2a2a3e; border-radius:14px; }
+  .section-title { font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; color:#6c757d; font-weight:600; margin-bottom:.75rem; }
+  .m-card .form-control, .m-card .form-select { background:#12121c !important; border-color:#2a2a3e !important; color:#ddd !important; }
+  .m-card .form-control:focus, .m-card .form-select:focus { border-color:#20c997 !important; box-shadow:0 0 0 2px rgba(32,201,151,.18) !important; }
+  .qty-wrap { display:flex; align-items:stretch; gap:.5rem; }
+  .qty-wrap .btn { width:56px; font-size:1.5rem; line-height:1; border-radius:10px; }
+  .qty-input { text-align:center; font-size:1.6rem !important; font-weight:700; min-height:56px !important; }
+  .btn-launch { background:#198754; border:none; color:#fff; font-weight:600; font-size:1.05rem; border-radius:10px; min-height:52px; }
+  .btn-launch:hover { background:#157347; color:#fff; }
+  .stat { background:#12121c; border:1px solid #2a2a3e; border-radius:12px; padding:.8rem .3rem; text-align:center; height:100%; }
+  .stat .v { font-size:1.6rem; font-weight:700; }
+  .stat .l { font-size:.62rem; color:#8b97ab; text-transform:uppercase; letter-spacing:.06em; }
+  .entry { border-bottom:1px solid #2a2a3e; padding:.75rem 0; }
+  .entry:last-child { border-bottom:none; }
+  .entry .d { color:#8b97ab; font-size:.8rem; }
+  .entry .p { color:#e0e0e0; font-weight:500; }
+  .entry .n { color:#8b97ab; font-size:.8rem; font-style:italic; }
+  .price-hint { color:#20c997; font-size:.85rem; }
+</style>
+
+<div class="mb-3">
+  <h4 class="mb-0 fw-semibold">🧰 Montagem de caixas</h4>
+  <p class="text-secondary mb-0" style="font-size:.85rem;">Olá, {{ current_user.splicer_name or current_user.username }}. Lance as caixas que você montou no dia.</p>
+</div>
+
+<div class="row g-3">
+  <!-- ═══ NOVO LANÇAMENTO ═══ -->
+  <div class="col-lg-5">
+    <div class="m-card p-3 p-md-4">
+      <p class="section-title">Novo lançamento</p>
+      {% if projects %}
+      <form method="post" id="form-launch" autocomplete="off">
+        <div class="mb-3">
+          <label class="form-label small text-secondary mb-1">Data</label>
+          <input type="date" class="form-control" name="work_date" id="work_date" value="{{ today_iso }}" required>
+        </div>
+        <div class="mb-3">
+          <label class="form-label small text-secondary mb-1">Projeto</label>
+          <select class="form-select" name="project_id" id="project_id" required>
+            {% if projects|length > 1 %}<option value="">— Escolha o projeto —</option>{% endif %}
+            {% for pr in projects %}
+            <option value="{{ pr.id }}" data-price="{{ pr.montador_box_price_usd }}"
+                    {% if last_project == pr.id or projects|length == 1 %}selected{% endif %}>{{ pr.name }}</option>
+            {% endfor %}
+          </select>
+          <div class="price-hint mt-1" id="price_hint"></div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label small text-secondary mb-1">Quantidade de caixas montadas</label>
+          <div class="qty-wrap">
+            <button type="button" class="btn btn-outline-secondary" onclick="stepQty(-1)" aria-label="Menos">−</button>
+            <input type="number" class="form-control qty-input" name="quantity" id="quantity" min="1" max="10000" step="1"
+                   inputmode="numeric" pattern="[0-9]*" placeholder="0" required>
+            <button type="button" class="btn btn-outline-secondary" onclick="stepQty(1)" aria-label="Mais">+</button>
+          </div>
+          <div class="text-secondary mt-1" style="font-size:.85rem;" id="total_hint"></div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label small text-secondary mb-1">Observação <span style="color:#6c757d;">(opcional)</span></label>
+          <textarea class="form-control" name="notes" rows="2" maxlength="1000" placeholder="ex.: faltou material à tarde"></textarea>
+        </div>
+        <button class="btn btn-launch w-100" id="btn-launch">✔ Salvar lançamento</button>
+      </form>
+      {% else %}
+        <div class="text-center py-4 text-secondary" style="font-size:.9rem;">
+          Nenhum projeto está liberado para montagem ainda.<br>Fale com o administrador.
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- ═══ MEU HISTÓRICO ═══ -->
+  <div class="col-lg-7">
+    <div class="m-card p-3 p-md-4">
+      <p class="section-title">Meu histórico</p>
+      <form method="get" class="row g-2 align-items-end mb-3">
+        <div class="col-6 col-md-4">
+          <label class="form-label small text-secondary mb-1">De</label>
+          <input type="date" class="form-control form-control-sm" name="start" value="{{ start.isoformat() if start else '' }}">
+        </div>
+        <div class="col-6 col-md-4">
+          <label class="form-label small text-secondary mb-1">Até</label>
+          <input type="date" class="form-control form-control-sm" name="end" value="{{ end.isoformat() if end else '' }}">
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label small text-secondary mb-1">Projeto</label>
+          <select class="form-select form-select-sm" name="project">
+            <option value="">Todos</option>
+            {% for pid, pname in filter_projects %}
+            <option value="{{ pid }}" {% if project_filter == pid %}selected{% endif %}>{{ pname }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-12 d-flex gap-2">
+          <button class="btn btn-sm btn-outline-info flex-fill">Filtrar</button>
+          <a href="{{ url_for('montador_home') }}" class="btn btn-sm btn-outline-secondary flex-fill">Este mês</a>
+        </div>
+      </form>
+
+      <div class="row g-2 mb-3">
+        <div class="col-4"><div class="stat"><div class="v" style="color:#a78bfa;">{{ summary.count }}</div><div class="l">Lançamentos</div></div></div>
+        <div class="col-4"><div class="stat"><div class="v" style="color:#22b8cf;">{{ summary.boxes }}</div><div class="l">Caixas</div></div></div>
+        <div class="col-4"><div class="stat"><div class="v" style="color:#20c997; font-size:1.15rem; line-height:1.9rem; white-space:nowrap;">$&nbsp;{{ '%.2f'|format(summary.amount) }}</div><div class="l">Total</div></div></div>
+      </div>
+
+      {% if entries %}
+        {% for e in entries %}
+        <div class="entry d-flex justify-content-between align-items-start gap-2">
+          <div>
+            <div class="d">{{ e.work_date.strftime('%d/%m/%Y') }}</div>
+            <div class="p">{{ e.project_name or '—' }}</div>
+            {% if e.notes %}<div class="n">{{ e.notes }}</div>{% endif %}
+          </div>
+          <div class="text-end" style="white-space:nowrap;">
+            <div class="fw-bold" style="font-size:1.1rem;">{{ e.quantity }} cx</div>
+            <div class="d">× $ {{ '%.2f'|format(e.unit_price_usd or 0) }}</div>
+            <div style="color:#20c997; font-weight:600;">$ {{ '%.2f'|format(e.total_usd or 0) }}</div>
+          </div>
+        </div>
+        {% endfor %}
+      {% else %}
+        <div class="text-center py-4 text-secondary" style="font-size:.9rem;">Nenhum lançamento neste período.</div>
+      {% endif %}
+      <div class="text-secondary mt-3" style="font-size:.75rem;">Lançou errado? Avise o administrador para corrigir.</div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  // Data de hoje pelo relógio do celular (evita virar o dia pelo horário do servidor)
+  (function () {
+    var el = document.getElementById('work_date');
+    if (!el) return;
+    var d = new Date();
+    var iso = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    el.value = iso;
+  })();
+  function fmt(v) { return '$ ' + (Math.round(v * 100) / 100).toFixed(2); }
+  function updateHints() {
+    var sel = document.getElementById('project_id'), q = document.getElementById('quantity');
+    if (!sel) return;
+    var opt = sel.options[sel.selectedIndex];
+    var price = opt ? parseFloat(opt.getAttribute('data-price') || '0') : 0;
+    document.getElementById('price_hint').textContent = price > 0 ? ('Valor por caixa: ' + fmt(price)) : '';
+    var n = parseInt(q.value || '0', 10);
+    document.getElementById('total_hint').textContent = (price > 0 && n > 0) ? ('Total do dia: ' + fmt(n * price)) : '';
+  }
+  function stepQty(delta) {
+    var q = document.getElementById('quantity');
+    var n = parseInt(q.value || '0', 10) + delta;
+    q.value = Math.max(1, n);
+    updateHints();
+  }
+  document.addEventListener('input', function (ev) { if (ev.target.id === 'quantity') updateHints(); });
+  document.addEventListener('change', function (ev) { if (ev.target.id === 'project_id') updateHints(); });
+  updateHints();
+  // Evita lançamento duplicado por toque duplo
+  var f = document.getElementById('form-launch');
+  if (f) f.addEventListener('submit', function (ev) {
+    var q = document.getElementById('quantity'), sel = document.getElementById('project_id');
+    var opt = sel.options[sel.selectedIndex];
+    var d = document.getElementById('work_date').value.split('-').reverse().join('/');
+    if (!confirm('Confirmar ' + q.value + ' caixa(s) em ' + d + '\nProjeto: ' + (opt ? opt.text : '') + '?')) { ev.preventDefault(); return; }
+    var b = document.getElementById('btn-launch'); b.disabled = true; b.textContent = 'Salvando...';
+  });
+</script>
+{% endblock %}

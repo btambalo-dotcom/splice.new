@@ -35,7 +35,7 @@
           <select class="form-select form-select-sm" name="user_id" id="sel_splicer" required onchange="updatePreview()">
             <option value="">— Selecione o splicer —</option>
             {% for s in splicers %}
-            <option value="{{ s.id }}">{{ s.splicer_name or s.username }}</option>
+            <option value="{{ s.id }}">{{ s.splicer_name or s.username }}{% if s.is_montador %} (Montador){% endif %}</option>
             {% endfor %}
           </select>
         </div>
@@ -124,5 +124,13 @@ function updatePreview() {
     : 'Todos os projetos';
   document.getElementById('prev_project').textContent = projText;
 }
+// v122: preenche automaticamente quando vem da tela 🧰 Montagem (?user_id=&start=&end=&project=)
+(function () {
+  const qs = new URLSearchParams(location.search);
+  const set = (id, v) => { const el = document.getElementById(id); if (el && v) el.value = v; };
+  set('sel_splicer', qs.get('user_id')); set('sel_start', qs.get('start'));
+  set('sel_end', qs.get('end')); set('sel_project', qs.get('project'));
+  updatePreview();
+})();
 </script>
 {% endblock %}
