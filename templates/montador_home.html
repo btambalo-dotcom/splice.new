@@ -27,6 +27,25 @@
   <p class="text-secondary mb-0" style="font-size:.85rem;">Olá, {{ current_user.splicer_name or current_user.username }}. Lance as caixas que você montou no dia.</p>
 </div>
 
+{% if mont_lists %}
+<div class="m-card p-3 p-md-4 mb-3">
+  <p class="section-title">📋 Listas de montagem para fazer</p>
+  {% for d in mont_lists %}
+  <a href="{{ url_for('montagem_list_view', list_id=d.obj.id) }}" class="entry d-flex justify-content-between align-items-center gap-2 text-decoration-none">
+    <div>
+      <div class="p">Lista {{ d.code }} · mapa {{ d.obj.map_name }}</div>
+      <div class="d">{{ d.obj.created_at.strftime('%d/%m/%Y') if d.obj.created_at else '' }}{% if d.obj.montador_name %} · {{ d.obj.montador_name }}{% endif %}</div>
+    </div>
+    <div class="text-end" style="white-space:nowrap;">
+      <div class="fw-bold" style="color:#ffc107;">{{ d.pending }} faltam</div>
+      <div class="d">{{ d.done }}/{{ d.total }} prontas</div>
+    </div>
+  </a>
+  {% endfor %}
+  <div class="text-secondary mt-2" style="font-size:.78rem;">Abra a lista para ver o PDF e enviar a foto da folha ticada.</div>
+</div>
+{% endif %}
+
 <div class="row g-3">
   <!-- ═══ NOVO LANÇAMENTO ═══ -->
   <div class="col-lg-5">

@@ -93,6 +93,16 @@
     .mv-search .form-control:focus { box-shadow:none; border-color:var(--mv-accent); }
 
     .mv-map-wrap { position:relative; }
+    /* v123 — busca por splitter e modo montagem */
+    .mv-results { background:var(--mv-card); border:1px solid var(--mv-line); border-radius:12px; padding:10px 12px; margin-bottom:10px; }
+    .mv-results .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; max-height:140px; overflow:auto; }
+    .mv-chip { background:#17223a; border:1px solid #2b3a55; color:#e6ebf3; border-radius:99px; padding:2px 10px; font-size:.78rem; cursor:pointer; }
+    .mv-chip.done { opacity:.55; }
+    .mv-chip.sel { border-color:#ff9800; color:#ffb74d; }
+    .mv-mont-bar { background:rgba(255,152,0,.08); border:1px solid rgba(255,152,0,.45); border-radius:12px; padding:10px 12px; margin-bottom:10px; display:none; }
+    .mv-mont-bar.on { display:block; }
+    .mv-mont-bar .form-select { background:var(--mv-card); border-color:var(--mv-line); color:#e6ebf3; max-width:200px; }
+    #montModeBtn.on { background:#ff9800; border-color:#ff9800; color:#1a1200; font-weight:700; }
     .mv-page #map { height:calc(100vh - 330px); min-height:460px; border-radius:14px; border:1px solid var(--mv-line); box-shadow:0 8px 30px rgba(0,0,0,.35); }
 
     .mv-legend { position:absolute; left:12px; bottom:12px; z-index:500; background:rgba(11,18,32,.92); border:1px solid var(--mv-line); border-radius:10px; font-size:.8rem; color:#dfe6f0; backdrop-filter:blur(4px); }
@@ -151,6 +161,7 @@
       <a href="{{ url_for('map_services', map_id=map_obj.id) }}" class="btn btn-sm mv-btn">Serviços</a>
       {% if current_user.is_admin %}
       <a href="{{ url_for('export_map_tests_report', map_id=map_obj.id) }}" class="btn btn-sm mv-btn" data-i18n="tests_report">Relatório testes</a>
+      <button type="button" id="montModeBtn" class="btn btn-sm mv-btn" title="Selecionar caixas para o montador">🧰 Montagem</button>
       <button type="button" class="btn btn-sm mv-btn mv-btn-primary" data-bs-toggle="offcanvas" data-bs-target="#mapTools" aria-controls="mapTools">
         Ferramentas
       </button>
@@ -215,12 +226,34 @@
       <span class="input-group-text">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.868-3.834zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/></svg>
       </span>
-      <input id="deviceSearch" class="form-control" data-i18n-placeholder="search_device_placeholder" placeholder="Buscar device (ex: FT61, RN51E)..." />
+      <input id="deviceSearch" class="form-control" placeholder="Buscar device ou splitter (ex: CC-6904, 4x8, DC-5)..." />
       <button id="deviceSearchBtn" class="btn mv-btn" data-i18n="search">Buscar</button>
     </div>
     <button id="showAllBtn" class="btn btn-sm mv-btn-ghost" data-i18n="show_all">Mostrar tudo</button>
     <span id="deviceSearchHint" class="small mv-muted"></span>
   </div>
+
+  {# ---------- v123: resultado da busca por splitter ---------- #}
+  <div id="splitterResults" class="mv-results" style="display:none;"></div>
+
+  {% if current_user.is_admin %}
+  {# ---------- v123: modo montagem ---------- #}
+  <div id="montBar" class="mv-mont-bar">
+    <div class="d-flex flex-wrap align-items-center gap-2">
+      <span><b>🧰 Modo montagem</b> — toque nas caixas para selecionar ·
+        <b id="montCount">0</b> selecionada(s) · <span class="mv-muted" id="montPendingInfo"></span></span>
+      <div class="ms-auto d-flex flex-wrap gap-2 align-items-center">
+        <button type="button" class="btn btn-sm mv-btn" id="montSelAllBtn">Todas pendentes</button>
+        <button type="button" class="btn btn-sm mv-btn" id="montClearBtn">Limpar</button>
+        <select class="form-select form-select-sm" id="montMontador"><option value="">Montador (opcional)</option></select>
+        <button type="button" class="btn btn-sm mv-btn-primary btn" id="montCreateBtn">📄 Gerar relatório</button>
+        <button type="button" class="btn btn-sm mv-btn-ghost" id="montExitBtn">Sair</button>
+      </div>
+    </div>
+    <div id="montMsg" class="small mt-2"></div>
+    <div id="montOpenLists" class="small mt-1 mv-muted"></div>
+  </div>
+  {% endif %}
 
   {# ---------- Mapa ---------- #}
   <div class="mv-map-wrap">
@@ -448,6 +481,10 @@
           <div class="col-md-6">
             <label class="form-label">Splitter</label>
             <input type="text" class="form-control bg-dark text-light border-secondary" id="device-splitter-name" placeholder="Nome do splitter">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Modelo da caixa</label>
+            <input type="text" class="form-control bg-dark text-light border-secondary" id="device-box-model" placeholder="Ex.: COMMSCOPE OFDC-12">
           </div>
           <div class="col-md-6">
             <label class="form-label">FROM</label>
@@ -1045,9 +1082,112 @@ function focusRecord(rec){
   }
 }
 
+// ===== v123: busca por splitter (ex.: 4x8, 4-8, DC-5, 2-Way) =====
+function _splitterMatcher(q){
+  const s = String(q || '').trim();
+  if (!s) return null;
+  let m = s.match(/^(?:tap\s*[a-c]?\s*)?(\d{1,2})\s*(?:x|×|-|\/|\s)\s*(\d{1,2})$/i);
+  if (m) {
+    const re = new RegExp('(^|[^0-9-])' + m[1] + '-' + m[2] + '(?![0-9])');
+    return { label: m[1] + '-' + m[2], strong: true, test: r => re.test(String(r.splitter_name || '')) };
+  }
+  m = s.match(/^dc\s*-?\s*(\d{1,2})$/i);
+  if (m) {
+    const re = new RegExp('DC-' + m[1] + '(?![0-9])', 'i');
+    return { label: 'DC-' + m[1], strong: true, test: r => re.test(String(r.splitter_name || '')) };
+  }
+  m = s.match(/^(\d)\s*-?\s*way$/i);
+  if (m) {
+    const re = new RegExp(m[1] + '-Way', 'i');
+    return { label: m[1] + '-Way', strong: true, test: r => re.test(String(r.splitter_name || '')) };
+  }
+  if (s.length >= 3) {
+    const k = _normLoose(s);
+    return { label: s, strong: false, test: r => !!r.splitter_name && _normLoose(r.splitter_name).includes(k) };
+  }
+  return null;
+}
+
+let _splitHL = null;
+function clearSplitterResults(){
+  if (_splitHL) { try { leafletMap.removeLayer(_splitHL); } catch(e) {} _splitHL = null; }
+  const box = document.getElementById('splitterResults');
+  if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+  window._splitResults = null;
+}
+
+function showSplitterResults(label, recs){
+  clearSplitterResults();
+  window._splitResults = { label: label, recs: recs };
+  const pts = recs.filter(r => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lng)));
+  _splitHL = L.layerGroup(pts.map(r => L.circleMarker([r.lat, r.lng], {
+    radius: 22, color: '#ff9800', weight: 3, fill: false, interactive: false
+  }))).addTo(leafletMap);
+  if (pts.length) leafletMap.fitBounds(pts.map(r => [r.lat, r.lng]), { padding: [40, 40], maxZoom: 18 });
+  renderSplitterResults();
+}
+
+function renderSplitterResults(){
+  const box = document.getElementById('splitterResults');
+  const st = window._splitResults;
+  if (!box || !st) return;
+  const recs = st.recs;
+  const pend = recs.filter(r => !r.mont_done);
+  const esc = v => String(v || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  let h = '<div class="d-flex flex-wrap align-items-center gap-2">'
+    + '<span><b>' + recs.length + '</b> dispositivo(s) com splitter <b>' + esc(st.label) + '</b>'
+    + ' · <span class="mv-muted">' + pend.length + ' pendente(s) de montagem</span></span>'
+    + '<span class="ms-auto d-flex gap-2">';
+  if (window._montMode && pend.length) {
+    h += '<button type="button" class="btn btn-sm mv-btn-primary btn" onclick="selectSplitterResults()">Selecionar pendentes (' + pend.length + ')</button>';
+  }
+  h += '<button type="button" class="btn btn-sm mv-btn-ghost" onclick="clearSplitterResults()">✕ Fechar</button></span></div>';
+  h += '<div class="chips">' + recs.map(r => {
+    const cls = 'mv-chip' + (r.mont_done ? ' done' : '') + ((window._montSel && window._montSel.has(r.id)) ? ' sel' : '');
+    return '<span class="' + cls + '" onclick="focusRecordById(' + r.id + ')" title="' + esc(r.splitter_name) + '">'
+      + (r.mont_done ? '✅ ' : '') + esc(r.device) + '</span>';
+  }).join('') + '</div>';
+  box.innerHTML = h;
+  box.style.display = '';
+}
+
+window.focusRecordById = function(id){
+  const rec = (window._mapRecords || []).find(r => r.id === id);
+  if (!rec) return;
+  if (window._montMode) { leafletMap.setView([rec.lat, rec.lng], Math.max(leafletMap.getZoom(), 18)); return; }
+  focusRecord(rec);
+};
+
+window.selectSplitterResults = function(){
+  const st = window._splitResults;
+  if (!st) return;
+  st.recs.forEach(r => { if (!r.mont_done) window._montSel.add(r.id); });
+  refreshMontIcons();
+};
+
 function performDeviceSearch(){
   const input = document.getElementById('deviceSearch');
   const q = input ? input.value : "";
+  const list = window._mapRecords || [];
+  const qn = _norm(q), ql = _normLoose(q);
+  const exact = qn && list.find(r => _norm(r.device) === qn || _normLoose(r.device) === ql);
+  if (!exact) {
+    const sm = _splitterMatcher(q);
+    if (sm) {
+      const hits = list.filter(sm.test);
+      if (hits.length && (sm.strong || hits.length >= 1)) {
+        _setSearchHint('');
+        showSplitterResults(sm.label, hits);
+        return;
+      }
+      if (sm.strong) {
+        clearSplitterResults();
+        _setSearchHint('Nenhum dispositivo com splitter ' + sm.label);
+        return;
+      }
+    }
+  }
+  clearSplitterResults();
   const rec = _findRecordByQuery(q);
   if (!rec){
     _setSearchHint("Não encontrei: " + (q || ""));
@@ -1130,6 +1270,7 @@ function setupDeviceSearch(){
   }
   if (allBtn){
     allBtn.addEventListener('click', function(){
+      try { clearSplitterResults(); } catch(e) {}
       try{
         const recs = window._mapRecords || [];
         const fitPoints = _robustFitPoints(recs);
@@ -1230,8 +1371,16 @@ function buildDeviceIcon(rec) {
       + '</svg>';
   }
 
-  var html = '<div style="position:relative;width:32px;height:42px;overflow:visible;">'
-    + pinSvg + antennaSvg + placedSvg
+  // v123 — modo montagem: anel laranja = selecionada; apagada = já montada/lançada
+  var montSel = !!(window._montSel && window._montSel.has(rec.id));
+  var montStyle = '';
+  var montRing = '';
+  if (window._montMode) {
+    if (rec.mont_done) montStyle = 'opacity:.35;';
+    if (montSel) montRing = '<div style="position:absolute;left:-6px;top:-4px;width:44px;height:44px;border-radius:50%;border:3px solid #ff9800;box-shadow:0 0 10px #ff9800;"></div>';
+  }
+  var html = '<div style="position:relative;width:32px;height:42px;overflow:visible;' + montStyle + '">'
+    + montRing + pinSvg + antennaSvg + placedSvg
     + '</div>';
 
   return L.divIcon({
@@ -1321,6 +1470,7 @@ async function loadMarkers() {
       window._mapRecords = records;
       console.log('[SPLICER] Records carregados:', records.length, '| Exemplo:', records[0] || 'nenhum');
       if (IS_ADMIN) updateProgressPanel(records);
+      try { updateMontBar(); } catch(e) {}
 
             // Agrupa pontos por PON para desenhar polígonos coloridos
             const sections = {};
@@ -1399,6 +1549,15 @@ if (rec.section) {
 }
 if (rec.splitter_name) {
   popupParts.push('<div class="small text-muted">' + t("splitter") + ': ' + rec.splitter_name + '</div>');
+}
+if (rec.box_model) {
+  popupParts.push('<div class="small text-muted">Modelo: ' + rec.box_model + '</div>');
+}
+if (rec.mont_manual) {
+  popupParts.push('<div class="small" style="color:#ffb74d">🧰 Montada por <strong>' + (rec.mont_done_by || '?') + '</strong>' +
+    (rec.mont_done_at ? ' em ' + String(rec.mont_done_at).slice(0, 10) : '') +
+    (IS_ADMIN ? ' <button class="btn btn-outline-warning btn-sm py-0 px-1 ms-1" style="font-size:10px" onclick="undoMontagem(' + rec.id + ')">desfazer</button>' : '') +
+    '</div>');
 }
 if (rec.source_from) {
   popupParts.push('<div class="small text-muted">' + t("from") + ': ' + rec.source_from + '</div>');
@@ -1533,7 +1692,15 @@ popupParts.push('</div>');
 popupParts.push('</div>');
 const popupHtml = popupParts.join('');
               try { marker.bindPopup(popupHtml); } catch(e) {}
-              marker.on('click', function () { try { this.openPopup(); } catch(e) {} });
+              marker.on('click', function () {
+                if (window._montMode) {
+                  const mk = this;
+                  setTimeout(function(){ try { mk.closePopup(); } catch(e) {} }, 0);
+                  toggleMontSelection(rec);
+                  return;
+                }
+                try { this.openPopup(); } catch(e) {}
+              });
               try { window._recordMarkers.set(rec.id, marker); } catch(e) {}
               try { marker.addTo(markersLayer); } catch(e) { console.error('Erro addTo marker rec.id=' + rec.id, e); }
               if (currentFocusRecordId && rec.id === currentFocusRecordId) {
@@ -1675,6 +1842,7 @@ function openDeviceModalById(id) {
       document.getElementById('device-address').value = rec.address || '';
       document.getElementById('device-pon-name').value = rec.pon_name || '';
       document.getElementById('device-splitter-name').value = rec.splitter_name || '';
+      const _bm = document.getElementById('device-box-model'); if (_bm) _bm.value = rec.box_model || '';
       document.getElementById('device-source-from').value = rec.source_from || '';
       document.getElementById('device-source-out').value = rec.source_out || '';
       document.getElementById('device-ote-label').value = rec.ote_label || '';
@@ -1857,6 +2025,8 @@ function openDeviceModalById(id) {
       formData.append('geo_address', deviceAddress);
       formData.append('pon_name', ponName);
       formData.append('splitter_name', splitterName);
+      const _bmEl = document.getElementById('device-box-model');
+      if (_bmEl) formData.append('box_model', _bmEl.value);
       formData.append('source_from', sourceFrom);
       formData.append('source_out', sourceOut);
       formData.append('ote_label', oteLabel);
@@ -2044,6 +2214,128 @@ function openDeviceModalById(id) {
           submitBtn.innerHTML = '⬆ Confirmar subida';
         }
       }
+    });
+
+    // ===================== v123: MODO MONTAGEM =====================
+    window._montMode = false;
+    window._montSel = new Set();
+    const montInfoUrl = "{{ url_for('api_map_montagem_info', map_id=map_obj.id) if current_user.is_admin else '' }}";
+    const montCreateUrl = "{{ url_for('api_map_montagem_create_list', map_id=map_obj.id) if current_user.is_admin else '' }}";
+
+    function refreshMontIcons(){
+      const recs = window._mapRecords || [];
+      recs.forEach(r => {
+        const m = window._recordMarkers && window._recordMarkers.get(r.id);
+        if (m) { try { m.setIcon(buildDeviceIcon(r)); } catch(e) {} }
+      });
+      updateMontBar();
+      try { renderSplitterResults(); } catch(e) {}
+    }
+
+    function updateMontBar(){
+      const c = document.getElementById('montCount');
+      if (c) c.textContent = window._montSel.size;
+      const recs = window._mapRecords || [];
+      const pend = recs.filter(r => !r.mont_done).length;
+      const info = document.getElementById('montPendingInfo');
+      if (info) info.textContent = pend + ' caixa(s) pendente(s) de ' + recs.length + ' no mapa';
+    }
+
+    window.toggleMontSelection = function(rec){
+      const msg = document.getElementById('montMsg');
+      if (rec.mont_done) {
+        if (msg) msg.innerHTML = '<span class="text-success">' + (rec.device || '') + ' já está pronta/lançada — não entra no relatório.</span>';
+        return;
+      }
+      if (window._montSel.has(rec.id)) window._montSel.delete(rec.id); else window._montSel.add(rec.id);
+      if (msg) msg.textContent = '';
+      const m = window._recordMarkers && window._recordMarkers.get(rec.id);
+      if (m) { try { m.setIcon(buildDeviceIcon(rec)); } catch(e) {} }
+      updateMontBar();
+      try { renderSplitterResults(); } catch(e) {}
+    };
+
+    async function loadMontInfo(){
+      if (!montInfoUrl) return;
+      try {
+        const data = await fetch(montInfoUrl).then(r => r.json());
+        if (!data.ok) return;
+        const sel = document.getElementById('montMontador');
+        if (sel && sel.options.length <= 1) {
+          (data.montadores || []).forEach(u => {
+            const o = document.createElement('option'); o.value = u.id; o.textContent = u.name; sel.appendChild(o);
+          });
+          if ((data.montadores || []).length === 1) sel.value = data.montadores[0].id;
+        }
+        const ol = document.getElementById('montOpenLists');
+        if (ol) {
+          ol.innerHTML = (data.lists || []).length
+            ? 'Listas abertas: ' + data.lists.map(l => '<a href="' + l.url + '" class="link-warning">' + l.code + '</a> (' + l.count + ')').join(' · ')
+            : '';
+        }
+        if (!(data.box_price > 0)) {
+          const msg = document.getElementById('montMsg');
+          if (msg && !msg.innerHTML) msg.innerHTML = '<span class="text-warning">O projeto deste mapa ainda não tem valor por caixa (Montagem → Valor por caixa).</span>';
+        }
+      } catch(e) {}
+    }
+
+    function setMontMode(on){
+      window._montMode = !!on;
+      const bar = document.getElementById('montBar');
+      const btn = document.getElementById('montModeBtn');
+      if (bar) bar.classList.toggle('on', window._montMode);
+      if (btn) btn.classList.toggle('on', window._montMode);
+      try { leafletMap.closePopup(); } catch(e) {}
+      if (window._montMode) loadMontInfo();
+      refreshMontIcons();
+    }
+
+    window.undoMontagem = async function(recId){
+      if (!confirm('Desfazer a marcação de montada deste dispositivo? (o lançamento de pagamento do montador não é apagado)')) return;
+      try {
+        const data = await fetch('/api/records/' + recId + '/montagem-undo', { method: 'POST' }).then(r => r.json());
+        if (data.ok) loadMarkers(); else alert(data.error || 'Erro.');
+      } catch(e) { alert('Erro de conexão.'); }
+    };
+
+    document.addEventListener('DOMContentLoaded', function(){
+      const b = document.getElementById('montModeBtn');
+      if (!b) return;
+      b.addEventListener('click', () => setMontMode(!window._montMode));
+      document.getElementById('montExitBtn').addEventListener('click', () => setMontMode(false));
+      document.getElementById('montClearBtn').addEventListener('click', () => { window._montSel.clear(); refreshMontIcons(); });
+      document.getElementById('montSelAllBtn').addEventListener('click', () => {
+        (window._mapRecords || []).forEach(r => { if (!r.mont_done) window._montSel.add(r.id); });
+        refreshMontIcons();
+      });
+      document.getElementById('montCreateBtn').addEventListener('click', async function(){
+        const ids = Array.from(window._montSel);
+        const msg = document.getElementById('montMsg');
+        if (!ids.length) { msg.innerHTML = '<span class="text-warning">Selecione pelo menos uma caixa no mapa.</span>'; return; }
+        const mont = document.getElementById('montMontador').value;
+        if (!confirm('Gerar relatório de montagem com ' + ids.length + ' caixa(s)?')) return;
+        this.disabled = true;
+        try {
+          const resp = await fetch(montCreateUrl, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ record_ids: ids, montador_id: mont })
+          });
+          const data = await resp.json();
+          if (!data.ok) { msg.innerHTML = '<span class="text-danger">' + (data.error || 'Erro ao gerar.') + '</span>'; return; }
+          msg.innerHTML = '<span class="text-success">✔ Lista <b>' + data.code + '</b> criada com ' + data.count + ' caixa(s)'
+            + (data.skipped ? ' (' + data.skipped + ' já prontas foram ignoradas)' : '') + '.</span> '
+            + '<a class="btn btn-sm btn-warning ms-2" target="_blank" href="' + data.pdf + '">📄 Abrir PDF para imprimir</a> '
+            + '<a class="btn btn-sm mv-btn ms-1" href="' + data.url + '">Ver lista</a>';
+          window._montSel.clear();
+          refreshMontIcons();
+          loadMontInfo();
+        } catch(e) {
+          msg.innerHTML = '<span class="text-danger">Erro de conexão.</span>';
+        } finally {
+          this.disabled = false;
+        }
+      });
     });
 
     document.addEventListener('DOMContentLoaded', initMap);

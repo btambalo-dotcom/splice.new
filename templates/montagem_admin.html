@@ -111,6 +111,36 @@
   </div>
 </div>
 
+<!-- Listas de montagem (v123) -->
+<div class="m-card p-3 mb-3" id="listas">
+  <p class="section-title">📋 Listas de montagem</p>
+  {% if mont_lists %}
+  <div class="table-responsive">
+    <table class="table table-sm table-dark m-table align-middle mb-0">
+      <thead><tr><th>Lista</th><th>Mapa</th><th>Montador</th><th>Criada</th><th class="text-center">Prontas</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+      {% for d in mont_lists %}
+        <tr>
+          <td class="fw-semibold">{{ d.code }}</td>
+          <td>{{ d.obj.map_name }}</td>
+          <td>{{ d.obj.montador_name or '—' }}</td>
+          <td>{{ d.obj.created_at.strftime('%d/%m/%Y') if d.obj.created_at else '' }}</td>
+          <td class="text-center">{{ d.done }}/{{ d.total }}</td>
+          <td>{% if d.obj.status == 'concluida' or d.pending == 0 %}<span class="badge bg-success">concluída</span>{% else %}<span class="badge bg-warning text-dark">{{ d.pending }} faltam</span>{% endif %}</td>
+          <td class="text-end text-nowrap">
+            <a class="btn btn-outline-info btn-xs" href="{{ url_for('montagem_list_view', list_id=d.obj.id) }}">abrir</a>
+            <a class="btn btn-outline-light btn-xs" target="_blank" href="{{ url_for('montagem_list_pdf', list_id=d.obj.id) }}">PDF</a>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="text-secondary" style="font-size:.85rem;">Nenhuma lista ainda. Crie no mapa: botão <b>🧰 Montagem</b>, selecione as caixas e gere o relatório.</div>
+  {% endif %}
+</div>
+
 <!-- Lançamentos -->
 <div class="m-card p-3 mb-3">
   <p class="section-title">Lançamentos</p>

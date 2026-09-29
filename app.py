@@ -1002,6 +1002,12 @@ class Record(db.Model):
     test_done = db.Column(db.Boolean, default=False)
     test_date = db.Column(db.DateTime, nullable=True)
 
+    # v123 — Modelo da caixa e montagem (caixa deixada pronta com o splitter pelo montador)
+    box_model = db.Column(db.String(120), nullable=True)
+    mont_done_at = db.Column(db.DateTime, nullable=True)     # quando o montador deixou pronta
+    mont_done_by = db.Column(db.String(120), nullable=True)  # nome do montador
+    mont_list_id = db.Column(db.Integer, nullable=True)      # lista de montagem em que foi confirmada
+
 
 class RecordPhoto(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -1184,6 +1190,45 @@ class MontagemEntry(db.Model):
     updated_by = db.Column(db.Integer, nullable=True)
 
 
+class MontagemList(db.Model):
+    """Lista de caixas para o montador (v123).
+
+    Gerada no mapa (caixas selecionadas ainda não montadas), impressa em PDF,
+    ticada à caneta e depois lida por foto com a IA. Na confirmação as caixas
+    ficam marcadas como montadas e é criado um MontagemEntry para o montador.
+    Só usa inteiros simples (sem chave estrangeira) para nunca travar exclusões.
+    """
+    __tablename__ = "montagem_list"
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(30), nullable=True, index=True)
+    map_id = db.Column(db.Integer, nullable=True, index=True)
+    map_name = db.Column(db.String(200), nullable=True)
+    company = db.Column(db.String(120), nullable=True)
+    project_id = db.Column(db.Integer, nullable=True)
+    montador_user_id = db.Column(db.Integer, nullable=True, index=True)
+    montador_name = db.Column(db.String(120), nullable=True)
+    status = db.Column(db.String(20), nullable=False, default="aberta")  # aberta | concluida | cancelada
+    record_ids_json = db.Column(db.Text, nullable=True)   # ordem das linhas do PDF
+    result_json = db.Column(db.Text, nullable=True)       # última leitura da IA
+    notes = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_by = db.Column(db.Integer, nullable=True)
+    processed_at = db.Column(db.DateTime, nullable=True)
+    entry_ids_json = db.Column(db.Text, nullable=True)    # lançamentos de montagem gerados
+
+    def record_ids(self):
+        try:
+            return [int(x) for x in json.loads(self.record_ids_json or "[]")]
+        except Exception:
+            return []
+
+    def entry_ids(self):
+        try:
+            return [int(x) for x in json.loads(self.entry_ids_json or "[]")]
+        except Exception:
+            return []
+
+
 # --------- User loader ---------
 @login_manager.user_loader
 def load_user(user_id: str):
@@ -1340,6 +1385,11 @@ with app.app_context():
     ensure("record", "is_placed", "BOOLEAN")
     ensure("record", "placed_by", "VARCHAR(120)")
     ensure("record", "placed_at", "TIMESTAMP")
+    # v123 — modelo da caixa + montagem (só ADICIONA colunas)
+    ensure("record", "box_model", "VARCHAR(120)")
+    ensure("record", "mont_done_at", "TIMESTAMP")
+    ensure("record", "mont_done_by", "VARCHAR(120)")
+    ensure("record", "mont_list_id", "INTEGER")
     ensure("device_type", "project_id", "INTEGER")
     ensure("device_type", "value_meio_usd", "DOUBLE PRECISION")
     ensure("device_type", "value_ponta_usd", "DOUBLE PRECISION")
@@ -7084,6 +7134,12 @@ def api_map_records(map_id):
             "placed_at": r.placed_at.isoformat() if getattr(r, 'placed_at', None) else None,
             "is_active": getattr(r, 'is_active', None) is not False,
             "ribbon_count": getattr(r, 'ribbon_count', None),
+            # v123 — montagem
+            "box_model": getattr(r, 'box_model', None) or '',
+            "mont_done": _record_is_montada(r, len(device_photos)),
+            "mont_manual": bool(getattr(r, 'mont_done_at', None)),
+            "mont_done_by": getattr(r, 'mont_done_by', None) or '',
+            "mont_done_at": r.mont_done_at.isoformat() if getattr(r, 'mont_done_at', None) else None,
         })
     return jsonify({"records": data})
 
@@ -7153,6 +7209,9 @@ def api_update_record_from_map(record_id):
         rec.ote_label = (request.form.get('ote_label') or '').strip() or None
         rec.port_label = (request.form.get('port_label') or '').strip() or None
         rec.section = (request.form.get('section') or rec.section or '').strip() or None
+        # v123: só altera o modelo da caixa se o campo vier no formulário
+        if 'box_model' in request.form:
+            rec.box_model = (request.form.get('box_model') or '').strip()[:120] or None
 
     # Salvar pelo editor do mapa NÃO deve transformar o dispositivo em lançamento
     # nem alterar o splicer para ADMIN. Só recalculamos preços quando o registro
@@ -9959,6 +10018,7 @@ def montador_home():
         start=start, end=end, project_filter=project_filter,
         last_project=session.get("montagem_last_project"),
         today_iso=today.isoformat(),
+        mont_lists=_montagem_lists_for(current_user),
     )
 
 
@@ -10016,6 +10076,7 @@ def montagem_admin():
         projects=all_projects, price_projects=_montagem_projects(),
         start=start, end=end, user_filter=user_filter, project_filter=project_filter,
         today_iso=date.today().isoformat(),
+        mont_lists=_montagem_lists_for(None, limit=40),
     )
 
 
@@ -10254,6 +10315,539 @@ def montagem_report_pdf():
         pr.name if pr else "Todos os projetos", entries)
     fn = f"montagem_{start.isoformat() if start else 'inicio'}_{end.isoformat() if end else 'hoje'}_{name.replace(' ', '_')}.pdf"
     return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name=fn)
+
+
+
+# =====================================================================
+# v123 — LISTAS DE MONTAGEM (mapa → PDF para ticar → foto lida pela IA → lançamento)
+# =====================================================================
+class MontagemListPhoto(db.Model):
+    """Foto do relatório ticado (comprovante), comprimida em JPEG."""
+    __tablename__ = "montagem_list_photo"
+    id = db.Column(db.Integer, primary_key=True)
+    list_id = db.Column(db.Integer, nullable=False, index=True)
+    content_type = db.Column(db.String(60), nullable=True)
+    data = deferred(db.Column(db.LargeBinary, nullable=False))
+    uploaded_by = db.Column(db.String(120), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+with app.app_context():
+    try:
+        MontagemList.__table__.create(bind=db.engine, checkfirst=True)
+        MontagemListPhoto.__table__.create(bind=db.engine, checkfirst=True)
+    except Exception:
+        db.session.rollback()
+
+
+_MONTADOR_ALLOWED_ENDPOINTS.update({
+    "montagem_list_view", "montagem_list_pdf", "montagem_list_photo",
+    "montagem_list_confirm", "montagem_list_photo_file",
+})
+
+
+def _record_is_montada(r, n_device_photos=0) -> bool:
+    """Caixa já pronta: confirmada pelo montador OU já lançada no sistema (lançado = montado)."""
+    if getattr(r, "mont_done_at", None):
+        return True
+    if int(r.splices or 0) > 0 or float(r.total_usd or 0) > 0 or int(getattr(r, "ribbon_count", None) or 0) > 0:
+        return True
+    sp = (r.splicer or "").strip().upper()
+    if sp and sp != "ADMIN":
+        return True
+    return int(n_device_photos or 0) > 0
+
+
+def _device_photo_counts(record_ids):
+    """{record_id: nº de fotos de lançamento} numa consulta só (sem carregar os bytes)."""
+    out = {}
+    ids = [int(i) for i in record_ids if i]
+    if not ids:
+        return out
+    rows = (db.session.query(RecordPhoto.record_id, RecordPhoto.filename, RecordPhoto.is_test)
+            .filter(RecordPhoto.record_id.in_(ids)).all())
+    for rid, fn, is_test in rows:
+        if is_test or (fn or "").startswith("placed__"):
+            continue
+        out[rid] = out.get(rid, 0) + 1
+    return out
+
+
+def _mont_sort_key(r):
+    pon = (r.pon_name or "")
+    m = re.search(r"PON\s*(\d+)", pon, re.I)
+    pon_n = int(m.group(1)) if m else 999
+    dm = re.search(r"(\d+)", r.device or "")
+    return (pon_n, int(dm.group(1)) if dm else 0, r.device or "")
+
+
+def _mont_list_code(lst) -> str:
+    return lst.code or f"M-{lst.id:04d}"
+
+
+def _mont_list_rows(lst):
+    """Linhas da lista na ordem do PDF: [(nº, record, montada)]."""
+    ids = lst.record_ids()
+    recs = {r.id: r for r in Record.query.filter(Record.id.in_(ids)).all()} if ids else {}
+    counts = _device_photo_counts(ids)
+    rows, n = [], 0
+    for rid in ids:
+        r = recs.get(rid)
+        if not r:
+            continue
+        n += 1
+        rows.append((n, r, _record_is_montada(r, counts.get(rid, 0))))
+    return rows
+
+
+def _mont_can_see_list(lst) -> bool:
+    if getattr(current_user, "is_admin", False):
+        return True
+    if getattr(current_user, "is_montador", False):
+        return lst.montador_user_id in (None, current_user.id)
+    return False
+
+
+def _montagem_lists_for(user=None, limit=60):
+    q = MontagemList.query.filter(MontagemList.status != "cancelada")
+    if user is not None:
+        q = q.filter(or_(MontagemList.montador_user_id.is_(None), MontagemList.montador_user_id == user.id))
+    lists = q.order_by(MontagemList.id.desc()).limit(limit).all()
+    out = []
+    for lst in lists:
+        rows = _mont_list_rows(lst)
+        done = sum(1 for _, _, ok in rows if ok)
+        out.append({"obj": lst, "code": _mont_list_code(lst), "total": len(rows), "done": done,
+                    "pending": len(rows) - done})
+    if user is not None:
+        out = [d for d in out if d["pending"] > 0 or d["obj"].status == "aberta"]
+    return out
+
+
+# ---------- API usada pela tela do mapa (admin) ----------
+@app.route("/api/maps/<int:map_id>/montagem/info")
+@admin_required
+def api_map_montagem_info(map_id):
+    mp = CompanyMap.query.get_or_404(map_id)
+    pr = Project.query.get(mp.project_id) if mp.project_id else None
+    lists = MontagemList.query.filter(MontagemList.map_id == mp.id, MontagemList.status == "aberta") \
+        .order_by(MontagemList.id.desc()).limit(20).all()
+    return jsonify({
+        "ok": True,
+        "montadores": [{"id": u.id, "name": _montador_display(u)} for u in _montadores(active_only=True)],
+        "box_price": float(getattr(pr, "montador_box_price_usd", None) or 0) if pr else 0,
+        "lists": [{"id": l.id, "code": _mont_list_code(l), "count": len(l.record_ids()),
+                   "montador": l.montador_name or "",
+                   "url": url_for("montagem_list_view", list_id=l.id),
+                   "pdf": url_for("montagem_list_pdf", list_id=l.id)} for l in lists],
+    })
+
+
+@app.route("/api/maps/<int:map_id>/montagem/lists", methods=["POST"])
+@admin_required
+def api_map_montagem_create_list(map_id):
+    mp = CompanyMap.query.get_or_404(map_id)
+    payload = request.get_json(silent=True) or {}
+    raw_ids = payload.get("record_ids") or []
+    try:
+        ids = list({int(x) for x in raw_ids})
+    except Exception:
+        return jsonify({"ok": False, "error": "Seleção inválida."}), 400
+    if not ids:
+        return jsonify({"ok": False, "error": "Selecione pelo menos uma caixa."}), 400
+
+    q = Record.query.filter(Record.id.in_(ids), Record.map == mp.name)
+    if mp.company:
+        q = q.filter(Record.company == mp.company)
+    recs = q.all()
+    counts = _device_photo_counts([r.id for r in recs])
+    pending = [r for r in recs if not _record_is_montada(r, counts.get(r.id, 0))]
+    skipped = len(ids) - len(pending)
+    if not pending:
+        return jsonify({"ok": False, "error": "Todas as caixas selecionadas já estão montadas/lançadas."}), 400
+    pending.sort(key=_mont_sort_key)
+
+    mont = None
+    mid = str(payload.get("montador_id") or "").strip()
+    if mid.isdigit():
+        u = User.query.get(int(mid))
+        if u and getattr(u, "is_montador", False):
+            mont = u
+
+    lst = MontagemList(
+        map_id=mp.id, map_name=mp.name, company=mp.company, project_id=mp.project_id,
+        montador_user_id=mont.id if mont else None,
+        montador_name=_montador_display(mont) if mont else None,
+        status="aberta", record_ids_json=json.dumps([r.id for r in pending]),
+        created_at=datetime.utcnow(), created_by=current_user.id,
+        notes=(str(payload.get("notes") or "").strip()[:500] or None),
+    )
+    db.session.add(lst)
+    db.session.flush()
+    lst.code = f"M-{lst.id:04d}"
+    db.session.commit()
+    return jsonify({"ok": True, "id": lst.id, "code": lst.code, "count": len(pending), "skipped": skipped,
+                    "url": url_for("montagem_list_view", list_id=lst.id),
+                    "pdf": url_for("montagem_list_pdf", list_id=lst.id)})
+
+
+@app.route("/api/records/<int:record_id>/montagem-undo", methods=["POST"])
+@admin_required
+def api_record_montagem_undo(record_id):
+    """Admin: desfaz a marcação manual de 'montada' (não mexe em lançamentos de splicer)."""
+    rec = Record.query.get_or_404(record_id)
+    rec.mont_done_at = None
+    rec.mont_done_by = None
+    rec.mont_list_id = None
+    db.session.commit()
+    return jsonify({"ok": True})
+
+
+# ---------- PDF para imprimir e ticar ----------
+@app.route("/montagem/lista/<int:list_id>/pdf")
+@login_required
+def montagem_list_pdf(list_id):
+    lst = MontagemList.query.get_or_404(list_id)
+    if not _mont_can_see_list(lst):
+        abort(403)
+    only_pending = request.args.get("todas") != "1"
+    rows = [(n, r, ok) for (n, r, ok) in _mont_list_rows(lst) if not (only_pending and ok)]
+
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib import colors as rl_colors
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Flowable
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.enums import TA_CENTER
+    from xml.sax.saxutils import escape as _esc
+
+    code = _mont_list_code(lst)
+    C_DARK = rl_colors.HexColor("#111827"); C_GREY = rl_colors.HexColor("#6b7280")
+    C_LINE = rl_colors.HexColor("#9ca3af"); C_ALT = rl_colors.HexColor("#f3f4f6")
+    BASE = getSampleStyleSheet()["Normal"]
+
+    def PS(name, **kw):
+        d = dict(fontName="Helvetica", fontSize=10, textColor=C_DARK, leading=13, parent=BASE)
+        d.update(kw)
+        return ParagraphStyle(name, **d)
+
+    class _Box(Flowable):
+        def __init__(self, size):
+            super().__init__()
+            self.size = size
+            self.width = self.height = size
+        def draw(self):
+            self.canv.setLineWidth(1.6)
+            self.canv.setStrokeColor(C_DARK)
+            self.canv.rect(0, 0, self.size, self.size, stroke=1, fill=0)
+
+    pr = Project.query.get(lst.project_id) if lst.project_id else None
+    W = letter[0] - 24*mm
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter, leftMargin=12*mm, rightMargin=12*mm,
+                            topMargin=24*mm, bottomMargin=14*mm, title=f"Lista de montagem {code}")
+
+    def _page(canv, d):
+        canv.saveState()
+        canv.setFont("Helvetica-Bold", 20)
+        canv.setFillColor(C_DARK)
+        canv.drawString(12*mm, letter[1] - 14*mm, f"LISTA {code}")
+        canv.setFont("Helvetica", 9)
+        canv.setFillColor(C_GREY)
+        canv.drawRightString(letter[0] - 12*mm, letter[1] - 10*mm, f"MAPA {lst.map_name or ''}")
+        canv.drawRightString(letter[0] - 12*mm, letter[1] - 15*mm, f"Página {d.page}")
+        canv.setStrokeColor(C_DARK); canv.setLineWidth(1.2)
+        canv.line(12*mm, letter[1] - 18*mm, letter[0] - 12*mm, letter[1] - 18*mm)
+        canv.setFont("Helvetica", 7.5)
+        canv.drawString(12*mm, 8*mm, f"SPLICER · {code} · gerada em {(lst.created_at or datetime.utcnow()).strftime('%d/%m/%Y')} · "
+                                      "Marque com X só as caixas que ficaram PRONTAS com o splitter correto.")
+        canv.restoreState()
+
+    S_TH = PS("th", fontName="Helvetica-Bold", fontSize=8.5, textColor=rl_colors.white, alignment=TA_CENTER)
+    S_N = PS("n", fontName="Helvetica-Bold", fontSize=13, leading=15, alignment=TA_CENTER)
+    S_DEV = PS("d", fontName="Helvetica-Bold", fontSize=13, leading=15)
+    S_TXT = PS("t", fontSize=9.5, leading=11.5)
+    S_SPL = PS("s", fontName="Helvetica-Bold", fontSize=10.5, leading=12.5)
+
+    story = []
+    info = Table([[
+        Paragraph(f"<b>Projeto:</b> {_esc((pr.name if pr else '') or '—')} · {_esc(lst.company or '')}", S_TXT),
+        Paragraph(f"<b>Montador:</b> {_esc(lst.montador_name or '______________________')}", S_TXT),
+        Paragraph(f"<b>Data:</b> ____/____/______", S_TXT),
+    ]], colWidths=[W*0.44, W*0.34, W*0.22])
+    info.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (-1, -1), 0)]))
+    story += [info, Spacer(1, 3*mm),
+              Paragraph(f"<b>{len(rows)} caixa(s)</b> para montar. Ao terminar, tire uma foto desta folha no SPLICER "
+                        f"(Montagem → lista {code}).", PS("i", fontSize=9, textColor=C_GREY)),
+              Spacer(1, 3*mm)]
+
+    CW = [19*mm, 11*mm, 36*mm, 42*mm, 0, 30*mm]
+    CW[4] = W - sum(CW)
+    data = [[Paragraph(h, S_TH) for h in ["PRONTA", "Nº", "CAIXA", "MODELO / TIPO", "SPLITTER", "PON"]]]
+    for n, r, _ok in rows:
+        model = (getattr(r, "box_model", None) or "").strip() or (r.type or "OTE")
+        data.append([_Box(8*mm), Paragraph(str(n), S_N), Paragraph(_esc(r.device or ""), S_DEV),
+                     Paragraph(_esc(model), S_TXT), Paragraph(_esc(r.splitter_name or "—"), S_SPL),
+                     Paragraph(_esc(r.pon_name or ""), S_TXT)])
+    t = Table(data, colWidths=CW, repeatRows=1)
+    ts = TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), C_DARK),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (0, 1), (0, -1), "CENTER"),
+        ("GRID", (0, 0), (-1, -1), 0.6, C_LINE),
+        ("TOPPADDING", (0, 1), (-1, -1), 3.2*mm), ("BOTTOMPADDING", (0, 1), (-1, -1), 3.2*mm),
+        ("LEFTPADDING", (0, 0), (-1, -1), 2*mm), ("RIGHTPADDING", (0, 0), (-1, -1), 2*mm),
+    ])
+    for i in range(2, len(data), 2):
+        ts.add("BACKGROUND", (1, i), (-1, i), C_ALT)
+    t.setStyle(ts)
+    story.append(t)
+    if not rows:
+        story += [Spacer(1, 6*mm), Paragraph("Todas as caixas desta lista já estão montadas.", S_TXT)]
+    story += [Spacer(1, 8*mm), Paragraph("Assinatura do montador: ________________________________", S_TXT)]
+    doc.build(story, onFirstPage=_page, onLaterPages=_page)
+    buf.seek(0)
+    return send_file(buf, mimetype="application/pdf", as_attachment=False,
+                     download_name=f"montagem_{code}_{(lst.map_name or '').replace(' ', '_')}.pdf")
+
+
+# ---------- Leitura da foto pela IA ----------
+def _mont_prepare_image(raw: bytes):
+    """Corrige rotação, reduz para no máx. 1800px e converte para JPEG."""
+    img = Image.open(io.BytesIO(raw))
+    img = ImageOps.exif_transpose(img)
+    if img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+    img.thumbnail((1800, 1800))
+    out = io.BytesIO()
+    img.save(out, format="JPEG", quality=82, optimize=True)
+    return out.getvalue()
+
+
+def _mont_read_photos_with_ai(images, lst, rows):
+    """Pergunta ao Claude quais linhas estão ticadas. Retorna (dict, erro)."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return None, "ANTHROPIC_API_KEY não configurada no servidor."
+    code = _mont_list_code(lst)
+    lines = "\n".join(f"{n}. {r.device} | splitter {r.splitter_name or '-'}" for n, r, _ in rows)
+    prompt = (
+        f"As imagens são foto(s) de uma folha impressa chamada 'LISTA {code}' (lista de montagem de caixas de fibra óptica).\n"
+        "Cada linha da tabela tem um QUADRADO na coluna 'PRONTA' (à esquerda), o número da linha (Nº) e o nome da caixa.\n"
+        "O montador marcou à caneta (X, ✓, risco ou quadrado preenchido) as caixas que ele deixou prontas.\n\n"
+        f"Linhas desta lista (Nº. CAIXA | splitter):\n{lines}\n\n"
+        "Tarefa: diga quais linhas estão MARCADAS no quadrado. Confira pelo Nº E pelo nome da caixa na mesma linha.\n"
+        "Não conte como marcado: quadrado vazio, sujeira, sombra, ou rabisco fora do quadrado sem intenção clara.\n"
+        "Se uma linha estiver riscada inteira (cancelada) ou você tiver dúvida, coloque em 'duvidas'.\n"
+        "Se a folha não for a LISTA certa, informe o código que aparece em 'codigo_lido'.\n\n"
+        "Responda APENAS JSON válido, sem markdown:\n"
+        "{\"codigo_lido\":\"M-0000\",\"marcadas\":[1,2],\"duvidas\":[3],\"observacoes\":\"texto curto\"}"
+    )
+    content = []
+    for img in images[:5]:
+        content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                     "data": base64.b64encode(img).decode("ascii")}})
+    content.append({"type": "text", "text": prompt})
+    try:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
+            data=json.dumps({"model": "claude-sonnet-4-6", "max_tokens": 1500,
+                             "messages": [{"role": "user", "content": content}]}),
+            timeout=90,
+        )
+        if resp.status_code != 200:
+            return None, f"Erro HTTP {resp.status_code} ao chamar Claude."
+        text_out = ""
+        for block in resp.json().get("content", []):
+            if block.get("type") == "text":
+                text_out = block.get("text", "").strip()
+                break
+        m = re.search(r"\{.*\}", text_out, re.S)
+        parsed = json.loads(m.group(0) if m else text_out)
+    except Exception as e:
+        return None, f"Não consegui ler a resposta da IA: {e}"
+
+    valid = {n for n, _, _ in rows}
+
+    def _nums(v):
+        out = []
+        for x in (v or []):
+            try:
+                xi = int(x)
+            except Exception:
+                continue
+            if xi in valid and xi not in out:
+                out.append(xi)
+        return sorted(out)
+
+    return {
+        "codigo_lido": str(parsed.get("codigo_lido") or "").strip(),
+        "marcadas": _nums(parsed.get("marcadas")),
+        "duvidas": _nums(parsed.get("duvidas")),
+        "observacoes": str(parsed.get("observacoes") or "").strip()[:500],
+        "lido_em": datetime.utcnow().isoformat(),
+        "lido_por": _montador_display(current_user),
+    }, None
+
+
+# ---------- Tela da lista (montador e admin) ----------
+@app.route("/montagem/lista/<int:list_id>")
+@login_required
+def montagem_list_view(list_id):
+    lst = MontagemList.query.get_or_404(list_id)
+    if not _mont_can_see_list(lst):
+        abort(403)
+    rows = _mont_list_rows(lst)
+    try:
+        result = json.loads(lst.result_json) if lst.result_json else None
+    except Exception:
+        result = None
+    review = bool(result) and request.args.get("revisar") == "1"
+    marked = set(result.get("marcadas", [])) if review else set()
+    doubts = set(result.get("duvidas", [])) if review else set()
+    photos = (db.session.query(MontagemListPhoto.id, MontagemListPhoto.created_at, MontagemListPhoto.uploaded_by)
+              .filter(MontagemListPhoto.list_id == lst.id).order_by(MontagemListPhoto.id.desc()).limit(12).all())
+    pr = Project.query.get(lst.project_id) if lst.project_id else None
+    entries = MontagemEntry.query.filter(MontagemEntry.id.in_(lst.entry_ids())).all() if lst.entry_ids() else []
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    return render_template(
+        "montagem_lista.html", lst=lst, code=_mont_list_code(lst), rows=rows, result=result, review=review,
+        marked=marked, doubts=doubts, photos=photos, project=pr, entries=entries, is_admin=is_admin,
+        montadores=_montadores(active_only=True) if is_admin else [],
+        box_price=float(getattr(pr, "montador_box_price_usd", None) or 0) if pr else 0,
+        today_iso=date.today().isoformat(),
+        pending=sum(1 for _, _, ok in rows if not ok),
+    )
+
+
+@app.route("/montagem/lista/<int:list_id>/foto", methods=["POST"])
+@login_required
+def montagem_list_photo(list_id):
+    lst = MontagemList.query.get_or_404(list_id)
+    if not _mont_can_see_list(lst):
+        abort(403)
+    files = [f for f in request.files.getlist("photos") if f and f.filename][:5]
+    if not files:
+        flash("Tire ou escolha a foto da folha.", "danger")
+        return redirect(url_for("montagem_list_view", list_id=lst.id))
+    images = []
+    for f in files:
+        try:
+            images.append(_mont_prepare_image(f.read()))
+        except Exception:
+            flash(f"Não consegui abrir a imagem {f.filename}.", "danger")
+    if not images:
+        return redirect(url_for("montagem_list_view", list_id=lst.id))
+
+    who = _montador_display(current_user)
+    for img in images:
+        db.session.add(MontagemListPhoto(list_id=lst.id, content_type="image/jpeg", data=img,
+                                         uploaded_by=who, created_at=datetime.utcnow()))
+    db.session.commit()
+
+    rows = [(n, r, ok) for (n, r, ok) in _mont_list_rows(lst)]
+    result, err = _mont_read_photos_with_ai(images, lst, rows)
+    if err:
+        flash(f"A IA não conseguiu ler a foto ({err}). Marque as caixas manualmente abaixo.", "warning")
+        result = {"codigo_lido": "", "marcadas": [], "duvidas": [], "observacoes": err,
+                  "lido_em": datetime.utcnow().isoformat(), "lido_por": who}
+    lst.result_json = json.dumps(result, ensure_ascii=False)
+    db.session.commit()
+    code = _mont_list_code(lst)
+    if result.get("codigo_lido") and result["codigo_lido"].upper().replace(" ", "") != code.upper():
+        flash(f"Atenção: a foto parece ser da lista {result['codigo_lido']}, não da {code}. Confira antes de confirmar.", "warning")
+    else:
+        flash(f"Foto lida: {len(result.get('marcadas', []))} caixa(s) marcada(s). Confira e confirme.", "success")
+    return redirect(url_for("montagem_list_view", list_id=lst.id, revisar=1) + "#confirmar")
+
+
+@app.route("/montagem/lista/foto/<int:photo_id>")
+@login_required
+def montagem_list_photo_file(photo_id):
+    ph = MontagemListPhoto.query.get_or_404(photo_id)
+    lst = MontagemList.query.get_or_404(ph.list_id)
+    if not _mont_can_see_list(lst):
+        abort(403)
+    return send_file(io.BytesIO(ph.data), mimetype=ph.content_type or "image/jpeg")
+
+
+@app.route("/montagem/lista/<int:list_id>/confirmar", methods=["POST"])
+@login_required
+def montagem_list_confirm(list_id):
+    lst = MontagemList.query.get_or_404(list_id)
+    if not _mont_can_see_list(lst):
+        abort(403)
+    back = url_for("montagem_list_view", list_id=lst.id)
+
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if getattr(current_user, "is_montador", False) and not is_admin:
+        mont = current_user
+    else:
+        uid = (request.form.get("montador_user_id") or "").strip()
+        mont = User.query.get(int(uid)) if uid.isdigit() else None
+        if not mont or not getattr(mont, "is_montador", False):
+            flash("Escolha o montador que fez as caixas.", "danger")
+            return redirect(back + "?revisar=1#confirmar")
+
+    work_date = _parse_date(request.form.get("work_date"), date.today())
+    if work_date > date.today() + _m_timedelta(days=1):
+        flash("A data não pode ser no futuro.", "danger")
+        return redirect(back + "?revisar=1#confirmar")
+
+    pr = Project.query.get(lst.project_id) if lst.project_id else None
+    price = float(getattr(pr, "montador_box_price_usd", None) or 0) if pr else 0.0
+    if not pr or price <= 0:
+        flash("O projeto deste mapa não tem valor por caixa definido (Montagem → Valor por caixa).", "danger")
+        return redirect(back + "?revisar=1#confirmar")
+
+    chosen = set()
+    for x in request.form.getlist("rec_ids"):
+        if str(x).isdigit():
+            chosen.add(int(x))
+    rows = _mont_list_rows(lst)
+    to_mark = [r for (_n, r, ok) in rows if r.id in chosen and not ok]
+    if not to_mark:
+        flash("Nenhuma caixa nova para lançar (as marcadas já estavam montadas).", "warning")
+        return redirect(back)
+
+    name = _montador_display(mont)
+    now = datetime.utcnow()
+    for r in to_mark:
+        r.mont_done_at = now
+        r.mont_done_by = name
+        r.mont_list_id = lst.id
+    names = ", ".join(r.device or "?" for r in to_mark)
+    e = MontagemEntry(
+        user_id=mont.id, montador_name=name, project_id=pr.id, project_name=pr.name, company=pr.company,
+        work_date=work_date, quantity=len(to_mark), unit_price_usd=price,
+        total_usd=round(len(to_mark) * price, 2),
+        notes=(f"Lista {_mont_list_code(lst)} (mapa {lst.map_name}): {names}")[:1000],
+        created_at=now,
+    )
+    db.session.add(e)
+    db.session.flush()
+    lst.entry_ids_json = json.dumps(lst.entry_ids() + [e.id])
+    lst.processed_at = now
+    if not lst.montador_user_id:
+        lst.montador_user_id, lst.montador_name = mont.id, name
+    remaining = sum(1 for (_n, r, ok) in rows if not ok and r.id not in {x.id for x in to_mark})
+    lst.status = "concluida" if remaining == 0 else "aberta"
+    lst.result_json = None
+    db.session.commit()
+    flash(f"{len(to_mark)} caixa(s) lançada(s) para {name} — $ {e.total_usd:.2f}."
+          + (f" Faltam {remaining} nesta lista." if remaining else " Lista concluída."), "success")
+    return redirect(back)
+
+
+@app.route("/montagem/lista/<int:list_id>/cancelar", methods=["POST"])
+@admin_required
+def montagem_list_cancel(list_id):
+    lst = MontagemList.query.get_or_404(list_id)
+    lst.status = "cancelada"
+    db.session.commit()
+    flash(f"Lista {_mont_list_code(lst)} cancelada (as caixas voltam a ficar disponíveis para outra lista).", "success")
+    return redirect(url_for("montagem_admin"))
 
 
 @app.route('/__version')

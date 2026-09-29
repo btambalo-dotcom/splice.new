@@ -1,0 +1,199 @@
+{% extends 'base.html' %}
+{% block title %}Lista {{ code }} · Montagem{% endblock %}
+{% block content %}
+<style>
+  .m-card { background:#1e1e2e; border:1px solid #2a2a3e; border-radius:14px; }
+  .section-title { font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; color:#6c757d; font-weight:600; margin-bottom:.75rem; }
+  .m-card .form-control, .m-card .form-select { background:#12121c !important; border-color:#2a2a3e !important; color:#ddd !important; }
+  .m-table { font-size:.9rem; --bs-table-bg:#1e1e2e; --bs-table-border-color:#2a2a3e; --bs-table-color:#ddd; }
+  .m-table th { font-size:.7rem; text-transform:uppercase; letter-spacing:.06em; color:#8b97ab; }
+  .m-table tr.doubt td { background:rgba(255,193,7,.14) !important; }
+  .m-table tr.done td { color:#6c757d !important; }
+  .m-table tr.ai td:first-child { box-shadow: inset 3px 0 0 #20c997; }
+  .ck { width:1.5rem; height:1.5rem; cursor:pointer; }
+  .dev { font-weight:700; font-size:1rem; white-space:nowrap; }
+  .spl { font-weight:600; color:#7dd3fc; }
+  .btn-go { background:#198754; border:none; color:#fff; font-weight:600; border-radius:10px; min-height:50px; }
+  .btn-go:hover { background:#157347; color:#fff; }
+  .btn-photo { background:#0d6efd; border:none; color:#fff; font-weight:600; border-radius:10px; min-height:50px; }
+  .thumb { width:92px; height:92px; object-fit:cover; border-radius:8px; border:1px solid #2a2a3e; }
+</style>
+
+<div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-3">
+  <div>
+    <div class="text-secondary" style="font-size:.78rem; text-transform:uppercase; letter-spacing:.05em;">
+      {% if is_admin %}<a href="{{ url_for('montagem_admin') }}#listas" class="text-secondary text-decoration-none">Montagem</a>{% else %}<a href="{{ url_for('montador_home') }}" class="text-secondary text-decoration-none">Montagem</a>{% endif %}
+      / mapa {{ lst.map_name }}
+    </div>
+    <h4 class="mb-0 fw-semibold">📋 Lista {{ code }}</h4>
+    <div class="text-secondary" style="font-size:.85rem;">
+      {{ project.name if project else '' }}{% if lst.company %} · {{ lst.company }}{% endif %}
+      · {{ rows|length }} caixa(s) · <span style="color:#ffc107;">{{ pending }} faltam</span>
+      {% if lst.montador_name %} · montador: {{ lst.montador_name }}{% endif %}
+      {% if lst.status == 'cancelada' %} · <span class="badge bg-secondary">cancelada</span>{% endif %}
+    </div>
+  </div>
+  <div class="d-flex gap-2 flex-wrap">
+    <a class="btn btn-sm btn-outline-info" target="_blank" href="{{ url_for('montagem_list_pdf', list_id=lst.id) }}">📄 PDF (só pendentes)</a>
+    <a class="btn btn-sm btn-outline-secondary" target="_blank" href="{{ url_for('montagem_list_pdf', list_id=lst.id, todas=1) }}">PDF completo</a>
+    {% if is_admin and lst.map_id %}
+    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('map_view', map_id=lst.map_id) }}">🗺 Mapa</a>
+    {% endif %}
+    {% if is_admin and lst.status != 'cancelada' %}
+    <form method="post" action="{{ url_for('montagem_list_cancel', list_id=lst.id) }}" onsubmit="return confirm('Cancelar a lista {{ code }}? As caixas já lançadas continuam lançadas.');">
+      <button class="btn btn-sm btn-outline-danger">Cancelar lista</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if pending > 0 and lst.status != 'cancelada' %}
+<div class="m-card p-3 mb-3">
+  <p class="section-title">1 · Foto da folha ticada</p>
+  <form method="post" action="{{ url_for('montagem_list_photo', list_id=lst.id) }}" enctype="multipart/form-data" id="form-photo">
+    <input type="file" class="form-control mb-2" name="photos" accept="image/*" capture="environment" multiple required>
+    <div class="text-secondary mb-2" style="font-size:.8rem;">Foto de cima, folha inteira aparecendo e com boa luz. Se a lista tiver mais de uma página, envie uma foto de cada (até 5).</div>
+    <button class="btn btn-photo w-100" id="btn-photo">📷 Ler a folha com a IA</button>
+  </form>
+</div>
+{% endif %}
+
+{% if review and result %}
+<div class="alert {% if result.codigo_lido and result.codigo_lido|upper|replace(' ', '') != code|upper %}alert-warning{% else %}alert-info{% endif %} mb-3" style="font-size:.9rem;">
+  <b>A IA leu {{ result.marcadas|length }} caixa(s) marcada(s)</b>{% if result.codigo_lido %} na folha {{ result.codigo_lido }}{% endif %}.
+  {% if result.duvidas %}<br>⚠️ Dúvida nas linhas: {{ result.duvidas|join(', ') }} (destacadas em amarelo, não marquei).{% endif %}
+  {% if result.observacoes %}<br><span class="text-secondary">{{ result.observacoes }}</span>{% endif %}
+  <br>Confira abaixo, corrija se precisar e toque em <b>Confirmar</b>.
+</div>
+{% endif %}
+
+<div class="m-card p-3 mb-3" id="confirmar">
+  <p class="section-title">{% if pending > 0 %}2 · Conferir e lançar{% else %}Caixas da lista{% endif %}</p>
+  <form method="post" action="{{ url_for('montagem_list_confirm', list_id=lst.id) }}" id="form-confirm">
+    <div class="table-responsive">
+      <table class="table table-sm table-dark m-table align-middle mb-2">
+        <thead><tr>
+          <th style="width:3rem;" class="text-center">
+            {% if pending > 0 %}<input type="checkbox" class="form-check-input" id="ck-all" title="Marcar todas">{% endif %}
+          </th>
+          <th>Nº</th><th>Caixa</th><th>Modelo / tipo</th><th>Splitter</th><th>PON</th><th>Status</th>
+        </tr></thead>
+        <tbody>
+        {% for n, r, ok in rows %}
+          <tr class="{% if ok %}done{% endif %} {% if n in doubts %}doubt{% endif %} {% if n in marked and not ok %}ai{% endif %}">
+            <td class="text-center">
+              {% if ok %}<span title="Já pronta">✅</span>
+              {% else %}<input type="checkbox" class="form-check-input ck rec-ck" name="rec_ids" value="{{ r.id }}" {% if n in marked %}checked{% endif %}>{% endif %}
+            </td>
+            <td class="fw-semibold">{{ n }}</td>
+            <td class="dev">{{ r.device }}</td>
+            <td>{{ r.box_model or r.type or 'OTE' }}</td>
+            <td class="spl">{{ r.splitter_name or '—' }}</td>
+            <td style="font-size:.8rem;">{{ r.pon_name or '' }}</td>
+            <td style="font-size:.78rem;">
+              {% if r.mont_done_at %}montada · {{ r.mont_done_by or '' }} {{ r.mont_done_at.strftime('%d/%m') }}
+              {% elif ok %}já lançada{% else %}<span style="color:#ffc107;">pendente</span>{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if pending > 0 and lst.status != 'cancelada' %}
+    <div class="row g-2 align-items-end">
+      {% if is_admin %}
+      <div class="col-md-4">
+        <label class="form-label small text-secondary mb-1">Montador</label>
+        <select class="form-select" name="montador_user_id" required>
+          <option value="">— Escolha —</option>
+          {% for u in montadores %}
+          <option value="{{ u.id }}" {% if lst.montador_user_id == u.id or montadores|length == 1 %}selected{% endif %}>{{ u.splicer_name or u.username }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      {% endif %}
+      <div class="col-md-3">
+        <label class="form-label small text-secondary mb-1">Data da montagem</label>
+        <input type="date" class="form-control" name="work_date" id="work_date" value="{{ today_iso }}" required>
+      </div>
+      <div class="col-md">
+        <div class="text-secondary mb-1" style="font-size:.85rem;" id="sel-hint"></div>
+        <button class="btn btn-go w-100" id="btn-confirm">✔ Confirmar e lançar</button>
+      </div>
+    </div>
+    {% if box_price <= 0 %}
+    <div class="text-warning mt-2" style="font-size:.82rem;">O projeto deste mapa ainda não tem valor por caixa. Defina em Montagem → Valor por caixa antes de confirmar.</div>
+    {% endif %}
+    {% endif %}
+  </form>
+</div>
+
+{% if photos or entries %}
+<div class="row g-3">
+  {% if photos %}
+  <div class="col-lg-6">
+    <div class="m-card p-3 h-100">
+      <p class="section-title">Fotos enviadas</p>
+      <div class="d-flex flex-wrap gap-2">
+        {% for ph in photos %}
+        <a href="{{ url_for('montagem_list_photo_file', photo_id=ph.id) }}" target="_blank" title="{{ ph.uploaded_by or '' }} {{ ph.created_at.strftime('%d/%m %H:%M') if ph.created_at else '' }}">
+          <img class="thumb" src="{{ url_for('montagem_list_photo_file', photo_id=ph.id) }}" alt="foto">
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+  {% if entries %}
+  <div class="col-lg-6">
+    <div class="m-card p-3 h-100">
+      <p class="section-title">Lançamentos gerados</p>
+      {% for e in entries %}
+      <div class="d-flex justify-content-between border-bottom border-secondary py-2" style="font-size:.88rem;">
+        <span>{{ e.work_date.strftime('%d/%m/%Y') }} · {{ e.montador_name }}</span>
+        <span>{{ e.quantity }} cx · <span style="color:#20c997;">$ {{ '%.2f'|format(e.total_usd or 0) }}</span></span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  (function () {
+    var el = document.getElementById('work_date');
+    if (el) {
+      var d = new Date();
+      el.value = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+    var price = {{ box_price|tojson }};
+    function hint() {
+      var n = document.querySelectorAll('.rec-ck:checked').length;
+      var h = document.getElementById('sel-hint');
+      if (h) h.textContent = n + ' caixa(s) marcada(s)' + (price > 0 ? ' · $ ' + (n * price).toFixed(2) : '');
+    }
+    document.addEventListener('change', function (ev) {
+      if (ev.target.id === 'ck-all') {
+        document.querySelectorAll('.rec-ck').forEach(function (c) { c.checked = ev.target.checked; });
+      }
+      hint();
+    });
+    hint();
+    var fp = document.getElementById('form-photo');
+    if (fp) fp.addEventListener('submit', function () {
+      var b = document.getElementById('btn-photo'); b.disabled = true; b.textContent = 'Lendo a folha... (pode levar ~20s)';
+    });
+    var fc = document.getElementById('form-confirm');
+    if (fc) fc.addEventListener('submit', function (ev) {
+      var n = document.querySelectorAll('.rec-ck:checked').length;
+      if (!n) { alert('Marque pelo menos uma caixa.'); ev.preventDefault(); return; }
+      if (!confirm('Lançar ' + n + ' caixa(s) como montadas' + (price > 0 ? (' ($ ' + (n * price).toFixed(2) + ')') : '') + '?')) { ev.preventDefault(); return; }
+      var b = document.getElementById('btn-confirm'); b.disabled = true; b.textContent = 'Salvando...';
+    });
+  })();
+</script>
+{% endblock %}
