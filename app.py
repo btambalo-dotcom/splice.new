@@ -10373,6 +10373,17 @@ def _device_photo_counts(record_ids):
     return out
 
 
+def _mont_splitter_key(r):
+    """Ordem do relatório: por splitter (taps simples → taps duplos → com splitter DC/2-Way), depois nome."""
+    spl = (r.splitter_name or "").strip()
+    toks = re.findall(r"(\d+)-(\d+)", spl)
+    has_split = bool(re.search(r"DC-|WAY", spl, re.I))
+    group = 2 if has_split else (1 if "+" in spl else 0)
+    first = (int(toks[0][0]), int(toks[0][1])) if toks else (99, 99)
+    dm = re.search(r"(\d+)", r.device or "")
+    return (spl == "", group, first, spl.upper(), int(dm.group(1)) if dm else 0, r.device or "")
+
+
 def _mont_sort_key(r):
     pon = (r.pon_name or "")
     m = re.search(r"PON\s*(\d+)", pon, re.I)
@@ -10388,15 +10399,12 @@ def _mont_list_code(lst) -> str:
 def _mont_list_rows(lst):
     """Linhas da lista na ordem do PDF: [(nº, record, montada)]."""
     ids = lst.record_ids()
-    recs = {r.id: r for r in Record.query.filter(Record.id.in_(ids)).all()} if ids else {}
+    recs = [r for r in Record.query.filter(Record.id.in_(ids)).all()] if ids else []
+    recs.sort(key=_mont_splitter_key)   # sempre na ordem de splitter (PDF, foto e conferência iguais)
     counts = _device_photo_counts(ids)
-    rows, n = [], 0
-    for rid in ids:
-        r = recs.get(rid)
-        if not r:
-            continue
-        n += 1
-        rows.append((n, r, _record_is_montada(r, counts.get(rid, 0))))
+    rows = []
+    for n, r in enumerate(recs, start=1):
+        rows.append((n, r, _record_is_montada(r, counts.get(r.id, 0))))
     return rows
 
 
@@ -10465,7 +10473,7 @@ def api_map_montagem_create_list(map_id):
     skipped = len(ids) - len(pending)
     if not pending:
         return jsonify({"ok": False, "error": "Todas as caixas selecionadas já estão montadas/lançadas."}), 400
-    pending.sort(key=_mont_sort_key)
+    pending.sort(key=_mont_splitter_key)
 
     mont = None
     mid = str(payload.get("montador_id") or "").strip()
@@ -10489,6 +10497,48 @@ def api_map_montagem_create_list(map_id):
     return jsonify({"ok": True, "id": lst.id, "code": lst.code, "count": len(pending), "skipped": skipped,
                     "url": url_for("montagem_list_view", list_id=lst.id),
                     "pdf": url_for("montagem_list_pdf", list_id=lst.id)})
+
+
+@app.route("/api/maps/<int:map_id>/bulk-device-info", methods=["POST"])
+@admin_required
+def api_map_bulk_device_info(map_id):
+    """Admin: grava modelo da caixa / splitter em lote, casando pelo número do dispositivo.
+
+    Só mexe nesses dois campos (não recalcula preço, não mexe em lançamento).
+    splitter_name só é gravado quando o dispositivo ainda não tem splitter (a não ser overwrite_splitter=true).
+    """
+    mp = CompanyMap.query.get_or_404(map_id)
+    payload = request.get_json(silent=True) or {}
+    items = payload.get("items") or []
+    overwrite_spl = bool(payload.get("overwrite_splitter"))
+    q = Record.query.filter(Record.map == mp.name)
+    if mp.company:
+        q = q.filter(Record.company == mp.company)
+
+    def _key(name):
+        return re.sub(r"[^A-Z0-9]", "", str(name or "").upper())
+
+    by_key = {}
+    for r in q.all():
+        by_key.setdefault(_key(r.device), []).append(r)
+    upd_model = upd_spl = 0
+    not_found = []
+    for it in items:
+        recs = by_key.get(_key(it.get("device")))
+        if not recs:
+            not_found.append(it.get("device"))
+            continue
+        for r in recs:
+            bm = (it.get("box_model") or "").strip()[:120]
+            if bm and r.box_model != bm:
+                r.box_model = bm
+                upd_model += 1
+            sp = (it.get("splitter_name") or "").strip()[:120]
+            if sp and (overwrite_spl or not (r.splitter_name or "").strip()) and r.splitter_name != sp:
+                r.splitter_name = sp
+                upd_spl += 1
+    db.session.commit()
+    return jsonify({"ok": True, "box_model_updated": upd_model, "splitter_updated": upd_spl, "not_found": not_found})
 
 
 @app.route("/api/records/<int:record_id>/montagem-undo", methods=["POST"])
@@ -10584,8 +10634,21 @@ def montagem_list_pdf(list_id):
     CW = [19*mm, 11*mm, 36*mm, 42*mm, 0, 30*mm]
     CW[4] = W - sum(CW)
     data = [[Paragraph(h, S_TH) for h in ["PRONTA", "Nº", "CAIXA", "MODELO / TIPO", "SPLITTER", "PON"]]]
+    group_rows, body_rows = [], []
+    S_GRP = PS("g", fontName="Helvetica-Bold", fontSize=10.5, leading=13)
+    grp_count = {}
+    for _n, r, _ok in rows:
+        k = (r.splitter_name or "Sem splitter").strip()
+        grp_count[k] = grp_count.get(k, 0) + 1
+    prev = None
     for n, r, _ok in rows:
+        k = (r.splitter_name or "Sem splitter").strip()
+        if k != prev:
+            group_rows.append(len(data))
+            data.append([Paragraph(f"SPLITTER: {_esc(k)}  ·  {grp_count[k]} caixa(s)", S_GRP), "", "", "", "", ""])
+            prev = k
         model = (getattr(r, "box_model", None) or "").strip() or (r.type or "OTE")
+        body_rows.append(len(data))
         data.append([_Box(8*mm), Paragraph(str(n), S_N), Paragraph(_esc(r.device or ""), S_DEV),
                      Paragraph(_esc(model), S_TXT), Paragraph(_esc(r.splitter_name or "—"), S_SPL),
                      Paragraph(_esc(r.pon_name or ""), S_TXT)])
@@ -10598,8 +10661,14 @@ def montagem_list_pdf(list_id):
         ("TOPPADDING", (0, 1), (-1, -1), 3.2*mm), ("BOTTOMPADDING", (0, 1), (-1, -1), 3.2*mm),
         ("LEFTPADDING", (0, 0), (-1, -1), 2*mm), ("RIGHTPADDING", (0, 0), (-1, -1), 2*mm),
     ])
-    for i in range(2, len(data), 2):
-        ts.add("BACKGROUND", (1, i), (-1, i), C_ALT)
+    for gi in group_rows:
+        ts.add("SPAN", (0, gi), (-1, gi))
+        ts.add("BACKGROUND", (0, gi), (-1, gi), rl_colors.HexColor("#fde68a"))
+        ts.add("TOPPADDING", (0, gi), (-1, gi), 1.6*mm)
+        ts.add("BOTTOMPADDING", (0, gi), (-1, gi), 1.6*mm)
+    for j, i in enumerate(body_rows):
+        if j % 2 == 1:
+            ts.add("BACKGROUND", (1, i), (-1, i), C_ALT)
     t.setStyle(ts)
     story.append(t)
     if not rows:
