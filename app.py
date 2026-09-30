@@ -2055,6 +2055,10 @@ def classify_photo_with_ai(image_bytes: bytes):
             "  REGRA PRINCIPAL: leia o número de fusões do CARIMBO TIMEMARK (legenda da foto).\n"
             "    O usuário escreve na legenda: '12 F', '12 Fusions', '1 F', '8 Fusion', etc.\n"
             "    Se encontrar esse padrão (número + F ou Fusion/Fusions) → splices=esse número, splices_confirmed=true.\n"
+            "    MUITO COMUM: o carimbo tem o NOME DA CAIXA numa linha e, NA LINHA LOGO ABAIXO, um NÚMERO SOZINHO\n"
+            "    (ex.: 'CC13125' e embaixo '2'). Esse número sozinho abaixo do nome É a quantidade de fusões →\n"
+            "    splices=esse número, splices_confirmed=true (inclusive '0' → splices=0, splices_confirmed=true).\n"
+            "    Não confunda com hora, data, endereço, CEP ou coordenadas GPS (essas linhas vêm depois).\n"
             "    REGRA SECUNDÁRIA: se não tiver no carimbo, procure etiqueta NUMERADA na splice tray (#1-12, #19-20).\n"
             "    Se nenhum dos dois → splices=0, splices_confirmed=false.\n"
             "    NUNCA conte fibras físicas nem conectores para determinar fusões.\n"
@@ -8203,6 +8207,9 @@ def _process_photo_result(rec, raw_bytes, fname, content_type, photo_type, parse
             splices_val = int(splices_raw)
         else:
             splices_val = 0
+        # v126: foto extra do mesmo dispositivo sem número no carimbo NÃO zera as fusões já lidas
+        if not splices_confirmed and int(rec.splices or 0) > 0 and (rec.splicer or "").strip():
+            splices_val = int(rec.splices or 0)
 
         map_role    = (parsed.get("map_role") or "PONTA").strip().upper()
         ft_in       = (str(parsed.get("ft_in") or "")).strip() or None
@@ -10638,6 +10645,133 @@ def api_map_merge_duplicates(map_id):
     if not dry:
         db.session.commit()
     return jsonify({"ok": True, "dry": dry, "groups": len(report), "items": report})
+
+
+def _photo_original_bytes(photo) -> bytes:
+    if getattr(photo, "data", None) and len(photo.data) > 0:
+        return photo.data
+    if getattr(photo, "r2_key", None) and r2_enabled():
+        try:
+            return r2_get_bytes(photo.r2_key)
+        except Exception:
+            return b""
+    return b""
+
+
+def _read_stamp_splices_ai(image_bytes):
+    """Lê só o número de fusões do carimbo Timemark. Retorna (int|None, nome_lido|None, erro)."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return None, None, "ANTHROPIC_API_KEY não configurada."
+    try:
+        img = _mont_prepare_image(image_bytes)
+    except Exception as e:
+        return None, None, f"imagem inválida: {e}"
+    prompt = (
+        "Foto de campo de fibra óptica com carimbo do app Timemark (canto inferior esquerdo).\n"
+        "No carimbo, a primeira linha de texto é o NOME DA CAIXA (ex.: CC13125). Na linha LOGO ABAIXO pode haver\n"
+        "um NÚMERO SOZINHO (ex.: 2) ou algo como '12 F' / '12 Fusions' — isso é a quantidade de fusões.\n"
+        "Não confunda com hora, data, endereço, CEP ou GPS.\n"
+        "Se não houver esse número abaixo do nome, responda fusoes=null.\n"
+        "Responda APENAS JSON: {\"nome\":\"CC13125\",\"fusoes\":2}"
+    )
+    try:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"},
+            data=json.dumps({"model": "claude-sonnet-4-6", "max_tokens": 100, "messages": [{"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                             "data": base64.b64encode(img).decode("ascii")}},
+                {"type": "text", "text": prompt}]}]}),
+            timeout=40,
+        )
+        if resp.status_code != 200:
+            return None, None, f"HTTP {resp.status_code}"
+        txt = ""
+        for b in resp.json().get("content", []):
+            if b.get("type") == "text":
+                txt = b.get("text", "")
+                break
+        m = re.search(r"\{.*\}", txt, re.S)
+        d = json.loads(m.group(0) if m else txt)
+        f = d.get("fusoes")
+        f = int(f) if f is not None and str(f).strip().lstrip("-").isdigit() else None
+        return f, (d.get("nome") or None), None
+    except Exception as e:
+        return None, None, str(e)
+
+
+@app.route("/api/maps/<int:map_id>/reread-splices", methods=["POST"])
+@admin_required
+def api_map_reread_splices(map_id):
+    """v126 — Relê o nº de fusões do carimbo Timemark nas fotos já lançadas e corrige o lançamento.
+
+    Processa em lotes (?offset=0&limit=4) para não estourar o tempo do servidor.
+    Sem número no carimbo em nenhuma foto → 0 fusões. ?dry=1 só mostra.
+    Recalcula o valor com a mesma regra do Foto Auto.
+    """
+    mp = CompanyMap.query.get_or_404(map_id)
+    dry = request.args.get("dry") == "1"
+    offset = max(int(request.args.get("offset", 0) or 0), 0)
+    limit = min(max(int(request.args.get("limit", 4) or 4), 1), 10)
+    q = Record.query.filter(Record.map == mp.name)
+    if mp.company:
+        q = q.filter(Record.company == mp.company)
+    recs = [r for r in q.order_by(Record.id.asc()).all()
+            if (r.splicer or "").strip() and (r.splicer or "").strip().upper() != "ADMIN"]
+    total = len(recs)
+    out = []
+    for r in recs[offset:offset + limit]:
+        photos = [p for p in RecordPhoto.query.filter(RecordPhoto.record_id == r.id).order_by(RecordPhoto.id.asc()).all()
+                  if not p.is_test and not (p.filename or "").startswith("placed__")][:4]
+        found, errs = [], []
+        for ph in photos:
+            b = _photo_original_bytes(ph)
+            if not b:
+                errs.append(f"foto {ph.id} sem arquivo")
+                continue
+            n, nome, err = _read_stamp_splices_ai(b)
+            if err:
+                errs.append(err)
+            elif n is not None:
+                found.append(n)
+        if not photos:
+            out.append({"id": r.id, "device": r.device, "old": int(r.splices or 0), "new": None, "status": "sem fotos"})
+            continue
+        if errs and not found and len(errs) == len(photos):
+            out.append({"id": r.id, "device": r.device, "old": int(r.splices or 0), "new": None,
+                        "status": "erro: " + "; ".join(errs)[:200]})
+            continue
+        new_val = max(found) if found else 0
+        old_val = int(r.splices or 0)
+        item = {"id": r.id, "device": r.device, "old": old_val, "new": new_val, "lidos": found,
+                "status": "igual" if new_val == old_val else ("simulado" if dry else "corrigido")}
+        if new_val != old_val and not dry:
+            type_val = (r.type or "OTE").strip() or "OTE"
+            included_override, included_applied, _ = resolve_included_override(
+                company=r.company, project_id=r.project_id, map_obj=mp, map_val=mp.name, map_role=r.map_role)
+            price_role = r.map_role if bool(getattr(mp, "mid_end_enabled", False)) else None
+            is_rib, _ = device_is_ribbon(type_val, r.company, r.project_id)
+            if not is_rib:
+                ps, pd, tot = compute_prices(splices=new_val, device_name=type_val, company=r.company,
+                                             project_id=r.project_id, included_override=included_override,
+                                             map_role=price_role, ribbon_count=None)
+                bc = compute_billing_codes(new_val, type_val, r.company, r.project_id, map_role=price_role, ribbon_count=None)
+                r.splices = new_val
+                keep_dev = float(r.price_device_usd or 0)   # mantém o valor do dispositivo já lançado
+                r.price_splices_usd = ps
+                r.total_usd = round(float(ps or 0) + keep_dev, 2)
+                tot = r.total_usd
+                r.included_splices_applied = included_applied
+                r.billing_codes_json = json.dumps(bc, ensure_ascii=False) if bc else None
+                item["total_usd"] = tot
+            else:
+                item["status"] = "ribbon (não alterado)"
+        out.append(item)
+    if not dry:
+        db.session.commit()
+    nxt = offset + limit
+    return jsonify({"ok": True, "dry": dry, "total": total, "next_offset": nxt if nxt < total else None, "items": out})
 
 
 @app.route("/api/records/<int:record_id>/montagem-undo", methods=["POST"])
