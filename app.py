@@ -3070,7 +3070,7 @@ def entry():
 
         existing = None
         if map_val and device_name:
-            dup_query = Record.query.filter(Record.map == map_val, Record.device == device_name)
+            dup_query = Record.query.filter(Record.map == map_val, _dev_norm_sql(Record.device) == _dev_norm(device_name))
             if company:
                 dup_query = dup_query.filter(Record.company == company)
             if project_id is not None:
@@ -3377,7 +3377,7 @@ def photo_entry():
         photo_is_can = bool(request.form.get("is_can"))
 
         # Determina empresa/projeto com base em um Record existente desse dispositivo.
-        base_query = Record.query.filter(Record.map == map_name, Record.device == device_name)
+        base_query = Record.query.filter(Record.map == map_name, _dev_norm_sql(Record.device) == _dev_norm(device_name))
         user_company = getattr(current_user, "company_name", None) or getattr(current_user, "default_company", None)
         if user_company:
             base_query = base_query.filter(Record.company == user_company)
@@ -7604,7 +7604,7 @@ def api_add_record_to_map(map_id):
     # Regra: um dispositivo não pode ser lançado duas vezes no mesmo mapa/projeto.
     existing = Record.query.filter(
         Record.map == mp.name,
-        Record.device == device_name,
+        _dev_norm_sql(Record.device) == _dev_norm(device_name),
         Record.company == mp.company,
     )
     if mp.project_id is not None:
@@ -8131,13 +8131,36 @@ def _save_photo_to_record(rec, raw_bytes, fname, content_type, is_test=False, is
         return False
 
 
+def _dev_norm(name) -> str:
+    """v125: nome do dispositivo sem hífen/espaço/ponto/underline e em maiúsculas (CC-13120 == CC13120 == cc 13120)."""
+    return re.sub(r"[^A-Z0-9]", "", str(name or "").upper())
+
+
+def _dev_norm_sql(col):
+    """Mesma normalização de _dev_norm, feita no banco (funciona em SQLite e PostgreSQL)."""
+    expr = db.func.trim(col)
+    for ch in ("-", "_", " ", ".", "/"):
+        expr = db.func.replace(expr, ch, "")
+    return db.func.upper(expr)
+
+
 def _find_record_by_name(device_name, map_name, company):
-    """Localiza Record pelo nome do device no mapa (case-insensitive)."""
+    """Localiza Record pelo nome do device no mapa (ignora maiúsc./hífen/espaço)."""
     rec = Record.query.filter(
         Record.map == map_name,
         Record.company == company,
         db.func.lower(db.func.trim(Record.device)) == device_name.strip().lower(),
     ).order_by(Record.id.asc()).first()
+    if not rec and _dev_norm(device_name):
+        # v125: CC13120 x CC-13120 → mesmo dispositivo. Prefere o que já tem lançamento.
+        cands = Record.query.filter(
+            Record.map == map_name,
+            Record.company == company,
+            _dev_norm_sql(Record.device) == _dev_norm(device_name),
+        ).order_by(Record.id.asc()).all()
+        if cands:
+            launched = [c for c in cands if (c.splicer or "").strip() or int(c.splices or 0) > 0]
+            rec = (launched or cands)[0]
     if not rec:
         rec = Record.query.filter(
             Record.map == map_name,
@@ -8581,6 +8604,13 @@ def auto_photo_global_launch():
         if user_company:
             q = q.filter(Record.company == user_company)
         candidates = q.all()
+
+        if not candidates and _dev_norm(device_name):
+            # v125: CC13120 x CC-13120
+            qn = Record.query.filter(_dev_norm_sql(Record.device) == _dev_norm(device_name))
+            if user_company:
+                qn = qn.filter(Record.company == user_company)
+            candidates = qn.all()
 
         if not candidates:
             # fallback contains
@@ -10539,6 +10569,75 @@ def api_map_bulk_device_info(map_id):
                 upd_spl += 1
     db.session.commit()
     return jsonify({"ok": True, "box_model_updated": upd_model, "splitter_updated": upd_spl, "not_found": not_found})
+
+
+@app.route("/api/maps/<int:map_id>/merge-duplicates", methods=["POST"])
+@admin_required
+def api_map_merge_duplicates(map_id):
+    """v125 — Junta dispositivos repetidos no mesmo mapa (CC13120 x CC-13120).
+
+    Mantém o registro com lançamento (mais fusões → mais fotos → mais novo) e leva para ele:
+    fotos, dados do mapa vazios (modelo, splitter, PON, FROM/OUT, endereço...), montagem, subida e teste.
+    Os outros registros do grupo são apagados (inclui lançamento repetido → evita cobrança dupla).
+    ?dry=1 só mostra o que faria.
+    """
+    mp = CompanyMap.query.get_or_404(map_id)
+    dry = request.args.get("dry") == "1"
+    q = Record.query.filter(Record.map == mp.name)
+    if mp.company:
+        q = q.filter(Record.company == mp.company)
+    groups = {}
+    for r in q.all():
+        k = _dev_norm(r.device)
+        if k:
+            groups.setdefault(k, []).append(r)
+    counts = _device_photo_counts([r.id for g in groups.values() if len(g) > 1 for r in g])
+
+    def _launched(r):
+        return bool((r.splicer or "").strip() and (r.splicer or "").strip().upper() != "ADMIN") \
+            or int(r.splices or 0) > 0 or float(r.total_usd or 0) > 0 or counts.get(r.id, 0) > 0
+
+    copy_fields = ["box_model", "splitter_name", "pon_name", "source_from", "source_out", "device_info",
+                   "geo_address", "section", "ote_label", "port_label", "ft_in", "ft_out"]
+    report = []
+    for k, grp in groups.items():
+        if len(grp) < 2:
+            continue
+        grp.sort(key=lambda r: (_launched(r), int(r.splices or 0), counts.get(r.id, 0), r.id), reverse=True)
+        keep, others = grp[0], grp[1:]
+        item = {"device": keep.device, "keep_id": keep.id, "removed": [
+            {"id": o.id, "device": o.device, "splicer": o.splicer or "", "splices": int(o.splices or 0),
+             "total_usd": float(o.total_usd or 0), "photos": counts.get(o.id, 0)} for o in others]}
+        report.append(item)
+        if dry:
+            continue
+        for o in others:
+            for f in copy_fields:
+                if not (getattr(keep, f, None) or "") and (getattr(o, f, None) or ""):
+                    setattr(keep, f, getattr(o, f))
+            if not keep.mont_done_at and o.mont_done_at:
+                keep.mont_done_at, keep.mont_done_by, keep.mont_list_id = o.mont_done_at, o.mont_done_by, o.mont_list_id
+            if not keep.is_placed and o.is_placed:
+                keep.is_placed, keep.placed_by, keep.placed_at = True, o.placed_by, o.placed_at
+            if not keep.test_done and o.test_done:
+                keep.test_done, keep.test_levels, keep.test_date = True, o.test_levels, o.test_date
+            if keep.latitude is None and o.latitude is not None:
+                keep.latitude, keep.longitude = o.latitude, o.longitude
+            RecordPhoto.query.filter(RecordPhoto.record_id == o.id).update(
+                {RecordPhoto.record_id: keep.id}, synchronize_session=False)
+            for lst in MontagemList.query.filter(MontagemList.map_id == mp.id).all():
+                ids = lst.record_ids()
+                if o.id in ids:
+                    new_ids = []
+                    for x in ids:
+                        x = keep.id if x == o.id else x
+                        if x not in new_ids:
+                            new_ids.append(x)
+                    lst.record_ids_json = json.dumps(new_ids)
+            db.session.delete(o)
+    if not dry:
+        db.session.commit()
+    return jsonify({"ok": True, "dry": dry, "groups": len(report), "items": report})
 
 
 @app.route("/api/records/<int:record_id>/montagem-undo", methods=["POST"])
