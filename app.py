@@ -10416,7 +10416,8 @@ def _mont_splitter_key(r):
     toks = re.findall(r"(\d+)-(\d+)", spl)
     has_split = bool(re.search(r"DC-|WAY", spl, re.I))
     group = 2 if has_split else (1 if "+" in spl else 0)
-    first = (int(toks[0][0]), int(toks[0][1])) if toks else (99, 99)
+    # v127: ordena pelo SEGUNDO número (ex.: Tap A 2-4 → 4), depois pelo primeiro
+    first = (int(toks[0][1]), int(toks[0][0])) if toks else (99, 99)
     dm = re.search(r"(\d+)", r.device or "")
     return (spl == "", group, first, spl.upper(), int(dm.group(1)) if dm else 0, r.device or "")
 
