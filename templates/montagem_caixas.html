@@ -1,0 +1,141 @@
+{% extends 'base.html' %}
+{% block title %}Caixas · Montagem · SPLICER{% endblock %}
+{% block content %}
+<style>
+  .m-card { background:#1e1e2e; border:1px solid #2a2a3e; border-radius:12px; }
+  .section-title { font-size:.7rem; text-transform:uppercase; letter-spacing:.1em; color:#6c757d; font-weight:600; margin-bottom:.75rem; }
+  .m-card .form-control, .m-card .form-select { background:#12121c !important; border-color:#2a2a3e !important; color:#ddd !important; }
+  .m-table { font-size:.85rem; --bs-table-bg:#1e1e2e; --bs-table-border-color:#2a2a3e; --bs-table-color:#ccc; }
+  .m-table th { font-size:.7rem; text-transform:uppercase; letter-spacing:.06em; color:#8b97ab; }
+  .btn-xs { font-size:.72rem; padding:.2rem .5rem; min-height:0 !important; }
+  .tabs a { text-decoration:none; padding:.5rem .9rem; border-radius:10px; color:#aab; border:1px solid #2a2a3e; font-size:.88rem; }
+  .tabs a.on { background:#22b8cf; color:#05222a; border-color:#22b8cf; font-weight:600; }
+  .tabs .cnt { display:inline-block; min-width:1.6em; text-align:center; border-radius:999px; background:rgba(0,0,0,.25); padding:0 .4em; margin-left:.3em; font-size:.75rem; }
+  .num { font-weight:700; font-size:1.05rem; color:#fbbf24; text-align:center; }
+  .dev { font-weight:700; color:#fff; }
+  .muted { color:#8b97ab; font-size:.75rem; }
+</style>
+
+<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+  <div>
+    <h4 class="mb-0 fw-semibold">📦 Caixas da montagem</h4>
+    <p class="text-secondary mb-0" style="font-size:.82rem;">O que falta montar e o que já está montado esperando o splicer</p>
+  </div>
+  <a href="{{ url_for('montagem_admin') }}" class="btn btn-sm btn-outline-secondary">← Montagem</a>
+</div>
+
+<div class="tabs d-flex gap-2 mb-3 flex-wrap">
+  <a href="{{ url_for('montagem_caixas', aba='pedidas', map=f.map_id or '', project=f.project_id or '') }}" class="{{ 'on' if aba=='pedidas' }}">🕒 Pedidas, não montadas <span class="cnt">{{ pedidas|length }}</span></a>
+  <a href="{{ url_for('montagem_caixas', aba='montadas', map=f.map_id or '', project=f.project_id or '', lat=f.lat or '', lng=f.lng or '') }}" class="{{ 'on' if aba=='montadas' }}">✅ Montadas, não feitas <span class="cnt">{{ montadas_count }}</span></a>
+</div>
+
+<!-- Filtros -->
+<div class="m-card p-3 mb-3">
+  <form method="get" class="row g-2 align-items-end" id="fForm">
+    <input type="hidden" name="aba" value="{{ aba }}">
+    <div class="col-6 col-md-4">
+      <label class="form-label small text-secondary mb-1">Mapa</label>
+      <select class="form-select form-select-sm" name="map">
+        <option value="">Todos</option>
+        {% for m in maps %}<option value="{{ m.id }}" {% if f.map_id == m.id %}selected{% endif %}>{{ m.name }}{% if not m.is_active %} (inativo){% endif %}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="col-6 col-md-3">
+      <label class="form-label small text-secondary mb-1">Projeto</label>
+      <select class="form-select form-select-sm" name="project">
+        <option value="">Todos</option>
+        {% for pr in projects %}<option value="{{ pr.id }}" {% if f.project_id == pr.id %}selected{% endif %}>{{ pr.name }} · {{ pr.company }}</option>{% endfor %}
+      </select>
+    </div>
+    {% if aba == 'montadas' %}
+    <div class="col-6 col-md-2">
+      <label class="form-label small text-secondary mb-1">Partida (lat)</label>
+      <input class="form-control form-control-sm" name="lat" id="lat" inputmode="decimal" value="{{ '%.6f'|format(f.lat) if f.lat is not none else '' }}">
+    </div>
+    <div class="col-6 col-md-2">
+      <label class="form-label small text-secondary mb-1">Partida (lng)</label>
+      <input class="form-control form-control-sm" name="lng" id="lng" inputmode="decimal" value="{{ '%.6f'|format(f.lng) if f.lng is not none else '' }}">
+    </div>
+    {% endif %}
+    <div class="col-12 col-md-1 d-flex">
+      <button class="btn btn-sm btn-outline-info flex-fill">Filtrar</button>
+    </div>
+  </form>
+  {% if aba == 'montadas' %}
+  <div class="d-flex gap-2 flex-wrap mt-2">
+    <button type="button" class="btn btn-sm btn-info" id="btnGeo">📍 Usar minha localização</button>
+    <a class="btn btn-sm btn-outline-light" target="_blank"
+       href="{{ url_for('montagem_caixas_pdf', map=f.map_id or '', project=f.project_id or '', lat=f.lat or '', lng=f.lng or '') }}">📄 Relatório PDF por proximidade</a>
+    <span class="muted align-self-center" id="geoMsg">{% if f.lat is not none %}Rota a partir do ponto informado.{% else %}Sem ponto de partida: a rota começa pela caixa mais ao norte.{% endif %}</span>
+  </div>
+  {% endif %}
+</div>
+
+{% if aba == 'pedidas' %}
+<div class="m-card p-3 mb-3">
+  <p class="section-title">Caixas em listas de montagem que ainda não foram montadas</p>
+  {% if pedidas %}
+  <div class="table-responsive"><table class="table table-sm table-dark m-table align-middle mb-0">
+    <thead><tr><th>Caixa</th><th>Mapa</th><th>Splitter</th><th>Modelo</th><th>Lista</th><th>Montador</th><th></th></tr></thead>
+    <tbody>
+    {% for d in pedidas %}{% set r = d.r %}
+      <tr>
+        <td class="dev">{{ r.device }}</td>
+        <td>{{ r.map }}</td>
+        <td>{{ r.splitter_name or '—' }}</td>
+        <td class="text-secondary">{{ r.box_model or r.type or '' }}</td>
+        <td>{% if d.list %}<a href="{{ url_for('montagem_list_view', list_id=d.list.id) }}">{{ d.list_code }}</a>
+            <div class="muted">{{ d.list.created_at.strftime('%d/%m/%Y') if d.list.created_at else '' }}</div>{% endif %}</td>
+        <td>{{ d.montador or '—' }}</td>
+        <td class="text-end">{% if gmaps_link(r) %}<a class="btn btn-xs btn-outline-info" target="_blank" href="{{ gmaps_link(r) }}">🗺️</a>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody></table></div>
+  {% else %}
+    <div class="text-center py-4 text-secondary small">Nenhuma caixa pedida esperando montagem. 👍</div>
+  {% endif %}
+</div>
+{% else %}
+<div class="m-card p-3 mb-3">
+  <p class="section-title">Montadas e ainda não feitas · ordem de proximidade</p>
+  {% if route %}
+  {% set last = route|selectattr('total_mi')|list %}
+  <div class="muted mb-2">{{ route|length }} caixa(s){% if last %} · rota aprox. {{ fmt_dist(last[-1].total_mi) }} (linha reta){% endif %}</div>
+  <div class="table-responsive"><table class="table table-sm table-dark m-table align-middle mb-0">
+    <thead><tr><th class="text-center">Nº</th><th>Caixa</th><th>Mapa / endereço</th><th>Splitter</th><th>Montada</th><th class="text-end">Do anterior</th><th class="text-end">Acum.</th><th></th></tr></thead>
+    <tbody>
+    {% for x in route %}{% set r = x.r %}
+      <tr>
+        <td class="num">{{ loop.index }}</td>
+        <td class="dev">{{ r.device }}</td>
+        <td>{{ r.map }}{% if r.geo_address %}<div class="muted">{{ r.geo_address }}</div>{% endif %}{% if not has_coords(r) %}<div class="text-danger small">sem coordenadas</div>{% endif %}</td>
+        <td>{{ r.splitter_name or '—' }}</td>
+        <td class="text-secondary small">{{ r.mont_done_at.strftime('%d/%m/%Y') if r.mont_done_at else '' }}{% if r.mont_done_by %}<div>{{ r.mont_done_by }}</div>{% endif %}</td>
+        <td class="text-end text-nowrap">{{ fmt_dist(x.step_mi) }}</td>
+        <td class="text-end text-nowrap text-secondary">{{ fmt_dist(x.total_mi) }}</td>
+        <td class="text-end">{% if gmaps_link(r) %}<a class="btn btn-xs btn-outline-info" target="_blank" href="{{ gmaps_link(r) }}">🗺️</a>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody></table></div>
+  {% else %}
+    <div class="text-center py-4 text-secondary small">Nenhuma caixa montada esperando o splicer com esses filtros.</div>
+  {% endif %}
+</div>
+<script>
+(function(){
+  var b = document.getElementById('btnGeo'); if (!b) return;
+  b.addEventListener('click', function(){
+    var msg = document.getElementById('geoMsg');
+    if (!navigator.geolocation) { msg.textContent = 'Este aparelho não fornece localização.'; return; }
+    msg.textContent = 'Pegando sua localização...';
+    navigator.geolocation.getCurrentPosition(function(p){
+      document.getElementById('lat').value = p.coords.latitude.toFixed(6);
+      document.getElementById('lng').value = p.coords.longitude.toFixed(6);
+      document.getElementById('fForm').submit();
+    }, function(e){ msg.textContent = 'Não consegui a localização (' + (e.message || 'permissão negada') + ').'; },
+    { enableHighAccuracy:true, timeout:15000, maximumAge:60000 });
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

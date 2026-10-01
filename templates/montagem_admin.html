@@ -19,6 +19,8 @@
     <p class="text-secondary mb-0" style="font-size:.82rem;">Produção dos montadores, valores por caixa e pagamento</p>
   </div>
   <div class="d-flex gap-2 flex-wrap">
+    <a href="{{ url_for('montagem_caixas', aba='pedidas') }}" class="btn btn-sm btn-outline-light">🕒 Pedidas não montadas</a>
+    <a href="{{ url_for('montagem_caixas', aba='montadas') }}" class="btn btn-sm btn-outline-success">✅ Montadas a fazer (proximidade)</a>
     <a href="#precos" class="btn btn-sm btn-outline-warning">$ Valor por caixa</a>
     <a href="{{ url_for('montagem_report_pdf', **request.args) }}" class="btn btn-sm btn-outline-info">📄 Relatório PDF</a>
     {% if user_filter %}

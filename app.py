@@ -11153,6 +11153,256 @@ def montagem_list_cancel(list_id):
     return redirect(url_for("montagem_admin"))
 
 
+
+# =====================================================================
+# v128 — CAIXAS PENDENTES DE MONTAGEM + RELATÓRIO POR PROXIMIDADE
+#   aba "pedidas":   caixas que estão em listas de montagem mas ainda não foram montadas
+#   aba "montadas":  caixas já montadas que o splicer ainda não fez (não lançadas),
+#                    em ordem de rota (vizinho mais próximo) a partir de um ponto de partida
+# Só leitura: não altera nenhum dado.
+# =====================================================================
+import math as _mmath
+
+
+def _record_is_lancado(r, n_device_photos=0) -> bool:
+    """Caixa já FEITA pelo splicer (lançada): tem fusões/valor/ribbon, splicer real ou foto de lançamento."""
+    if int(r.splices or 0) > 0 or float(r.total_usd or 0) > 0 or int(getattr(r, "ribbon_count", None) or 0) > 0:
+        return True
+    sp = (r.splicer or "").strip().upper()
+    if sp and sp != "ADMIN":
+        return True
+    return int(n_device_photos or 0) > 0
+
+
+def _mont_dist_mi(lat1, lon1, lat2, lon2) -> float:
+    R = 3958.7613  # raio da Terra em milhas
+    p1, p2 = _mmath.radians(lat1), _mmath.radians(lat2)
+    dp, dl = _mmath.radians(lat2 - lat1), _mmath.radians(lon2 - lon1)
+    a = _mmath.sin(dp / 2) ** 2 + _mmath.cos(p1) * _mmath.cos(p2) * _mmath.sin(dl / 2) ** 2
+    return 2 * R * _mmath.asin(min(1.0, _mmath.sqrt(a)))
+
+
+def _has_coords(r) -> bool:
+    try:
+        return r.latitude is not None and r.longitude is not None and \
+            abs(float(r.latitude)) > 0.0001 and abs(float(r.longitude)) > 0.0001
+    except Exception:
+        return False
+
+
+def _mont_route(recs, start_lat=None, start_lng=None):
+    """Ordena por proximidade (vizinho mais próximo). Retorna lista de dicts com distâncias.
+    Sem ponto de partida: começa pela caixa mais ao norte. Sem coordenadas: vão para o fim."""
+    with_c = [r for r in recs if _has_coords(r)]
+    without = sorted([r for r in recs if not _has_coords(r)], key=_mont_splitter_key)
+    out = []
+    if start_lat is not None and start_lng is not None:
+        cur = (float(start_lat), float(start_lng))
+    elif with_c:
+        first = max(with_c, key=lambda r: float(r.latitude))  # mais ao norte
+        cur = (float(first.latitude), float(first.longitude))
+    else:
+        cur = None
+    remaining = list(with_c)
+    total = 0.0
+    while remaining:
+        nxt = min(remaining, key=lambda r: _mont_dist_mi(cur[0], cur[1], float(r.latitude), float(r.longitude)))
+        d = _mont_dist_mi(cur[0], cur[1], float(nxt.latitude), float(nxt.longitude))
+        total += d
+        out.append({"r": nxt, "step_mi": d, "total_mi": total})
+        cur = (float(nxt.latitude), float(nxt.longitude))
+        remaining.remove(nxt)
+    for r in without:
+        out.append({"r": r, "step_mi": None, "total_mi": None})
+    return out
+
+
+def _fmt_dist(mi):
+    if mi is None:
+        return "—"
+    if mi < 0.19:
+        return f"{int(round(mi * 5280))} ft"
+    return f"{mi:.2f} mi"
+
+
+def _mont_pend_filters():
+    def _int(v):
+        v = (v or "").strip()
+        return int(v) if v.isdigit() else None
+
+    def _flt(v):
+        try:
+            v = float((v or "").strip())
+            return v if abs(v) > 0.0001 else None
+        except Exception:
+            return None
+    return {
+        "map_id": _int(request.args.get("map")),
+        "project_id": _int(request.args.get("project")),
+        "lat": _flt(request.args.get("lat")),
+        "lng": _flt(request.args.get("lng")),
+    }
+
+
+def _mont_pend_records_query(f):
+    q = Record.query.filter(or_(Record.is_active.is_(None), Record.is_active == True))
+    if f["map_id"]:
+        mp = CompanyMap.query.get(f["map_id"])
+        if mp:
+            q = q.filter(Record.map == mp.name)
+            if mp.company:
+                q = q.filter(Record.company == mp.company)
+    if f["project_id"]:
+        q = q.filter(Record.project_id == f["project_id"])
+    return q
+
+
+def _mont_pedidas(f):
+    """Caixas que estão em listas de montagem (não canceladas) e ainda não foram montadas."""
+    lists = MontagemList.query.filter(MontagemList.status != "cancelada").order_by(MontagemList.id).all()
+    rid_to_list = {}
+    for lst in lists:
+        for rid in lst.record_ids():
+            rid_to_list[rid] = lst  # a lista mais nova ganha
+    if not rid_to_list:
+        return []
+    recs = _mont_pend_records_query(f).filter(Record.id.in_(list(rid_to_list.keys()))).all()
+    counts = _device_photo_counts([r.id for r in recs])
+    out = []
+    for r in recs:
+        if _record_is_montada(r, counts.get(r.id, 0)):
+            continue
+        lst = rid_to_list.get(r.id)
+        out.append({"r": r, "list": lst, "list_code": _mont_list_code(lst) if lst else "",
+                    "montador": (lst.montador_name if lst else "") or ""})
+    out.sort(key=lambda d: ((d["r"].map or ""), _mont_splitter_key(d["r"])))
+    return out
+
+
+def _mont_montadas_nao_feitas(f):
+    """Caixas marcadas como montadas (mont_done_at) que ainda não foram lançadas pelo splicer."""
+    recs = _mont_pend_records_query(f).filter(Record.mont_done_at.isnot(None)).all()
+    counts = _device_photo_counts([r.id for r in recs])
+    return [r for r in recs if not _record_is_lancado(r, counts.get(r.id, 0))]
+
+
+def _gmaps_link(r):
+    if not _has_coords(r):
+        return ""
+    return f"https://www.google.com/maps/search/?api=1&query={float(r.latitude):.6f},{float(r.longitude):.6f}"
+
+
+@app.route("/admin/montagem/caixas")
+@admin_required
+def montagem_caixas():
+    f = _mont_pend_filters()
+    aba = request.args.get("aba") or "pedidas"
+    if aba not in ("pedidas", "montadas"):
+        aba = "pedidas"
+    pedidas = _mont_pedidas(f)
+    montadas = _mont_montadas_nao_feitas(f)
+    route = _mont_route(montadas, f["lat"], f["lng"]) if aba == "montadas" else []
+    maps_q = CompanyMap.query.order_by(CompanyMap.is_active.desc(), CompanyMap.name).all()
+    projects = Project.query.order_by(Project.name).all()
+    return render_template(
+        "montagem_caixas.html", aba=aba, f=f, pedidas=pedidas, montadas_count=len(montadas),
+        route=route, maps=maps_q, projects=projects, fmt_dist=_fmt_dist, gmaps_link=_gmaps_link,
+        has_coords=_has_coords,
+    )
+
+
+@app.route("/admin/montagem/caixas/montadas.pdf")
+@admin_required
+def montagem_caixas_pdf():
+    """Relatório PDF: caixas montadas e ainda não feitas, por ordem de proximidade."""
+    f = _mont_pend_filters()
+    route = _mont_route(_mont_montadas_nao_feitas(f), f["lat"], f["lng"])
+
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib import colors as rl_colors
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+    from xml.sax.saxutils import escape as _esc
+
+    C_DARK = rl_colors.HexColor("#111827"); C_GREY = rl_colors.HexColor("#6b7280")
+    C_LINE = rl_colors.HexColor("#9ca3af"); C_ALT = rl_colors.HexColor("#f3f4f6")
+    BASE = getSampleStyleSheet()["Normal"]
+
+    def PS(name, **kw):
+        d = dict(fontName="Helvetica", fontSize=9.5, textColor=C_DARK, leading=12, parent=BASE)
+        d.update(kw)
+        return ParagraphStyle(name, **d)
+
+    mp = CompanyMap.query.get(f["map_id"]) if f["map_id"] else None
+    pr = Project.query.get(f["project_id"]) if f["project_id"] else None
+    scope = " · ".join([x for x in [(mp.name if mp else ""), (pr.name if pr else "")] if x]) or "Todos os mapas"
+    start_txt = (f"Partida: {f['lat']:.5f}, {f['lng']:.5f}" if f["lat"] is not None and f["lng"] is not None
+                 else "Partida: primeira caixa da rota (sem localização informada)")
+    now = datetime.utcnow() - _m_timedelta(hours=4)
+
+    W = letter[0] - 24*mm
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter, leftMargin=12*mm, rightMargin=12*mm,
+                            topMargin=24*mm, bottomMargin=14*mm, title="Caixas montadas a fazer")
+
+    def _page(canv, d):
+        canv.saveState()
+        canv.setFont("Helvetica-Bold", 16); canv.setFillColor(C_DARK)
+        canv.drawString(12*mm, letter[1] - 14*mm, "CAIXAS MONTADAS A FAZER · POR PROXIMIDADE")
+        canv.setFont("Helvetica", 9); canv.setFillColor(C_GREY)
+        canv.drawRightString(letter[0] - 12*mm, letter[1] - 10*mm, scope[:70])
+        canv.drawRightString(letter[0] - 12*mm, letter[1] - 15*mm, f"Página {d.page}")
+        canv.setStrokeColor(C_DARK); canv.setLineWidth(1.2)
+        canv.line(12*mm, letter[1] - 18*mm, letter[0] - 12*mm, letter[1] - 18*mm)
+        canv.setFont("Helvetica", 7.5)
+        canv.drawString(12*mm, 8*mm, f"SPLICER · gerado em {now.strftime('%d/%m/%Y %H:%M')} · distâncias em linha reta")
+        canv.restoreState()
+
+    S_TH = PS("th", fontName="Helvetica-Bold", fontSize=8.5, textColor=rl_colors.white, alignment=TA_CENTER)
+    S_N = PS("n", fontName="Helvetica-Bold", fontSize=12, leading=14, alignment=TA_CENTER)
+    S_DEV = PS("d", fontName="Helvetica-Bold", fontSize=11.5, leading=13.5)
+    S_TXT = PS("t", fontSize=8.8, leading=10.8)
+    S_R = PS("r", fontSize=9, alignment=TA_RIGHT)
+
+    total_mi = max([x["total_mi"] for x in route if x["total_mi"] is not None] or [0])
+    story = [Paragraph(f"<b>{len(route)} caixa(s)</b> montadas e ainda não feitas · rota aprox. "
+                       f"<b>{_fmt_dist(total_mi)}</b> · {_esc(start_txt)}", PS("i", fontSize=9.5, textColor=C_GREY)),
+             Spacer(1, 4*mm)]
+    CW = [10*mm, 34*mm, 0, 34*mm, 22*mm, 20*mm]
+    CW[2] = W - sum(CW)
+    data = [[Paragraph(h, S_TH) for h in ["Nº", "CAIXA", "MAPA / ENDEREÇO", "SPLITTER", "DO ANTERIOR", "ACUM."]]]
+    for i, x in enumerate(route, start=1):
+        r = x["r"]
+        addr = (r.geo_address or "").strip()
+        place = f"<b>{_esc(r.map or '')}</b>" + (f"<br/>{_esc(addr)}" if addr else "")
+        if not _has_coords(r):
+            place += "<br/><font color='#b91c1c'>sem coordenadas</font>"
+        mont = f"<br/><font size='7.5' color='#6b7280'>montada {r.mont_done_at.strftime('%d/%m')}" + \
+               (f" · {_esc(r.mont_done_by)}" if r.mont_done_by else "") + "</font>" if r.mont_done_at else ""
+        data.append([Paragraph(str(i), S_N), Paragraph(_esc(r.device or "") + mont, S_DEV),
+                     Paragraph(place, S_TXT), Paragraph(_esc(r.splitter_name or "—"), S_TXT),
+                     Paragraph(_fmt_dist(x["step_mi"]), S_R), Paragraph(_fmt_dist(x["total_mi"]), S_R)])
+    t = Table(data, colWidths=CW, repeatRows=1)
+    ts = TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), C_DARK), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("GRID", (0, 0), (-1, -1), 0.6, C_LINE),
+        ("TOPPADDING", (0, 1), (-1, -1), 2.4*mm), ("BOTTOMPADDING", (0, 1), (-1, -1), 2.4*mm),
+        ("LEFTPADDING", (0, 0), (-1, -1), 2*mm), ("RIGHTPADDING", (0, 0), (-1, -1), 2*mm),
+    ])
+    for i in range(2, len(data), 2):
+        ts.add("BACKGROUND", (0, i), (-1, i), C_ALT)
+    t.setStyle(ts)
+    story.append(t)
+    if not route:
+        story += [Spacer(1, 6*mm), Paragraph("Nenhuma caixa montada pendente de fazer com esses filtros.", S_TXT)]
+    doc.build(story, onFirstPage=_page, onLaterPages=_page)
+    buf.seek(0)
+    return send_file(buf, mimetype="application/pdf", as_attachment=False,
+                     download_name=f"caixas_montadas_a_fazer_{now.strftime('%Y%m%d')}.pdf")
+
+
 @app.route('/__version')
 def __version__():
     return 'PHOTO-REMOVE-V49 2026-02-12'
