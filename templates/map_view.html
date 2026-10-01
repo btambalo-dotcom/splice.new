@@ -102,6 +102,8 @@
     .mv-mont-bar { background:rgba(255,152,0,.08); border:1px solid rgba(255,152,0,.45); border-radius:12px; padding:10px 12px; margin-bottom:10px; display:none; }
     .mv-mont-bar.on { display:block; }
     .mv-mont-bar .form-select { background:var(--mv-card); border-color:var(--mv-line); color:#e6ebf3; max-width:200px; }
+    .mont-filt.on { background:#ff9800 !important; border-color:#ff9800 !important; color:#1a1200 !important; font-weight:700; }
+    #montFiltList .mv-chip { cursor:pointer; }
     #montModeBtn.on { background:#ff9800; border-color:#ff9800; color:#1a1200; font-weight:700; }
     .mv-page #map { height:calc(100vh - 330px); min-height:460px; border-radius:14px; border:1px solid var(--mv-line); box-shadow:0 8px 30px rgba(0,0,0,.35); }
 
@@ -250,6 +252,16 @@
         <button type="button" class="btn btn-sm mv-btn-ghost" id="montExitBtn">Sair</button>
       </div>
     </div>
+    <div class="d-flex flex-wrap gap-2 align-items-center mt-2" id="montFilterRow">
+      <span class="mv-muted small">Ver no mapa:</span>
+      <button type="button" class="btn btn-sm mv-btn mont-filt on" data-f="">Todas</button>
+      <button type="button" class="btn btn-sm mv-btn mont-filt" data-f="req" style="border-color:#a855f7;">🕒 Pedidas, não montadas (<b id="montCntReq">0</b>)</button>
+      <button type="button" class="btn btn-sm mv-btn mont-filt" data-f="ready" style="border-color:#22c55e;">✅ Montadas, não feitas (<b id="montCntReady">0</b>)</button>
+      {% if current_user.is_admin %}
+      <a class="btn btn-sm mv-btn" href="{{ url_for('montagem_caixas', aba='montadas', map=map_obj.id) }}">📍 Rota por proximidade</a>
+      {% endif %}
+    </div>
+    <div id="montFiltList" class="small mt-2"></div>
     <div id="montMsg" class="small mt-2"></div>
     <div id="montOpenLists" class="small mt-1 mv-muted"></div>
   </div>
@@ -1377,6 +1389,18 @@ function buildDeviceIcon(rec) {
   var montRing = '';
   if (window._montMode) {
     if (rec.mont_done) montStyle = 'opacity:.35;';
+    // v129 — filtro: destaca as que batem, apaga as outras
+    var mf = window._montFilter || '';
+    if (mf) {
+      var hit = (mf === 'req') ? !!rec.mont_req_code : !!rec.mont_ready;
+      if (hit) {
+        var mc = (mf === 'req') ? '#a855f7' : '#22c55e';
+        montStyle = '';
+        montRing = '<div style="position:absolute;left:-6px;top:-4px;width:44px;height:44px;border-radius:50%;border:3px solid ' + mc + ';box-shadow:0 0 12px ' + mc + ';"></div>';
+      } else {
+        montStyle = 'opacity:.12;';
+      }
+    }
     if (montSel) montRing = '<div style="position:absolute;left:-6px;top:-4px;width:44px;height:44px;border-radius:50%;border:3px solid #ff9800;box-shadow:0 0 10px #ff9800;"></div>';
   }
   var html = '<div style="position:relative;width:32px;height:42px;overflow:visible;' + montStyle + '">'
@@ -1552,6 +1576,12 @@ if (rec.splitter_name) {
 }
 if (rec.box_model) {
   popupParts.push('<div class="small text-muted">Modelo: ' + rec.box_model + '</div>');
+}
+if (rec.mont_req_code) {
+  popupParts.push('<div class="small" style="color:#c084fc">🕒 Pedida para montar na lista <strong>' + rec.mont_req_code + '</strong> — ainda não montada</div>');
+}
+if (rec.mont_ready) {
+  popupParts.push('<div class="small" style="color:#4ade80">✅ Montada e ainda não feita pelo splicer</div>');
 }
 if (rec.mont_manual) {
   popupParts.push('<div class="small" style="color:#ffb74d">🧰 Montada por <strong>' + (rec.mont_done_by || '?') + '</strong>' +
@@ -2239,6 +2269,44 @@ function openDeviceModalById(id) {
       const pend = recs.filter(r => !r.mont_done).length;
       const info = document.getElementById('montPendingInfo');
       if (info) info.textContent = pend + ' caixa(s) pendente(s) de ' + recs.length + ' no mapa';
+      const cr = document.getElementById('montCntReq'); if (cr) cr.textContent = recs.filter(r => r.mont_req_code).length;
+      const cy = document.getElementById('montCntReady'); if (cy) cy.textContent = recs.filter(r => r.mont_ready).length;
+      renderMontFiltList();
+    }
+
+    // v129 — lista das caixas do filtro (toque para ir até a caixa no mapa)
+    function renderMontFiltList(){
+      const box = document.getElementById('montFiltList');
+      if (!box) return;
+      const mf = window._montFilter || '';
+      if (!mf || !window._montMode) { box.innerHTML = ''; return; }
+      const recs = (window._mapRecords || []).filter(r => mf === 'req' ? r.mont_req_code : r.mont_ready);
+      if (!recs.length) {
+        box.innerHTML = '<span class="mv-muted">' + (mf === 'req' ? 'Nenhuma caixa pedida esperando montagem neste mapa.' : 'Nenhuma caixa montada esperando o splicer neste mapa.') + '</span>';
+        return;
+      }
+      const esc2 = t => String(t || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+      box.innerHTML = recs.map(r => '<span class="mv-chip" onclick="montGoTo(' + r.id + ')" title="' + esc2(r.splitter_name) + '">'
+        + esc2(r.device) + (mf === 'req' && r.mont_req_code ? ' <span class="mv-muted">' + esc2(r.mont_req_code) + '</span>' : '') + '</span>').join(' ');
+    }
+
+    window.montGoTo = function(id){
+      const r = (window._mapRecords || []).find(x => x.id === id);
+      if (!r) return;
+      try { leafletMap.setView([r.lat, r.lng], Math.max(leafletMap.getZoom(), 18)); } catch(e) {}
+      const m = window._recordMarkers && window._recordMarkers.get(id);
+      if (m) { try { m.openPopup(); } catch(e) {} }
+    };
+
+    function setMontFilter(f){
+      window._montFilter = f || '';
+      document.querySelectorAll('.mont-filt').forEach(b => b.classList.toggle('on', (b.dataset.f || '') === window._montFilter));
+      refreshMontIcons();
+      if (window._montFilter) {
+        const pts = (window._mapRecords || []).filter(r => window._montFilter === 'req' ? r.mont_req_code : r.mont_ready)
+          .map(r => [r.lat, r.lng]);
+        if (pts.length) { try { leafletMap.fitBounds(pts, { padding: [40, 40], maxZoom: 18 }); } catch(e) {} }
+      }
     }
 
     window.toggleMontSelection = function(rec){
@@ -2303,7 +2371,8 @@ function openDeviceModalById(id) {
       const b = document.getElementById('montModeBtn');
       if (!b) return;
       b.addEventListener('click', () => setMontMode(!window._montMode));
-      document.getElementById('montExitBtn').addEventListener('click', () => setMontMode(false));
+      document.getElementById('montExitBtn').addEventListener('click', () => { window._montFilter = ''; setMontMode(false); setMontFilter(''); });
+      document.querySelectorAll('.mont-filt').forEach(b => b.addEventListener('click', () => setMontFilter(b.dataset.f || '')));
       document.getElementById('montClearBtn').addEventListener('click', () => { window._montSel.clear(); refreshMontIcons(); });
       document.getElementById('montSelAllBtn').addEventListener('click', () => {
         (window._mapRecords || []).forEach(r => { if (!r.mont_done) window._montSel.add(r.id); });

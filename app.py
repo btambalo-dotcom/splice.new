@@ -7098,6 +7098,17 @@ def api_map_records(map_id):
     # Apenas registros com latitude/longitude preenchidos
     query = query.filter(Record.latitude.isnot(None), Record.longitude.isnot(None))
 
+    # v129 — caixas pedidas em listas de montagem (não canceladas) deste mapa: {record_id: código da lista}
+    mont_req = {}
+    try:
+        for _l in MontagemList.query.filter(MontagemList.map_id == mp.id, MontagemList.status != "cancelada") \
+                .order_by(MontagemList.id).all():
+            for _rid in _l.record_ids():
+                mont_req[_rid] = _mont_list_code(_l)
+    except Exception:
+        db.session.rollback()
+        mont_req = {}
+
     data = []
     for r in query.order_by(Record.id.asc()).all():
         # Separamos miniaturas de lançamento e de teste para mostrar no popup do mapa
@@ -7145,6 +7156,10 @@ def api_map_records(map_id):
             "mont_done_by": getattr(r, 'mont_done_by', None) or '',
             "mont_done_at": r.mont_done_at.isoformat() if getattr(r, 'mont_done_at', None) else None,
         })
+        # v129 — pedida e ainda não montada / montada e ainda não feita pelo splicer
+        _d = data[-1]
+        _d["mont_req_code"] = mont_req.get(r.id, "") if not _d["mont_done"] else ""
+        _d["mont_ready"] = bool(getattr(r, 'mont_done_at', None)) and not _record_is_lancado(r, len(device_photos))
     return jsonify({"records": data})
 
 
