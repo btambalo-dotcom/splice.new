@@ -2388,12 +2388,7 @@ function openDeviceModalById(id) {
     function setMontFilter(f){
       window._montFilter = f || '';
       document.querySelectorAll('.mont-filt').forEach(b => b.classList.toggle('on', (b.dataset.f || '') === window._montFilter));
-      refreshMontIcons();
-      if (window._montFilter) {
-        const pts = (window._mapRecords || []).filter(r => window._montFilter === 'req' ? r.mont_req_code : r.mont_ready)
-          .map(r => [r.lat, r.lng]);
-        if (pts.length) { try { leafletMap.fitBounds(pts, { padding: [40, 40], maxZoom: 18 }); } catch(e) {} }
-      }
+      refreshMontIcons();   // v131: não mexe no zoom/posição do mapa
     }
 
     window.toggleMontSelection = function(rec){
