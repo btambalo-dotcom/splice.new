@@ -257,6 +257,7 @@
       <button type="button" class="btn btn-sm mv-btn mont-filt on" data-f="">Todas</button>
       <button type="button" class="btn btn-sm mv-btn mont-filt" data-f="req" style="border-color:#a855f7;">🕒 Pedidas, não montadas (<b id="montCntReq">0</b>)</button>
       <button type="button" class="btn btn-sm mv-btn mont-filt" data-f="ready" style="border-color:#22c55e;">✅ Montadas, não feitas (<b id="montCntReady">0</b>)</button>
+      <button type="button" class="btn btn-sm mv-btn mont-filt" data-f="none" style="border-color:#ef4444;">⭕ Não pedidas, não montadas (<b id="montCntNone">0</b>)</button>
       {% if current_user.is_admin %}
       <a class="btn btn-sm mv-btn" href="{{ url_for('montagem_caixas', aba='montadas', map=map_obj.id) }}">📍 Rota por proximidade</a>
       {% endif %}
@@ -1476,9 +1477,9 @@ function buildDeviceIcon(rec) {
     // v129 — filtro: destaca as que batem, apaga as outras
     var mf = window._montFilter || '';
     if (mf) {
-      var hit = (mf === 'req') ? !!rec.mont_req_code : !!rec.mont_ready;
+      var hit = montFilterHit(rec, mf);
       if (hit) {
-        var mc = (mf === 'req') ? '#a855f7' : '#22c55e';
+        var mc = ({ req: '#a855f7', ready: '#22c55e', none: '#ef4444' })[mf] || '#ff9800';
         montStyle = '';
         montRing = '<div style="position:absolute;left:-6px;top:-4px;width:44px;height:44px;border-radius:50%;border:3px solid ' + mc + ';box-shadow:0 0 12px ' + mc + ';"></div>';
       } else {
@@ -1499,6 +1500,15 @@ function buildDeviceIcon(rec) {
     popupAnchor: [0, -44]
   });
 }
+
+// v132 — filtros do "Ver no mapa" (modo montagem)
+function montFilterHit(rec, mf) {
+  if (mf === 'req')   return !!rec.mont_req_code;                       // pedida, não montada
+  if (mf === 'ready') return !!rec.mont_ready;                          // montada, não feita
+  if (mf === 'none')  return !rec.mont_done && !rec.mont_req_code;      // não pedida, não montada
+  return false;
+}
+window.montFilterHit = montFilterHit;
 
 function createTypeMarker(rec) {
   return L.marker([rec.lat, rec.lng], { icon: buildDeviceIcon(rec) });
@@ -2358,6 +2368,7 @@ function openDeviceModalById(id) {
       if (info) info.textContent = pend + ' caixa(s) pendente(s) de ' + recs.length + ' no mapa';
       const cr = document.getElementById('montCntReq'); if (cr) cr.textContent = recs.filter(r => r.mont_req_code).length;
       const cy = document.getElementById('montCntReady'); if (cy) cy.textContent = recs.filter(r => r.mont_ready).length;
+      const cn = document.getElementById('montCntNone'); if (cn) cn.textContent = recs.filter(r => montFilterHit(r, 'none')).length;
       renderMontFiltList();
     }
 
@@ -2367,9 +2378,11 @@ function openDeviceModalById(id) {
       if (!box) return;
       const mf = window._montFilter || '';
       if (!mf || !window._montMode) { box.innerHTML = ''; return; }
-      const recs = (window._mapRecords || []).filter(r => mf === 'req' ? r.mont_req_code : r.mont_ready);
+      const recs = (window._mapRecords || []).filter(r => montFilterHit(r, mf));
       if (!recs.length) {
-        box.innerHTML = '<span class="mv-muted">' + (mf === 'req' ? 'Nenhuma caixa pedida esperando montagem neste mapa.' : 'Nenhuma caixa montada esperando o splicer neste mapa.') + '</span>';
+        box.innerHTML = '<span class="mv-muted">' + ({ req: 'Nenhuma caixa pedida esperando montagem neste mapa.',
+          ready: 'Nenhuma caixa montada esperando o splicer neste mapa.',
+          none: 'Todas as caixas deste mapa já foram pedidas ou montadas.' })[mf] + '</span>';
         return;
       }
       const esc2 = t => String(t || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
