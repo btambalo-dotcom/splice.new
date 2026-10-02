@@ -21,7 +21,11 @@
     <h4 class="mb-0 fw-semibold">📦 Caixas da montagem</h4>
     <p class="text-secondary mb-0" style="font-size:.82rem;">O que falta montar e o que já está montado esperando o splicer</p>
   </div>
+  {% if current_user.is_admin %}
   <a href="{{ url_for('montagem_admin') }}" class="btn btn-sm btn-outline-secondary">← Montagem</a>
+  {% else %}
+  <a href="{{ url_for('my_maps') }}" class="btn btn-sm btn-outline-secondary">← Meus mapas</a>
+  {% endif %}
 </div>
 
 <div class="tabs d-flex gap-2 mb-3 flex-wrap">
@@ -84,7 +88,7 @@
         <td>{{ r.map }}</td>
         <td>{{ r.splitter_name or '—' }}</td>
         <td class="text-secondary">{{ r.box_model or r.type or '' }}</td>
-        <td>{% if d.list %}<a href="{{ url_for('montagem_list_view', list_id=d.list.id) }}">{{ d.list_code }}</a>
+        <td>{% if d.list %}{% if current_user.is_admin %}<a href="{{ url_for('montagem_list_view', list_id=d.list.id) }}">{{ d.list_code }}</a>{% else %}{{ d.list_code }}{% endif %}
             <div class="muted">{{ d.list.created_at.strftime('%d/%m/%Y') if d.list.created_at else '' }}</div>{% endif %}</td>
         <td>{{ d.montador or '—' }}</td>
         <td class="text-end">{% if gmaps_link(r) %}<a class="btn btn-xs btn-outline-info" target="_blank" href="{{ gmaps_link(r) }}">🗺️</a>{% endif %}</td>

@@ -161,6 +161,10 @@
     </div>
     <div class="mv-actions">
       <a href="{{ url_for('map_services', map_id=map_obj.id) }}" class="btn btn-sm mv-btn">Serviços</a>
+      {% set can_mont = current_user.is_admin or (current_user.can_montagem and not current_user.is_montador) %}
+      {% if can_mont and not current_user.is_admin %}
+      <button type="button" id="montModeBtn" class="btn btn-sm mv-btn" title="Ver situação da montagem das caixas">🧰 Montagem</button>
+      {% endif %}
       {% if current_user.is_admin %}
       <a href="{{ url_for('export_map_tests_report', map_id=map_obj.id) }}" class="btn btn-sm mv-btn" data-i18n="tests_report">Relatório testes</a>
       <button type="button" id="montModeBtn" class="btn btn-sm mv-btn" title="Selecionar caixas para o montador">🧰 Montagem</button>
@@ -238,17 +242,23 @@
   {# ---------- v123: resultado da busca por splitter ---------- #}
   <div id="splitterResults" class="mv-results" style="display:none;"></div>
 
-  {% if current_user.is_admin %}
-  {# ---------- v123: modo montagem ---------- #}
+  {% if can_mont %}
+  {# ---------- v123: modo montagem (v133: splicer liberado só visualiza) ---------- #}
   <div id="montBar" class="mv-mont-bar">
     <div class="d-flex flex-wrap align-items-center gap-2">
+      {% if current_user.is_admin %}
       <span><b>🧰 Modo montagem</b> — toque nas caixas para selecionar ·
         <b id="montCount">0</b> selecionada(s) · <span class="mv-muted" id="montPendingInfo"></span></span>
+      {% else %}
+      <span><b>🧰 Montagem</b> — escolha abaixo o que ver no mapa · <span class="mv-muted" id="montPendingInfo"></span></span>
+      {% endif %}
       <div class="ms-auto d-flex flex-wrap gap-2 align-items-center">
+        {% if current_user.is_admin %}
         <button type="button" class="btn btn-sm mv-btn" id="montSelAllBtn">Todas pendentes</button>
         <button type="button" class="btn btn-sm mv-btn" id="montClearBtn">Limpar</button>
         <select class="form-select form-select-sm" id="montMontador"><option value="">Montador (opcional)</option></select>
         <button type="button" class="btn btn-sm mv-btn-primary btn" id="montCreateBtn">📄 Gerar relatório</button>
+        {% endif %}
         <button type="button" class="btn btn-sm mv-btn-ghost" id="montExitBtn">Sair</button>
       </div>
     </div>
@@ -258,9 +268,7 @@
       <button type="button" class="btn btn-sm mv-btn mont-filt" data-f="req" style="border-color:#a855f7;">🕒 Pedidas, não montadas (<b id="montCntReq">0</b>)</button>
       <button type="button" class="btn btn-sm mv-btn mont-filt" data-f="ready" style="border-color:#22c55e;">✅ Montadas, não feitas (<b id="montCntReady">0</b>)</button>
       <button type="button" class="btn btn-sm mv-btn mont-filt" data-f="none" style="border-color:#ef4444;">⭕ Não pedidas, não montadas (<b id="montCntNone">0</b>)</button>
-      {% if current_user.is_admin %}
       <a class="btn btn-sm mv-btn" href="{{ url_for('montagem_caixas', aba='montadas', map=map_obj.id) }}">📍 Rota por proximidade</a>
-      {% endif %}
     </div>
     <div id="montFiltList" class="small mt-2"></div>
     <div id="montMsg" class="small mt-2"></div>
@@ -1817,7 +1825,7 @@ popupParts.push('</div>');
 const popupHtml = popupParts.join('');
               try { marker.bindPopup(popupHtml); } catch(e) {}
               marker.on('click', function () {
-                if (window._montMode) {
+                if (window._montMode && IS_ADMIN) {
                   const mk = this;
                   setTimeout(function(){ try { mk.closePopup(); } catch(e) {} }, 0);
                   toggleMontSelection(rec);
@@ -2468,6 +2476,7 @@ function openDeviceModalById(id) {
       b.addEventListener('click', () => setMontMode(!window._montMode));
       document.getElementById('montExitBtn').addEventListener('click', () => { window._montFilter = ''; setMontMode(false); setMontFilter(''); });
       document.querySelectorAll('.mont-filt').forEach(b => b.addEventListener('click', () => setMontFilter(b.dataset.f || '')));
+      if (!IS_ADMIN) return;   // v133: splicer liberado só visualiza (sem seleção/listas)
       document.getElementById('montClearBtn').addEventListener('click', () => { window._montSel.clear(); refreshMontIcons(); });
       document.getElementById('montSelAllBtn').addEventListener('click', () => {
         (window._mapRecords || []).forEach(r => { if (!r.mont_done) window._montSel.add(r.id); });

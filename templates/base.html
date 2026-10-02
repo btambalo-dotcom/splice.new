@@ -93,6 +93,9 @@
             <a href="{{ url_for('hour_entry') }}" class="btn btn-sm btn-outline-warning me-2">Horas</a>
             <a href="{{ url_for('expenses') }}" class="btn btn-sm btn-outline-light me-2" data-i18n="expenses">Despesas</a>
             {% endif %}
+            {% if not current_user.is_admin and current_user.can_montagem and not current_user.is_montador %}
+              <a href="{{ url_for('montagem_caixas', aba='pedidas') }}" class="btn btn-sm btn-outline-success me-2">🧰 Montagem</a>
+            {% endif %}
             {% if current_user.is_admin %}
               <a href="{{ url_for('settings') }}" class="btn btn-sm btn-outline-light me-2" data-i18n="settings">Configurações</a>
               <a href="{{ url_for('invoices_list') }}" class="btn btn-sm btn-outline-info me-2" data-i18n="invoices">Invoices</a>
@@ -197,6 +200,69 @@
           navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function () {});
         });
       }
+    </script>
+    <script>
+      // v133 — PDF no celular: o app abre em tela cheia e o PDF ficava sem opção de imprimir.
+      // No celular, o PDF é baixado e aparece uma janela com Imprimir/Compartilhar, Baixar e Abrir.
+      (function () {
+        var isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+          || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+          || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+        if (!isMobile) return;
+        var PDF_RE = /\/pdf(\?|$)|\.pdf(\?|$)/i;
+
+        function sheet(html) {
+          var old = document.getElementById('pdfSheet'); if (old) old.remove();
+          var d = document.createElement('div');
+          d.id = 'pdfSheet';
+          d.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.6);display:flex;align-items:flex-end;justify-content:center;';
+          d.innerHTML = '<div style="box-sizing:border-box;background:#151b2b;color:#e6ebf3;width:100%;max-width:520px;border-radius:16px 16px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom));box-shadow:0 -8px 30px rgba(0,0,0,.5);">' + html + '</div>';
+          d.addEventListener('click', function (e) { if (e.target === d) d.remove(); });
+          document.body.appendChild(d);
+          return d;
+        }
+        var BTN = 'box-sizing:border-box;display:block;width:100%;padding:13px;margin-top:10px;border-radius:12px;font-weight:600;font-size:1rem;text-align:center;text-decoration:none;border:0;';
+
+        document.addEventListener('click', async function (ev) {
+          var a = ev.target.closest('a[href]');
+          if (!a || a.hasAttribute('data-post') || a.hasAttribute('download') || a.hasAttribute('data-nopdf')) return;
+          var href = a.getAttribute('href') || '';
+          if (!PDF_RE.test(href.split('#')[0])) return;
+          var url = new URL(href, location.href);
+          if (url.origin !== location.origin) return;
+          ev.preventDefault();
+
+          sheet('<div style="text-align:center;padding:14px 0;">⏳ Gerando PDF...</div>');
+          var blob, name = 'relatorio.pdf';
+          try {
+            var res = await fetch(url.href, { credentials: 'same-origin' });
+            var ct = res.headers.get('Content-Type') || '';
+            if (!res.ok || ct.indexOf('pdf') < 0) { location.href = url.href; return; }
+            var cd = res.headers.get('Content-Disposition') || '';
+            var m = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+            if (m) name = decodeURIComponent(m[1]);
+            blob = await res.blob();
+          } catch (e) { location.href = url.href; return; }
+
+          var file = new File([blob], name, { type: 'application/pdf' });
+          var objUrl = URL.createObjectURL(blob);
+          var canShare = !!(navigator.canShare && navigator.canShare({ files: [file] }));
+          var d = sheet(
+            '<div style="font-weight:700;font-size:1.05rem;">📄 PDF pronto</div>'
+            + '<div style="font-size:.82rem;color:#8b97ab;margin-top:2px;word-break:break-all;">' + name + '</div>'
+            + (canShare ? '<button type="button" id="pdfShareBtn" style="' + BTN + 'background:#22b8cf;color:#05222a;">🖨️ Imprimir / Compartilhar</button>' : '')
+            + '<a id="pdfDlBtn" href="' + objUrl + '" download="' + name + '" style="' + BTN + 'background:' + (canShare ? '#26324a;color:#e6ebf3' : '#22b8cf;color:#05222a') + ';">⬇️ Baixar PDF</a>'
+            + '<a data-nopdf href="' + url.href + '" target="_blank" rel="noopener" style="' + BTN + 'background:#26324a;color:#e6ebf3;">↗️ Abrir PDF</a>'
+            + '<button type="button" id="pdfCloseBtn" style="' + BTN + 'background:transparent;color:#8b97ab;">Fechar</button>'
+            + '<div style="font-size:.75rem;color:#8b97ab;margin-top:8px;text-align:center;">No iPhone: Compartilhar → Imprimir. No Android: Compartilhar → impressora / Drive, ou Baixar e abrir no leitor de PDF → Imprimir.</div>'
+          );
+          var sb = d.querySelector('#pdfShareBtn');
+          if (sb) sb.addEventListener('click', function () {
+            navigator.share({ files: [file], title: name }).catch(function () {});
+          });
+          d.querySelector('#pdfCloseBtn').addEventListener('click', function () { d.remove(); });
+        }, true);
+      })();
     </script>
     {% block extra_js %}{% endblock %}
   </body>

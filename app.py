@@ -741,6 +741,8 @@ class User(UserMixin, db.Model):
     can_view_values = db.Column(db.Boolean, default=True, nullable=False)  # pode ver valores financeiros nos lançamentos
     # Montador: só lança caixas montadas e vê o próprio histórico (v122)
     is_montador = db.Column(db.Boolean, default=False, nullable=True)
+    # v133: splicer com acesso de VISUALIZAÇÃO à Montagem (modo montagem no mapa + rota por proximidade)
+    can_montagem = db.Column(db.Boolean, default=False, nullable=True)
 
     # Mapas interativos aos quais o usuário (splicer) tem acesso explícito.
     maps_with_access = db.relationship(
@@ -1329,6 +1331,7 @@ with app.app_context():
         _ensure_user_col("can_view_values",     "BOOLEAN", "TRUE")
         _ensure_user_col("is_master_owner",     "BOOLEAN", "FALSE")
         _ensure_user_col("is_montador",         "BOOLEAN", "FALSE")  # v122
+        _ensure_user_col("can_montagem",        "BOOLEAN", "FALSE")  # v133
     except Exception:
         pass
 
@@ -4995,6 +4998,9 @@ def manage_users():
         can_access_expenses = bool(request.form.get("can_access_expenses"))
         can_view_values = bool(request.form.get("can_view_values"))
         is_montador = bool(request.form.get("is_montador"))
+        can_montagem = bool(request.form.get("can_montagem"))  # v133
+        if is_montador or is_admin:
+            can_montagem = False
         if is_montador:
             # Montador é um papel exclusivo: sem admin, sem empresa, sem despesas
             is_admin = False
@@ -5017,6 +5023,7 @@ def manage_users():
             user.can_access_expenses = can_access_expenses
             user.can_view_values = can_view_values
             user.is_montador = is_montador
+            user.can_montagem = can_montagem
         else:
             user = User(
                 username=username,
@@ -5029,6 +5036,7 @@ def manage_users():
                 can_access_expenses=can_access_expenses,
                 can_view_values=can_view_values,
                 is_montador=is_montador,
+                can_montagem=can_montagem,
             )
             db.session.add(user)
         db.session.commit()
@@ -5087,6 +5095,20 @@ def user_delete(uid: int):
     db.session.delete(user)
     db.session.commit()
     flash("Usuário removido.", "success")
+    return redirect(url_for("manage_users"))
+
+
+@app.route("/users/<int:uid>/toggle_montagem", methods=["POST"])
+@admin_required
+def user_toggle_montagem(uid: int):
+    """v133: liga/desliga o acesso do splicer à Montagem (só visualização)."""
+    user = User.query.get_or_404(uid)
+    if user.is_admin or getattr(user, "is_montador", False):
+        flash("Admin já tem acesso total; Montador usa a própria tela de Montagem.", "warning")
+        return redirect(url_for("manage_users"))
+    user.can_montagem = not bool(getattr(user, "can_montagem", False))
+    db.session.commit()
+    flash(f"Acesso à Montagem de {user.splicer_name or user.username}: {'LIGADO' if user.can_montagem else 'desligado'}.", "success")
     return redirect(url_for("manage_users"))
 
 
@@ -11179,6 +11201,35 @@ def montagem_list_cancel(list_id):
 import math as _mmath
 
 
+def _can_view_montagem(u=None) -> bool:
+    """Admin ou splicer liberado (can_montagem). Montador não entra aqui."""
+    u = u or current_user
+    if not getattr(u, "is_authenticated", False):
+        return False
+    if getattr(u, "is_admin", False):
+        return True
+    return bool(getattr(u, "can_montagem", False)) and not bool(getattr(u, "is_montador", False))
+
+
+def montagem_view_required(f):
+    @wraps(f)
+    @login_required
+    def wrapper(*args, **kwargs):
+        if not _can_view_montagem():
+            flash("Você não tem acesso à Montagem. Peça ao administrador para liberar.", "danger")
+            return redirect(url_for("index"))
+        return f(*args, **kwargs)
+    return wrapper
+
+
+def _mont_visible_maps():
+    """Mapas que o usuário pode ver (mesma regra do ensure_map_access)."""
+    maps = CompanyMap.query.order_by(CompanyMap.is_active.desc(), CompanyMap.name).all()
+    if getattr(current_user, "is_admin", False) or getattr(current_user, "is_company_owner", False):
+        return maps
+    return [m for m in maps if not m.allowed_splicers or current_user in m.allowed_splicers]
+
+
 def _record_is_lancado(r, n_device_photos=0) -> bool:
     """Caixa já FEITA pelo splicer (lançada): tem fusões/valor/ribbon, splicer real ou foto de lançamento."""
     if int(r.splices or 0) > 0 or float(r.total_usd or 0) > 0 or int(getattr(r, "ribbon_count", None) or 0) > 0:
@@ -11260,13 +11311,23 @@ def _mont_pend_filters():
 
 
 def _mont_pend_records_query(f):
+    from sqlalchemy import and_ as _and, false as _false
     q = Record.query.filter(or_(Record.is_active.is_(None), Record.is_active == True))
+    is_adm = bool(getattr(current_user, "is_admin", False))
+    visible = None if is_adm else _mont_visible_maps()
     if f["map_id"]:
         mp = CompanyMap.query.get(f["map_id"])
+        if mp and visible is not None and mp not in visible:
+            abort(403)
         if mp:
             q = q.filter(Record.map == mp.name)
             if mp.company:
                 q = q.filter(Record.company == mp.company)
+    elif visible is not None:
+        # v133: splicer liberado só enxerga os mapas a que tem acesso
+        conds = [(_and(Record.map == m.name, Record.company == m.company) if m.company else (Record.map == m.name))
+                 for m in visible]
+        q = q.filter(or_(*conds)) if conds else q.filter(_false())
     if f["project_id"]:
         q = q.filter(Record.project_id == f["project_id"])
     return q
@@ -11308,7 +11369,7 @@ def _gmaps_link(r):
 
 
 @app.route("/admin/montagem/caixas")
-@admin_required
+@montagem_view_required
 def montagem_caixas():
     f = _mont_pend_filters()
     aba = request.args.get("aba") or "pedidas"
@@ -11317,8 +11378,12 @@ def montagem_caixas():
     pedidas = _mont_pedidas(f)
     montadas = _mont_montadas_nao_feitas(f)
     route = _mont_route(montadas, f["lat"], f["lng"]) if aba == "montadas" else []
-    maps_q = CompanyMap.query.order_by(CompanyMap.is_active.desc(), CompanyMap.name).all()
-    projects = Project.query.order_by(Project.name).all()
+    maps_q = _mont_visible_maps()
+    if getattr(current_user, "is_admin", False):
+        projects = Project.query.order_by(Project.name).all()
+    else:
+        _pids = {m.project_id for m in maps_q if m.project_id}
+        projects = Project.query.filter(Project.id.in_(_pids)).order_by(Project.name).all() if _pids else []
     return render_template(
         "montagem_caixas.html", aba=aba, f=f, pedidas=pedidas, montadas_count=len(montadas),
         route=route, maps=maps_q, projects=projects, fmt_dist=_fmt_dist, gmaps_link=_gmaps_link,
@@ -11327,7 +11392,7 @@ def montagem_caixas():
 
 
 @app.route("/admin/montagem/caixas/montadas.pdf")
-@admin_required
+@montagem_view_required
 def montagem_caixas_pdf():
     """Relatório PDF: caixas montadas e ainda não feitas, por ordem de proximidade."""
     f = _mont_pend_filters()

@@ -141,6 +141,17 @@
             </label>
           </div>
 
+          <div class="perm-row" id="row_montagem">
+            <div>
+              <div class="perm-label">🧰 Acesso à Montagem</div>
+              <div class="perm-sub">Ver no mapa caixas pedidas, montadas e a fazer + rota por proximidade (só visualizar)</div>
+            </div>
+            <label class="toggle-wrap">
+              <input type="checkbox" name="can_montagem" id="perm_montagem" value="1">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
           <div class="perm-row" id="row_values">
             <div>
               <div class="perm-label">Visualizar valores ($)</div>
@@ -210,6 +221,10 @@
                         title="{% if u.can_access_expenses %}Despesas: habilitado{% else %}Despesas: bloqueado{% endif %}">💰</span>
                   <span class="perm-icon {% if u.can_view_values or u.can_view_values is none %}perm-on{% else %}perm-off{% endif %}"
                         title="{% if u.can_view_values or u.can_view_values is none %}Valores: visíveis{% else %}Valores: ocultos{% endif %}">$</span>
+                  {% if not u.is_montador %}
+                  <span class="perm-icon {% if u.can_montagem %}perm-on{% else %}perm-off{% endif %}"
+                        title="{% if u.can_montagem %}Montagem: liberada{% else %}Montagem: bloqueada{% endif %}">🧰</span>
+                  {% endif %}
                 {% endif %}
               </td>
 
@@ -242,6 +257,13 @@
 
               <td class="text-end">
                 <div class="d-flex gap-1 justify-content-end">
+                  {% if not u.is_admin and not u.is_montador %}
+                    <form method="post" action="{{ url_for('user_toggle_montagem', uid=u.id) }}" style="display:inline;">
+                      <button type="submit" class="btn btn-sm {% if u.can_montagem %}btn-success{% else %}btn-outline-secondary{% endif %}"
+                              style="font-size:.68rem; padding:.18rem .45rem; line-height:1.4;"
+                              title="{% if u.can_montagem %}Tirar acesso à Montagem{% else %}Liberar acesso à Montagem{% endif %}">🧰</button>
+                    </form>
+                  {% endif %}
                   {% if u.username != 'admin' %}
                     <form method="post" action="{{ url_for('user_toggle_active', uid=u.id) }}" style="display:inline;">
                       {% if u.is_active or u.is_active is none %}
@@ -278,6 +300,7 @@
         <span><span class="perm-icon perm-off" style="display:inline-flex;">💰</span> Despesas off</span>
         <span><span class="perm-icon perm-on" style="display:inline-flex;">$</span> Valores visíveis</span>
         <span><span class="perm-icon perm-off" style="display:inline-flex;">$</span> Valores ocultos</span>
+        <span><span class="perm-icon perm-on" style="display:inline-flex;">🧰</span> Montagem liberada (toque no botão 🧰 da linha para ligar/desligar)</span>
       </div>
 
       {% else %}
@@ -309,6 +332,12 @@ function syncRole() {
 
   const rowExp = document.getElementById('row_expenses');
   const rowVal = document.getElementById('row_values');
+  const rowMont = document.getElementById('row_montagem');
+  if (rowMont) {
+    const off = isAdmin || isMont;
+    rowMont.style.display = off ? 'none' : '';
+    if (off) document.getElementById('perm_montagem').checked = false;
+  }
 
   if (isAdmin) {
     document.getElementById('perm_section').style.opacity = '.35';
