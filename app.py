@@ -10812,6 +10812,75 @@ def api_map_reread_splices(map_id):
     return jsonify({"ok": True, "dry": dry, "total": total, "next_offset": nxt if nxt < total else None, "items": out})
 
 
+@app.route("/api/maps/<int:map_id>/fill-zero-splices", methods=["POST"])
+@admin_required
+def api_map_fill_zero_splices(map_id):
+    """v134 — Caixas JÁ LANÇADAS neste mapa com 0 fusões passam a ter N fusões (padrão 2).
+
+    Lançada = tem splicer (que não seja ADMIN) ou foto de lançamento.
+    Ribbon não é alterado. ?dry=1 só mostra a lista. Recalcula valor de fusões,
+    códigos de cobrança e total com a mesma regra do lançamento; o valor do
+    dispositivo já lançado é mantido.
+    """
+    mp = CompanyMap.query.get_or_404(map_id)
+    dry = request.args.get("dry") == "1"
+    try:
+        new_val = int(request.args.get("value", 2) or 2)
+    except Exception:
+        new_val = 2
+    if new_val < 1 or new_val > 288:
+        return jsonify({"ok": False, "error": "Número de fusões inválido."}), 400
+
+    q = Record.query.filter(Record.map == mp.name)
+    if mp.company:
+        q = q.filter(Record.company == mp.company)
+    q = q.filter(or_(Record.splices.is_(None), Record.splices == 0))
+    recs = q.order_by(Record.id.asc()).all()
+    counts = _device_photo_counts([r.id for r in recs])
+
+    included_override = None
+    out, changed, total_before, total_after = [], 0, 0.0, 0.0
+    for r in recs:
+        sp = (r.splicer or "").strip()
+        lancado = (sp and sp.upper() != "ADMIN") or counts.get(r.id, 0) > 0
+        if not lancado:
+            continue
+        type_val = (r.type or "OTE").strip() or "OTE"
+        is_rib, _ = device_is_ribbon(type_val, r.company, r.project_id)
+        if is_rib or int(getattr(r, "ribbon_count", None) or 0) > 0:
+            out.append({"id": r.id, "device": r.device, "splicer": sp, "status": "ribbon (não alterado)"})
+            continue
+        included_override, included_applied, _ = resolve_included_override(
+            company=r.company, project_id=r.project_id, map_obj=mp, map_val=mp.name, map_role=r.map_role)
+        price_role = r.map_role if bool(getattr(mp, "mid_end_enabled", False)) else None
+        ps, pd, _tot = compute_prices(splices=new_val, device_name=type_val, company=r.company,
+                                      project_id=r.project_id, included_override=included_override,
+                                      map_role=price_role, ribbon_count=None)
+        keep_dev = float(r.price_device_usd or 0)   # mantém o valor do dispositivo já lançado
+        new_total = round(float(ps or 0) + keep_dev, 2)
+        old_total = float(r.total_usd or 0)
+        item = {"id": r.id, "device": r.device, "splicer": sp, "old": int(r.splices or 0), "new": new_val,
+                "old_total": round(old_total, 2), "new_total": new_total,
+                "status": "simulado" if dry else "corrigido"}
+        if not dry:
+            bc = compute_billing_codes(new_val, type_val, r.company, r.project_id, map_role=price_role, ribbon_count=None)
+            app.logger.info("[v134 fill-zero-splices] map=%s rec=%s device=%s splices 0->%s total %.2f->%.2f by %s",
+                            mp.name, r.id, r.device, new_val, old_total, new_total, current_user.username)
+            r.splices = new_val
+            r.price_splices_usd = ps
+            r.total_usd = new_total
+            r.included_splices_applied = included_applied
+            r.billing_codes_json = json.dumps(bc, ensure_ascii=False) if bc else None
+        changed += 1
+        total_before += old_total
+        total_after += new_total
+        out.append(item)
+    if not dry:
+        db.session.commit()
+    return jsonify({"ok": True, "dry": dry, "value": new_val, "count": changed,
+                    "total_before": round(total_before, 2), "total_after": round(total_after, 2), "items": out})
+
+
 @app.route("/api/records/<int:record_id>/montagem-undo", methods=["POST"])
 @admin_required
 def api_record_montagem_undo(record_id):

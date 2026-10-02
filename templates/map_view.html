@@ -374,6 +374,28 @@
 
       <div class="accordion-item">
         <h2 class="accordion-header">
+          <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#mvZeroSp">
+            Caixas lançadas com 0 fusões
+          </button>
+        </h2>
+        <div id="mvZeroSp" class="accordion-collapse collapse" data-bs-parent="#mvToolsAcc">
+          <div class="accordion-body">
+            <div class="mv-tool">
+              <div class="mv-tool-help">Caixas já lançadas neste mapa (com splicer ou foto) que estão com <b>0 fusões</b> passam a ter o número abaixo. O valor é recalculado com a regra do projeto. Ribbon não é alterado.</div>
+              <div class="input-group input-group-sm mb-2">
+                <span class="input-group-text bg-dark text-light border-secondary">Fusões</span>
+                <input type="number" min="1" max="288" value="2" id="zeroSpValue" class="form-control bg-dark text-light border-secondary">
+              </div>
+              <button type="button" class="btn btn-outline-info btn-sm w-100 mb-2" id="zeroSpDryBtn">1) Ver quais caixas (simular)</button>
+              <button type="button" class="btn btn-warning btn-sm w-100" id="zeroSpApplyBtn" style="color:#000" disabled>2) Aplicar</button>
+              <div id="zeroSpOut" class="small mt-2"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="accordion-item">
+        <h2 class="accordion-header">
           <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#mvPons">
             <span data-i18n="pon_colors">Cores dos PONs</span>
           </button>
@@ -2509,6 +2531,42 @@ function openDeviceModalById(id) {
           this.disabled = false;
         }
       });
+    });
+
+    // v134 — caixas lançadas com 0 fusões → N fusões
+    document.addEventListener('DOMContentLoaded', function(){
+      const dryBtn = document.getElementById('zeroSpDryBtn');
+      if (!dryBtn) return;
+      const applyBtn = document.getElementById('zeroSpApplyBtn');
+      const out = document.getElementById('zeroSpOut');
+      const base = "{{ url_for('api_map_fill_zero_splices', map_id=map_obj.id) if current_user.is_admin else '' }}";
+      const esc3 = t => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+      let lastVal = null;
+      async function run(dry){
+        const v = parseInt(document.getElementById('zeroSpValue').value || '2', 10);
+        if (!dry) {
+          if (lastVal !== v) { out.innerHTML = '<span class="text-warning">Simule primeiro com esse número.</span>'; return; }
+          if (!confirm('Colocar ' + v + ' fusões nas caixas listadas e recalcular os valores?')) return;
+        }
+        dryBtn.disabled = true; applyBtn.disabled = true;
+        out.textContent = dry ? 'Procurando...' : 'Aplicando...';
+        try {
+          const r = await fetch(base + '?value=' + v + (dry ? '&dry=1' : ''), { method: 'POST' });
+          const d = await r.json();
+          if (!d.ok) { out.innerHTML = '<span class="text-danger">' + esc3(d.error || 'Erro') + '</span>'; return; }
+          const rows = d.items.filter(i => i.new).map(i => '<div>' + esc3(i.device) + ' <span class="text-secondary">' + esc3(i.splicer) + '</span> · 0 → <b>' + i.new + '</b> · $ ' + i.old_total.toFixed(2) + ' → $ ' + i.new_total.toFixed(2) + '</div>').join('');
+          const rib = d.items.filter(i => !i.new).map(i => '<div class="text-secondary">' + esc3(i.device) + ' · ' + esc3(i.status) + '</div>').join('');
+          out.innerHTML = '<div class="mb-1"><b>' + d.count + '</b> caixa(s) ' + (d.dry ? 'vão mudar' : 'corrigidas ✔') + ' · total $ ' + d.total_before.toFixed(2) + ' → $ ' + d.total_after.toFixed(2) + '</div>'
+            + '<div style="max-height:260px;overflow:auto;">' + rows + rib + '</div>';
+          if (d.dry) { lastVal = v; applyBtn.disabled = d.count === 0; }
+          else { lastVal = null; try { loadMarkers(); } catch(e) {} }
+        } catch(e) {
+          out.innerHTML = '<span class="text-danger">Erro de conexão.</span>';
+        } finally { dryBtn.disabled = false; }
+      }
+      dryBtn.addEventListener('click', () => run(true));
+      applyBtn.addEventListener('click', () => run(false));
+      document.getElementById('zeroSpValue').addEventListener('input', () => { applyBtn.disabled = true; });
     });
 
     document.addEventListener('DOMContentLoaded', initMap);
