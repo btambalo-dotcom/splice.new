@@ -713,10 +713,94 @@ const IS_ADMIN = {{ "true" if current_user.is_admin else "false" }};
       }).addTo(leafletMap);
 
       markersLayer.addTo(leafletMap);
-      loadMarkers();
+      loadMarkers();   // abre já enquadrado nos dispositivos do mapa
 
-      // Após carregar o mapa, tenta mostrar a localização atual do usuário (GPS)
-      tryLocateUser(true);
+      // v130 — botão de GPS (minha localização, segue enquanto anda)
+      addGpsControl();
+    }
+
+    // ===================== v130: GPS AO VIVO =====================
+    // 1º toque: liga o GPS, dá zoom em você e o mapa vai seguindo enquanto você anda.
+    // Se arrastar o mapa, para de seguir (o ponto azul continua). Toque de novo: volta a seguir.
+    // Toque com ele seguindo: desliga o GPS.
+    window._gpsFollow = false;
+    let _gpsWatchId = null, _gpsDot = null, _gpsAcc = null, _gpsBtn = null, _gpsFirstFix = false, _gpsAutoPan = false;
+
+    function _gpsSetBtn(state){
+      if (!_gpsBtn) return;
+      const st = { off: ['#ffffff', '#555', 'Mostrar minha localização'],
+                   wait: ['#fff7e0', '#ff9800', 'Procurando GPS...'],
+                   follow: ['#1a73e8', '#ffffff', 'Seguindo você (toque para desligar)'],
+                   show: ['#e8f0fe', '#1a73e8', 'Toque para centralizar em você'] }[state];
+      _gpsBtn.style.background = st[0]; _gpsBtn.style.color = st[1]; _gpsBtn.title = st[2];
+    }
+
+    function _gpsStop(){
+      if (_gpsWatchId !== null) { try { navigator.geolocation.clearWatch(_gpsWatchId); } catch(e) {} }
+      _gpsWatchId = null; window._gpsOn = false; window._gpsFollow = false; _gpsFirstFix = false;
+      if (_gpsDot) { leafletMap.removeLayer(_gpsDot); _gpsDot = null; }
+      if (_gpsAcc) { leafletMap.removeLayer(_gpsAcc); _gpsAcc = null; }
+      _gpsSetBtn('off');
+    }
+
+    function _gpsOnPos(pos){
+      const ll = [pos.coords.latitude, pos.coords.longitude];
+      const acc = Math.min(pos.coords.accuracy || 30, 500);
+      if (!_gpsDot) {
+        _gpsAcc = L.circle(ll, { radius: acc, color: '#1a73e8', weight: 1, fillColor: '#1a73e8', fillOpacity: .12, interactive: false }).addTo(leafletMap);
+        _gpsDot = L.circleMarker(ll, { radius: 8, color: '#ffffff', weight: 3, fillColor: '#1a73e8', fillOpacity: 1 })
+          .bindPopup('Você está aqui').addTo(leafletMap);
+      } else {
+        _gpsDot.setLatLng(ll); _gpsAcc.setLatLng(ll); _gpsAcc.setRadius(acc);
+      }
+      try { _gpsDot.bringToFront(); } catch(e) {}
+      if (!_gpsFirstFix) {
+        _gpsFirstFix = true; window._gpsFollow = true;
+        _gpsAutoPan = true; leafletMap.setView(ll, Math.max(leafletMap.getZoom(), 18)); setTimeout(() => _gpsAutoPan = false, 600);
+        _gpsSetBtn('follow');
+      } else if (window._gpsFollow) {
+        _gpsAutoPan = true; leafletMap.panTo(ll, { animate: true }); setTimeout(() => _gpsAutoPan = false, 600);
+      }
+    }
+
+    function _gpsToggle(){
+      if (!navigator.geolocation) { alert('Este aparelho/navegador não fornece localização.'); return; }
+      if (_gpsWatchId !== null && window._gpsFollow) { _gpsStop(); return; }
+      if (_gpsWatchId !== null && _gpsDot) {           // GPS ligado mas não seguindo → recentraliza e segue
+        window._gpsFollow = true; _gpsSetBtn('follow');
+        _gpsAutoPan = true; leafletMap.setView(_gpsDot.getLatLng(), Math.max(leafletMap.getZoom(), 18)); setTimeout(() => _gpsAutoPan = false, 600);
+        return;
+      }
+      _gpsSetBtn('wait');
+      window._gpsOn = true;
+      _gpsWatchId = navigator.geolocation.watchPosition(_gpsOnPos, function(err){
+        if (err && err.code === 1) { alert('Permita o acesso à localização para este site nas configurações do navegador.'); _gpsStop(); }
+        else if (!_gpsFirstFix) { _gpsSetBtn('wait'); }
+      }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 20000 });
+    }
+
+    function addGpsControl(){
+      const Ctl = L.Control.extend({
+        options: { position: 'topleft' },
+        onAdd: function(){
+          const wrap = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+          const a = L.DomUtil.create('a', '', wrap);
+          a.href = '#'; a.setAttribute('role', 'button');
+          a.style.cssText = 'width:34px;height:34px;line-height:34px;display:flex;align-items:center;justify-content:center;';
+          a.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">'
+            + '<circle cx="12" cy="12" r="4" fill="currentColor"/><circle cx="12" cy="12" r="8"/>'
+            + '<line x1="12" y1="1" x2="12" y2="4"/><line x1="12" y1="20" x2="12" y2="23"/><line x1="1" y1="12" x2="4" y2="12"/><line x1="20" y1="12" x2="23" y2="12"/></svg>';
+          L.DomEvent.disableClickPropagation(wrap);
+          L.DomEvent.on(a, 'click', function(e){ L.DomEvent.preventDefault(e); _gpsToggle(); });
+          _gpsBtn = a; _gpsSetBtn('off');
+          return wrap;
+        }
+      });
+      new Ctl().addTo(leafletMap);
+      // Arrastou o mapa com o dedo/mouse → para de seguir (o ponto continua aparecendo)
+      leafletMap.on('dragstart', function(){
+        if (window._gpsFollow && !_gpsAutoPan) { window._gpsFollow = false; _gpsSetBtn('show'); }
+      });
     }
 
 
@@ -1745,7 +1829,10 @@ const popupHtml = popupParts.join('');
             if (focusLatLng) {
               leafletMap.setView(focusLatLng, 18);
               currentFocusRecordId = null;
+            } else if (window._gpsFollow || (window._mapFittedOnce && window._gpsOn)) {
+              // v130: GPS ligado — não tira o mapa de onde você está
             } else if (fitBounds.length) {
+              window._mapFittedOnce = true;
               leafletMap.fitBounds(fitBounds, { padding: [20, 20] });
             }
           }
