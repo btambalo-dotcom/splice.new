@@ -143,6 +143,36 @@
   {% endif %}
 </div>
 
+<!-- Pedidos de material (v135) -->
+<div class="m-card p-3 mb-3" id="material">
+  <p class="section-title">📦 Pedidos de material</p>
+  {% if mat_requests %}
+  <div class="table-responsive">
+    <table class="table table-sm table-dark m-table align-middle mb-0">
+      <thead><tr><th>Pedido</th><th>Mapa</th><th>Criado</th><th class="text-center">Caixas</th><th>Por</th><th></th></tr></thead>
+      <tbody>
+      {% for m in mat_requests %}
+        <tr>
+          <td class="fw-semibold">{{ m.code or ('MAT-%04d' % m.id) }}</td>
+          <td>{{ m.map_name }}{% if m.notes %}<div class="text-secondary small">{{ m.notes }}</div>{% endif %}</td>
+          <td>{{ m.created_at.strftime('%d/%m/%Y') if m.created_at else '' }}</td>
+          <td class="text-center">{{ m.record_ids()|length }}</td>
+          <td class="text-secondary">{{ m.created_by_name or '' }}</td>
+          <td class="text-end text-nowrap">
+            <a class="btn btn-outline-warning btn-xs" target="_blank" href="{{ url_for('material_request_pdf', mid=m.id) }}">PDF</a>
+            <a class="btn btn-outline-danger btn-xs" href="#" data-post="{{ url_for('material_request_cancel', mid=m.id) }}"
+               data-confirm="Cancelar o pedido {{ m.code }}?">✕</a>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="text-secondary" style="font-size:.85rem;">Nenhum pedido ainda. No mapa: <b>🧰 Montagem</b> → selecione as caixas → <b>📦 Pedido de material</b>.</div>
+  {% endif %}
+</div>
+
 <!-- Lançamentos -->
 <div class="m-card p-3 mb-3">
   <p class="section-title">Lançamentos</p>

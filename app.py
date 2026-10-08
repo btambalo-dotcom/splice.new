@@ -10151,6 +10151,7 @@ def montagem_admin():
         start=start, end=end, user_filter=user_filter, project_filter=project_filter,
         today_iso=date.today().isoformat(),
         mont_lists=_montagem_lists_for(None, limit=40),
+        mat_requests=_material_requests_recent(30),
     )
 
 
@@ -11550,6 +11551,287 @@ def montagem_caixas_pdf():
     buf.seek(0)
     return send_file(buf, mimetype="application/pdf", as_attachment=False,
                      download_name=f"caixas_montadas_a_fazer_{now.strftime('%Y%m%d')}.pdf")
+
+
+
+# =====================================================================
+# v135 — PEDIDO DE MATERIAL (seleciona caixas no mapa → PDF com splitters e caixas a pedir)
+# Só cria a tabela material_request (se não existir). Não altera nenhum dado existente.
+# =====================================================================
+class MaterialRequest(db.Model):
+    __tablename__ = "material_request"
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(30), nullable=True, index=True)
+    map_id = db.Column(db.Integer, nullable=True, index=True)
+    map_name = db.Column(db.String(200), nullable=True)
+    company = db.Column(db.String(120), nullable=True)
+    project_id = db.Column(db.Integer, nullable=True)
+    record_ids_json = db.Column(db.Text, nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    status = db.Column(db.String(20), nullable=False, default="aberto")  # aberto | cancelado
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_by = db.Column(db.Integer, nullable=True)
+    created_by_name = db.Column(db.String(120), nullable=True)
+
+    def record_ids(self):
+        try:
+            return [int(x) for x in json.loads(self.record_ids_json or "[]")]
+        except Exception:
+            return []
+
+
+with app.app_context():
+    try:
+        MaterialRequest.__table__.create(bind=db.engine, checkfirst=True)
+    except Exception:
+        db.session.rollback()
+
+
+def _mat_code(m) -> str:
+    return m.code or f"MAT-{m.id:04d}"
+
+
+def _mat_split_parts(spl: str):
+    """'Tap A 2-4 + 4-8' → ['Tap 2-4', '4-8']; 'DC-5 + 2-Way' → ['DC-5', '2-Way']."""
+    spl = (spl or "").strip()
+    if not spl:
+        return []
+    out = []
+    for p in re.split(r"\s*\+\s*|\s*/\s*(?=[A-Za-z])|\s*,\s*", spl):
+        p = re.sub(r"\s+", " ", p).strip(" -;|")
+        if not p:
+            continue
+        p = re.sub(r"^tap\s+[A-Z]\s+(?=\d)", "Tap ", p, flags=re.I)      # Tap A 4-12 → Tap 4-12
+        p = re.sub(r"^tap\b", "Tap", p, flags=re.I)
+        p = re.sub(r"(\d)\s*[xX]\s*(\d)", r"\1x\2", p)
+        p = re.sub(r"(\d)\s*-\s*(\d)", r"\1-\2", p)
+        p = re.sub(r"\bway\b", "Way", p, flags=re.I)
+        p = re.sub(r"^dc\b", "DC", p, flags=re.I)
+        # 'Tap 2-4 + 4-8' → a segunda peça também é Tap
+        if out and out[-1].startswith("Tap ") and re.fullmatch(r"\d+-\d+", p):
+            p = "Tap " + p
+        out.append(p)
+    return out
+
+
+def _mat_part_sort(name):
+    nums = [int(x) for x in re.findall(r"\d+", name)]
+    kind = 0 if name.upper().startswith("TAP") else (1 if "DC" in name.upper() else 2)
+    return (kind, nums[1] if len(nums) > 1 else (nums[0] if nums else 999), nums, name.upper())
+
+
+def _mat_summary(recs):
+    parts, models, combos = {}, {}, {}
+    no_spl = []
+    for r in recs:
+        model = (getattr(r, "box_model", None) or "").strip() or ((r.type or "OTE").strip() + " (sem modelo)")
+        models[model] = models.get(model, 0) + 1
+        spl = (r.splitter_name or "").strip()
+        if not spl:
+            no_spl.append(r)
+            continue
+        combos[spl] = combos.get(spl, 0) + 1
+        for p in _mat_split_parts(spl):
+            parts[p] = parts.get(p, 0) + 1
+    return {
+        "parts": sorted(parts.items(), key=lambda kv: _mat_part_sort(kv[0])),
+        "models": sorted(models.items(), key=lambda kv: (-kv[1], kv[0])),
+        "combos": sorted(combos.items(), key=lambda kv: (-kv[1], kv[0])),
+        "no_splitter": no_spl,
+        "boxes": len(recs),
+        "parts_total": sum(parts.values()),
+    }
+
+
+@app.route("/api/maps/<int:map_id>/material", methods=["POST"])
+@admin_required
+def api_map_material_create(map_id):
+    mp = CompanyMap.query.get_or_404(map_id)
+    payload = request.get_json(silent=True) or {}
+    try:
+        ids = list({int(x) for x in (payload.get("record_ids") or [])})
+    except Exception:
+        return jsonify({"ok": False, "error": "Seleção inválida."}), 400
+    if not ids:
+        return jsonify({"ok": False, "error": "Selecione pelo menos uma caixa."}), 400
+    q = Record.query.filter(Record.id.in_(ids), Record.map == mp.name)
+    if mp.company:
+        q = q.filter(Record.company == mp.company)
+    recs = q.all()
+    if not recs:
+        return jsonify({"ok": False, "error": "Nenhuma caixa válida deste mapa."}), 400
+    recs.sort(key=_mont_splitter_key)
+    m = MaterialRequest(map_id=mp.id, map_name=mp.name, company=mp.company, project_id=mp.project_id,
+                        record_ids_json=json.dumps([r.id for r in recs]),
+                        notes=(str(payload.get("notes") or "").strip()[:500] or None),
+                        status="aberto", created_at=datetime.utcnow(), created_by=current_user.id,
+                        created_by_name=(getattr(current_user, "splicer_name", None) or current_user.username))
+    db.session.add(m)
+    db.session.flush()
+    m.code = f"MAT-{m.id:04d}"
+    db.session.commit()
+    s = _mat_summary(recs)
+    return jsonify({"ok": True, "id": m.id, "code": m.code, "count": len(recs),
+                    "parts": s["parts"], "models": s["models"], "no_splitter": len(s["no_splitter"]),
+                    "pdf": url_for("material_request_pdf", mid=m.id)})
+
+
+@app.route("/api/maps/<int:map_id>/material/list")
+@admin_required
+def api_map_material_list(map_id):
+    rows = MaterialRequest.query.filter(MaterialRequest.map_id == map_id, MaterialRequest.status != "cancelado") \
+        .order_by(MaterialRequest.id.desc()).limit(15).all()
+    return jsonify({"ok": True, "items": [{"id": m.id, "code": _mat_code(m), "count": len(m.record_ids()),
+                                           "date": (m.created_at or datetime.utcnow()).strftime("%d/%m"),
+                                           "pdf": url_for("material_request_pdf", mid=m.id)} for m in rows]})
+
+
+@app.route("/material/<int:mid>/cancelar", methods=["POST"])
+@admin_required
+def material_request_cancel(mid):
+    m = MaterialRequest.query.get_or_404(mid)
+    m.status = "cancelado"
+    db.session.commit()
+    flash(f"Pedido de material {_mat_code(m)} cancelado.", "success")
+    return redirect(_safe_next(request.args.get("next")) or url_for("montagem_admin") + "#material")
+
+
+def _material_requests_recent(limit=30):
+    return MaterialRequest.query.filter(MaterialRequest.status != "cancelado") \
+        .order_by(MaterialRequest.id.desc()).limit(limit).all()
+
+
+@app.route("/material/<int:mid>/pdf")
+@admin_required
+def material_request_pdf(mid):
+    m = MaterialRequest.query.get_or_404(mid)
+    ids = m.record_ids()
+    recs = Record.query.filter(Record.id.in_(ids)).all() if ids else []
+    recs.sort(key=_mont_splitter_key)
+    s = _mat_summary(recs)
+    code = _mat_code(m)
+    pr = Project.query.get(m.project_id) if m.project_id else None
+
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib import colors as rl_colors
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+    from xml.sax.saxutils import escape as _esc
+
+    C_DARK = rl_colors.HexColor("#111827"); C_GREY = rl_colors.HexColor("#6b7280")
+    C_LINE = rl_colors.HexColor("#9ca3af"); C_ALT = rl_colors.HexColor("#f3f4f6")
+    C_HL = rl_colors.HexColor("#fde68a")
+    BASE = getSampleStyleSheet()["Normal"]
+
+    def PS(name, **kw):
+        d = dict(fontName="Helvetica", fontSize=9.5, textColor=C_DARK, leading=12, parent=BASE)
+        d.update(kw)
+        return ParagraphStyle(name, **d)
+
+    S_H = PS("h", fontName="Helvetica-Bold", fontSize=12, leading=15, spaceBefore=4, spaceAfter=4, keepWithNext=1)
+    S_TH = PS("th", fontName="Helvetica-Bold", fontSize=8.5, textColor=rl_colors.white)
+    S_THC = PS("thc", fontName="Helvetica-Bold", fontSize=8.5, textColor=rl_colors.white, alignment=TA_CENTER)
+    S_TXT = PS("t", fontSize=9.5)
+    S_BIG = PS("b", fontName="Helvetica-Bold", fontSize=11.5, leading=14)
+    S_QTY = PS("q", fontName="Helvetica-Bold", fontSize=13, leading=15, alignment=TA_CENTER)
+    S_SM = PS("sm", fontSize=8.5, leading=10.5, textColor=C_GREY)
+
+    W = letter[0] - 24*mm
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter, leftMargin=12*mm, rightMargin=12*mm,
+                            topMargin=24*mm, bottomMargin=14*mm, title=f"Pedido de material {code}")
+    created = (m.created_at or datetime.utcnow()) - _m_timedelta(hours=4)
+
+    def _page(canv, d):
+        canv.saveState()
+        canv.setFont("Helvetica-Bold", 18); canv.setFillColor(C_DARK)
+        canv.drawString(12*mm, letter[1] - 14*mm, f"PEDIDO DE MATERIAL {code}")
+        canv.setFont("Helvetica", 9); canv.setFillColor(C_GREY)
+        canv.drawRightString(letter[0] - 12*mm, letter[1] - 10*mm, f"MAPA {m.map_name or ''}")
+        canv.drawRightString(letter[0] - 12*mm, letter[1] - 15*mm, f"Página {d.page}")
+        canv.setStrokeColor(C_DARK); canv.setLineWidth(1.2)
+        canv.line(12*mm, letter[1] - 18*mm, letter[0] - 12*mm, letter[1] - 18*mm)
+        canv.setFont("Helvetica", 7.5)
+        canv.drawString(12*mm, 8*mm, f"SPLICER · {code} · {created.strftime('%d/%m/%Y %H:%M')} · {m.created_by_name or ''}")
+        canv.restoreState()
+
+    def _table(header, rows, widths, center_cols=(), total=None):
+        data = [[Paragraph(h, S_THC if i in center_cols else S_TH) for i, h in enumerate(header)]] + rows
+        if total:
+            data.append(total)
+        t = Table(data, colWidths=widths, repeatRows=1)
+        ts = TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), C_DARK), ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("GRID", (0, 0), (-1, -1), 0.6, C_LINE),
+            ("TOPPADDING", (0, 1), (-1, -1), 2.2*mm), ("BOTTOMPADDING", (0, 1), (-1, -1), 2.2*mm),
+            ("LEFTPADDING", (0, 0), (-1, -1), 2*mm), ("RIGHTPADDING", (0, 0), (-1, -1), 2*mm),
+        ])
+        for i in range(2, len(data), 2):
+            ts.add("BACKGROUND", (0, i), (-1, i), C_ALT)
+        if total:
+            ts.add("BACKGROUND", (0, len(data) - 1), (-1, len(data) - 1), C_HL)
+        t.setStyle(ts)
+        return t
+
+    story = []
+    info = Table([[
+        Paragraph(f"<b>Projeto:</b> {_esc((pr.name if pr else '') or '—')} · {_esc(m.company or '')}", S_TXT),
+        Paragraph(f"<b>Caixas:</b> {s['boxes']}", S_TXT),
+        Paragraph(f"<b>Data:</b> {created.strftime('%d/%m/%Y')}", S_TXT),
+    ]], colWidths=[W*0.56, W*0.2, W*0.24])
+    info.setStyle(TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 0)]))
+    story += [info]
+    if m.notes:
+        story += [Spacer(1, 2*mm), Paragraph(f"<b>Obs.:</b> {_esc(m.notes)}", S_TXT)]
+    story += [Spacer(1, 5*mm)]
+
+    # 1) Splitters (peças)
+    story.append(Paragraph("1. SPLITTERS A PEDIR", S_H))
+    if s["parts"]:
+        rows = [[Paragraph(_esc(n), S_BIG), Paragraph(str(q), S_QTY)] for n, q in s["parts"]]
+        story.append(_table(["SPLITTER", "QTD"], rows, [W - 30*mm, 30*mm], center_cols=(1,),
+                            total=[Paragraph("<b>TOTAL DE SPLITTERS</b>", S_TXT), Paragraph(str(s["parts_total"]), S_QTY)]))
+    else:
+        story.append(Paragraph("Nenhuma caixa selecionada tem splitter cadastrado.", S_TXT))
+    if s["no_splitter"]:
+        story += [Spacer(1, 2*mm), Paragraph(
+            f"<font color='#b91c1c'><b>Atenção:</b> {len(s['no_splitter'])} caixa(s) sem splitter cadastrado: "
+            + _esc(", ".join((r.device or "?") for r in s["no_splitter"][:60]))
+            + (" ..." if len(s["no_splitter"]) > 60 else "") + "</font>", S_SM)]
+    story += [Spacer(1, 5*mm)]
+
+    # 2) Caixas por modelo
+    story.append(Paragraph("2. CAIXAS A PEDIR (POR MODELO)", S_H))
+    rows = [[Paragraph(_esc(n), S_BIG), Paragraph(str(q), S_QTY)] for n, q in s["models"]]
+    story.append(_table(["MODELO DA CAIXA", "QTD"], rows, [W - 30*mm, 30*mm], center_cols=(1,),
+                        total=[Paragraph("<b>TOTAL DE CAIXAS</b>", S_TXT), Paragraph(str(s["boxes"]), S_QTY)]))
+    story += [Spacer(1, 5*mm)]
+
+    # 3) Combinações (como vai em cada caixa)
+    if s["combos"]:
+        story.append(Paragraph("3. CONFIGURAÇÃO POR CAIXA (SPLITTER COMPLETO)", S_H))
+        rows = [[Paragraph(_esc(n), S_TXT), Paragraph(str(q), S_QTY)] for n, q in s["combos"]]
+        story.append(_table(["SPLITTER DA CAIXA", "CAIXAS"], rows, [W - 30*mm, 30*mm], center_cols=(1,)))
+        story += [Spacer(1, 5*mm)]
+
+    # 4) Lista das caixas
+    story.append(Paragraph("4. LISTA DAS CAIXAS", S_H))
+    rows = []
+    for n, r in enumerate(recs, start=1):
+        model = (getattr(r, "box_model", None) or "").strip() or (r.type or "OTE")
+        rows.append([Paragraph(str(n), S_TXT), Paragraph(f"<b>{_esc(r.device or '')}</b>", S_TXT),
+                     Paragraph(_esc(model), S_TXT), Paragraph(_esc(r.splitter_name or "—"), S_TXT),
+                     Paragraph(_esc(r.pon_name or ""), S_TXT)])
+    CW = [10*mm, 34*mm, 44*mm, 0, 24*mm]
+    CW[3] = W - sum(CW)
+    story.append(_table(["Nº", "CAIXA", "MODELO", "SPLITTER", "PON"], rows, CW))
+
+    doc.build(story, onFirstPage=_page, onLaterPages=_page)
+    buf.seek(0)
+    return send_file(buf, mimetype="application/pdf", as_attachment=False,
+                     download_name=f"pedido_material_{code}_{(m.map_name or '').replace(' ', '_')}.pdf")
 
 
 @app.route('/__version')

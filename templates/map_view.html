@@ -258,6 +258,7 @@
         <button type="button" class="btn btn-sm mv-btn" id="montClearBtn">Limpar</button>
         <select class="form-select form-select-sm" id="montMontador"><option value="">Montador (opcional)</option></select>
         <button type="button" class="btn btn-sm mv-btn-primary btn" id="montCreateBtn">📄 Gerar relatório</button>
+        <button type="button" class="btn btn-sm btn-warning" id="matCreateBtn" style="color:#1a1200;font-weight:600;">📦 Pedido de material</button>
         {% endif %}
         <button type="button" class="btn btn-sm mv-btn-ghost" id="montExitBtn">Sair</button>
       </div>
@@ -270,9 +271,13 @@
       <button type="button" class="btn btn-sm mv-btn mont-filt" data-f="none" style="border-color:#ef4444;">⭕ Não pedidas, não montadas (<b id="montCntNone">0</b>)</button>
       <a class="btn btn-sm mv-btn" href="{{ url_for('montagem_caixas', aba='montadas', map=map_obj.id) }}">📍 Rota por proximidade</a>
     </div>
+    {% if current_user.is_admin %}
+    <div class="mt-1"><button type="button" class="btn btn-sm mv-btn" id="montSelFiltBtn" style="display:none;">☑️ Selecionar as caixas deste filtro</button></div>
+    {% endif %}
     <div id="montFiltList" class="small mt-2"></div>
     <div id="montMsg" class="small mt-2"></div>
     <div id="montOpenLists" class="small mt-1 mv-muted"></div>
+    <div id="matOpenLists" class="small mt-1 mv-muted"></div>
   </div>
   {% endif %}
 
@@ -2431,17 +2436,16 @@ function openDeviceModalById(id) {
     function setMontFilter(f){
       window._montFilter = f || '';
       document.querySelectorAll('.mont-filt').forEach(b => b.classList.toggle('on', (b.dataset.f || '') === window._montFilter));
+      const sfb = document.getElementById('montSelFiltBtn'); if (sfb) sfb.style.display = window._montFilter ? '' : 'none';
       refreshMontIcons();   // v131: não mexe no zoom/posição do mapa
     }
 
     window.toggleMontSelection = function(rec){
       const msg = document.getElementById('montMsg');
-      if (rec.mont_done) {
-        if (msg) msg.innerHTML = '<span class="text-success">' + (rec.device || '') + ' já está pronta/lançada — não entra no relatório.</span>';
-        return;
-      }
       if (window._montSel.has(rec.id)) window._montSel.delete(rec.id); else window._montSel.add(rec.id);
-      if (msg) msg.textContent = '';
+      // v135: caixa já montada/lançada pode ser selecionada (entra no pedido de material, não na lista do montador)
+      if (msg) msg.innerHTML = (rec.mont_done && window._montSel.has(rec.id))
+        ? '<span class="text-info">' + (rec.device || '') + ' já está pronta/lançada — entra só no pedido de material.</span>' : '';
       const m = window._recordMarkers && window._recordMarkers.get(rec.id);
       if (m) { try { m.setIcon(buildDeviceIcon(rec)); } catch(e) {} }
       updateMontBar();
@@ -2499,6 +2503,54 @@ function openDeviceModalById(id) {
       document.getElementById('montExitBtn').addEventListener('click', () => { window._montFilter = ''; setMontMode(false); setMontFilter(''); });
       document.querySelectorAll('.mont-filt').forEach(b => b.addEventListener('click', () => setMontFilter(b.dataset.f || '')));
       if (!IS_ADMIN) return;   // v133: splicer liberado só visualiza (sem seleção/listas)
+
+      // v135 — seleciona todas as caixas do filtro ativo
+      document.getElementById('montSelFiltBtn').addEventListener('click', () => {
+        const mf = window._montFilter || '';
+        if (!mf) return;
+        (window._mapRecords || []).forEach(r => { if (montFilterHit(r, mf)) window._montSel.add(r.id); });
+        refreshMontIcons();
+      });
+
+      // v135 — pedido de material
+      const matListUrl = "{{ url_for('api_map_material_list', map_id=map_obj.id) if current_user.is_admin else '' }}";
+      const matCreateUrl = "{{ url_for('api_map_material_create', map_id=map_obj.id) if current_user.is_admin else '' }}";
+      async function loadMatLists(){
+        try {
+          const d = await fetch(matListUrl).then(r => r.json());
+          const el = document.getElementById('matOpenLists');
+          if (el) el.innerHTML = (d.items || []).length
+            ? 'Pedidos de material: ' + d.items.map(i => '<a target="_blank" href="' + i.pdf + '" class="link-warning">' + i.code + '</a> (' + i.count + ' · ' + i.date + ')').join(' · ')
+            : '';
+        } catch(e) {}
+      }
+      document.getElementById('montModeBtn').addEventListener('click', () => { if (window._montMode) loadMatLists(); });
+      document.getElementById('matCreateBtn').addEventListener('click', async function(){
+        const ids = Array.from(window._montSel);
+        const msg = document.getElementById('montMsg');
+        if (!ids.length) { msg.innerHTML = '<span class="text-warning">Selecione as caixas no mapa (toque nelas, use "Todas pendentes" ou um filtro + "Selecionar as caixas deste filtro").</span>'; return; }
+        const notes = prompt('Pedido de material com ' + ids.length + ' caixa(s).\nObservação (opcional):', '');
+        if (notes === null) return;
+        this.disabled = true;
+        try {
+          const resp = await fetch(matCreateUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ record_ids: ids, notes: notes }) });
+          const d = await resp.json();
+          if (!d.ok) { msg.innerHTML = '<span class="text-danger">' + (d.error || 'Erro ao gerar.') + '</span>'; return; }
+          const parts = (d.parts || []).map(p => '<b>' + p[1] + '×</b> ' + p[0]).join(' · ');
+          const models = (d.models || []).map(p => '<b>' + p[1] + '×</b> ' + p[0]).join(' · ');
+          msg.innerHTML = '<div class="text-success">✔ Pedido <b>' + d.code + '</b> criado com ' + d.count + ' caixa(s).</div>'
+            + '<div class="mt-1">Splitters: ' + (parts || '<span class="mv-muted">nenhum cadastrado</span>') + '</div>'
+            + '<div>Caixas: ' + models + '</div>'
+            + (d.no_splitter ? '<div class="text-warning">' + d.no_splitter + ' caixa(s) sem splitter cadastrado.</div>' : '')
+            + '<a class="btn btn-sm btn-warning mt-2" target="_blank" href="' + d.pdf + '">📄 Abrir PDF do pedido</a>';
+          window._montSel.clear();
+          refreshMontIcons();
+          loadMatLists();
+        } catch(e) {
+          msg.innerHTML = '<span class="text-danger">Erro de conexão.</span>';
+        } finally { this.disabled = false; }
+      });
       document.getElementById('montClearBtn').addEventListener('click', () => { window._montSel.clear(); refreshMontIcons(); });
       document.getElementById('montSelAllBtn').addEventListener('click', () => {
         (window._mapRecords || []).forEach(r => { if (!r.mont_done) window._montSel.add(r.id); });
