@@ -11250,6 +11250,132 @@ def montagem_list_confirm(list_id):
     return redirect(back)
 
 
+# ---------- v136: busca de caixa pedida (montador) e lançamento direto ----------
+_MONTADOR_ALLOWED_ENDPOINTS.update({"montagem_busca_caixa", "montagem_lancar_caixas"})
+
+
+def _mont_key(s):
+    return re.sub(r"[^A-Z0-9]", "", str(s or "").upper())
+
+
+def _mont_open_lists_for_current():
+    q = MontagemList.query.filter(MontagemList.status != "cancelada")
+    if not getattr(current_user, "is_admin", False):
+        q = q.filter(or_(MontagemList.montador_user_id.is_(None), MontagemList.montador_user_id == current_user.id))
+    return q.order_by(MontagemList.id.desc()).all()
+
+
+@app.route("/montagem/buscar")
+@login_required
+def montagem_busca_caixa():
+    """Procura a caixa (CC-8077, 8077, cc8077...) nas listas abertas do montador. Só pendentes."""
+    if not (getattr(current_user, "is_montador", False) or getattr(current_user, "is_admin", False)):
+        abort(403)
+    key = _mont_key(request.args.get("q"))
+    if len(key) < 2:
+        return jsonify({"ok": True, "items": []})
+    rid_to_list = {}
+    for lst in _mont_open_lists_for_current():
+        for rid in lst.record_ids():
+            rid_to_list.setdefault(rid, lst)   # lista mais nova primeiro
+    if not rid_to_list:
+        return jsonify({"ok": True, "items": []})
+    recs = Record.query.filter(Record.id.in_(list(rid_to_list.keys()))).all()
+    hits = [r for r in recs if key in _mont_key(r.device)]
+    counts = _device_photo_counts([r.id for r in hits])
+    out = []
+    for r in hits:
+        lst = rid_to_list[r.id]
+        done = _record_is_montada(r, counts.get(r.id, 0))
+        exact = _mont_key(r.device) == key or _mont_key(r.device).endswith(key)
+        out.append({"id": r.id, "device": r.device or "", "map": lst.map_name or r.map or "",
+                    "list_id": lst.id, "list": _mont_list_code(lst), "splitter": r.splitter_name or "",
+                    "model": (getattr(r, "box_model", None) or r.type or ""), "pon": r.pon_name or "",
+                    "done": done, "done_by": r.mont_done_by or "", "_exact": exact})
+    out.sort(key=lambda d: (d["done"], not d["_exact"], d["device"]))
+    for d in out:
+        d.pop("_exact", None)
+    return jsonify({"ok": True, "items": out[:30]})
+
+
+@app.route("/montagem/lancar-caixas", methods=["POST"])
+@login_required
+def montagem_lancar_caixas():
+    """Montador lança caixas achadas na busca. Igual à confirmação da lista:
+    marca montada + cria 1 lançamento por lista (valor por caixa do projeto, congelado)."""
+    if not getattr(current_user, "is_montador", False):
+        return jsonify({"ok": False, "error": "Só o montador lança por aqui."}), 403
+    payload = request.get_json(silent=True) or {}
+    try:
+        ids = list({int(x) for x in (payload.get("record_ids") or [])})
+    except Exception:
+        return jsonify({"ok": False, "error": "Seleção inválida."}), 400
+    if not ids:
+        return jsonify({"ok": False, "error": "Escolha pelo menos uma caixa."}), 400
+    work_date = _parse_date(payload.get("work_date"), date.today())
+    if work_date > date.today() + _m_timedelta(days=1):
+        return jsonify({"ok": False, "error": "A data não pode ser no futuro."}), 400
+
+    lists = _mont_open_lists_for_current()
+    rid_to_list = {}
+    for lst in lists:
+        for rid in lst.record_ids():
+            rid_to_list.setdefault(rid, lst)
+    recs = Record.query.filter(Record.id.in_([i for i in ids if i in rid_to_list])).all()
+    counts = _device_photo_counts([r.id for r in recs])
+    by_list = {}
+    skipped = []
+    for r in recs:
+        if _record_is_montada(r, counts.get(r.id, 0)):
+            skipped.append(r.device or "?")
+            continue
+        by_list.setdefault(rid_to_list[r.id].id, (rid_to_list[r.id], []))[1].append(r)
+    if not by_list:
+        return jsonify({"ok": False, "error": "Essas caixas já estão montadas ou não estão em nenhuma lista sua."}), 400
+
+    name = _montador_display(current_user)
+    now = datetime.utcnow()
+    done_msgs, errors, total_boxes, total_usd = [], [], 0, 0.0
+    for _lid, (lst, items) in by_list.items():
+        pr = Project.query.get(lst.project_id) if lst.project_id else None
+        price = float(getattr(pr, "montador_box_price_usd", None) or 0) if pr else 0.0
+        if not pr or price <= 0:
+            errors.append(f"Lista {_mont_list_code(lst)}: projeto sem valor por caixa (fale com o admin).")
+            continue
+        for r in items:
+            r.mont_done_at = now
+            r.mont_done_by = name
+            r.mont_list_id = lst.id
+        names = ", ".join(r.device or "?" for r in items)
+        e = MontagemEntry(
+            user_id=current_user.id, montador_name=name, project_id=pr.id, project_name=pr.name, company=pr.company,
+            work_date=work_date, quantity=len(items), unit_price_usd=price, total_usd=round(len(items) * price, 2),
+            notes=(f"Lista {_mont_list_code(lst)} (mapa {lst.map_name}) pela busca: {names}")[:1000], created_at=now,
+        )
+        db.session.add(e)
+        db.session.flush()
+        lst.entry_ids_json = json.dumps(lst.entry_ids() + [e.id])
+        lst.processed_at = now
+        if not lst.montador_user_id:
+            lst.montador_user_id, lst.montador_name = current_user.id, name
+        done_ids = {r.id for r in items}
+        remaining = 0
+        for rr_id in lst.record_ids():
+            if rr_id in done_ids:
+                continue
+            rr = Record.query.get(rr_id)
+            if rr is not None and not _record_is_montada(rr):
+                remaining += 1
+        lst.status = "concluida" if remaining == 0 else "aberta"
+        total_boxes += len(items)
+        total_usd += e.total_usd
+        done_msgs.append(f"{names} (lista {_mont_list_code(lst)}" + (f", faltam {remaining})" if remaining else ", lista concluída)"))
+    db.session.commit()
+    return jsonify({"ok": total_boxes > 0, "boxes": total_boxes, "total_usd": round(total_usd, 2),
+                    "done": done_msgs, "errors": errors, "skipped": skipped,
+                    "error": "; ".join(errors) if not total_boxes else None})
+
+
 @app.route("/montagem/lista/<int:list_id>/cancelar", methods=["POST"])
 @admin_required
 def montagem_list_cancel(list_id):
