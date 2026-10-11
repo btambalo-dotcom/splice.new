@@ -192,9 +192,23 @@
         </div>
         <div class="col-12 d-flex gap-2">
           <button class="btn btn-sm btn-outline-info flex-fill">Filtrar</button>
-          <a href="{{ url_for('montador_home') }}" class="btn btn-sm btn-outline-secondary flex-fill">Este mês</a>
+          <a href="{{ url_for('montador_home') }}" class="btn btn-sm btn-outline-secondary flex-fill">Início</a>
+        </div>
+        <div class="col-12 d-flex gap-2">
+          {% set qs = {'start': (start.isoformat() if start else ''), 'end': (end.isoformat() if end else ''), 'project': (project_filter or '')} %}
+          <a href="{{ url_for('montador_home', **qs) }}" class="btn btn-sm flex-fill {{ 'btn-light' if not status_filter else 'btn-outline-light' }}">Todos</a>
+          <a href="{{ url_for('montador_home', status='pend', **qs) }}" class="btn btn-sm flex-fill {{ 'btn-warning' if status_filter == 'pend' else 'btn-outline-warning' }}">⏳ A receber</a>
+          <a href="{{ url_for('montador_home', status='pago', **qs) }}" class="btn btn-sm flex-fill {{ 'btn-success' if status_filter == 'pago' else 'btn-outline-success' }}">💰 No payroll</a>
         </div>
       </form>
+
+      <div class="mb-3 p-2 px-3 d-flex justify-content-between align-items-center" style="background:rgba(255,193,7,.08);border:1px solid rgba(255,193,7,.35);border-radius:12px;">
+        <div>
+          <div style="font-size:.66rem;color:#ffc107;text-transform:uppercase;letter-spacing:.08em;font-weight:600;">⏳ Lançado, ainda sem payroll</div>
+          <div class="d" style="color:#8b97ab;font-size:.78rem;">{{ unpaid_summary.count }} lançamento(s) · {{ unpaid_summary.boxes }} caixa(s)</div>
+        </div>
+        <div style="color:#ffc107;font-weight:700;font-size:1.25rem;white-space:nowrap;">$&nbsp;{{ '%.2f'|format(unpaid_summary.amount) }}</div>
+      </div>
 
       <div class="row g-2 mb-3">
         <div class="col-4"><div class="stat"><div class="v" style="color:#a78bfa;">{{ summary.count }}</div><div class="l">Lançamentos</div></div></div>
@@ -214,6 +228,12 @@
             <div class="fw-bold" style="font-size:1.1rem;">{{ e.quantity }} cx</div>
             <div class="d">× $ {{ '%.2f'|format(e.unit_price_usd or 0) }}</div>
             <div style="color:#20c997; font-weight:600;">$ {{ '%.2f'|format(e.total_usd or 0) }}</div>
+            {% set pay = paid_map.get(e.id) %}
+            {% if pay %}
+              <div style="font-size:.7rem;color:#20c997;">💰 Payroll #{{ pay.id }}{% if pay.status == 'paid' %} · pago{% endif %}</div>
+            {% else %}
+              <div style="font-size:.7rem;color:#ffc107;">⏳ a receber</div>
+            {% endif %}
           </div>
         </div>
         {% endfor %}

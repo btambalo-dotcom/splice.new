@@ -10067,13 +10067,26 @@ def montador_home():
         return redirect(url_for("montador_home"))
 
     today = date.today()
-    start = _parse_date(request.args.get("start"), _month_start(today))
+    # v137: o que ainda NÃO entrou em payroll aparece sempre (mesmo de meses anteriores)
+    all_mine = MontagemEntry.query.filter_by(user_id=current_user.id).all()
+    paid_map = _montagem_payroll_map(current_user.id, all_mine)
+    unpaid = [e for e in all_mine if e.id not in paid_map]
+    oldest_unpaid = min((e.work_date for e in unpaid), default=None)
+    default_start = _month_start(today)
+    if oldest_unpaid and oldest_unpaid < default_start:
+        default_start = oldest_unpaid
+    start = _parse_date(request.args.get("start"), default_start)
     end = _parse_date(request.args.get("end"), None)  # vazio = até hoje
     pf_raw = (request.args.get("project") or "").strip()
     project_filter = int(pf_raw) if pf_raw.isdigit() else None
+    status_filter = (request.args.get("status") or "").strip()   # '' | pend | pago
 
     entries = (_montagem_query(current_user.id, start, end, project_filter)
                .order_by(MontagemEntry.work_date.desc(), MontagemEntry.id.desc()).all())
+    if status_filter == "pend":
+        entries = [e for e in entries if e.id not in paid_map]
+    elif status_filter == "pago":
+        entries = [e for e in entries if e.id in paid_map]
     # Projetos para o filtro: os que têm preço + os que já aparecem no histórico dele
     hist_projects = {}
     for e in MontagemEntry.query.filter_by(user_id=current_user.id).all():
@@ -10093,7 +10106,31 @@ def montador_home():
         last_project=session.get("montagem_last_project"),
         today_iso=today.isoformat(),
         mont_lists=_montagem_lists_for(current_user),
+        paid_map=paid_map, status_filter=status_filter,
+        unpaid_summary=_montagem_summary(unpaid),
     )
+
+
+def _montagem_payroll_map(user_id, entries):
+    """{entry_id: Payroll} para lançamentos que já entraram numa folha (não cancelada) do montador.
+    Mesma regra usada para montar a folha: período + projeto/empresa (quando a folha tiver)."""
+    out = {}
+    try:
+        pays = Payroll.query.filter(Payroll.user_id == int(user_id)).all()
+    except Exception:
+        return out
+    pays = [p for p in pays if (p.status or "") != "cancelled"]
+    for e in entries:
+        for p in pays:
+            if not (p.start_date <= e.work_date <= p.end_date):
+                continue
+            if p.project_id and e.project_id != p.project_id:
+                continue
+            if p.company and (e.company or "") != p.company:
+                continue
+            out[e.id] = p
+            break
+    return out
 
 
 # ---------------- Tela do Admin ----------------
