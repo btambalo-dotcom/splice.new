@@ -568,6 +568,7 @@
         </a>
         <button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Fechar</button>
         {% if current_user.is_admin %}
+        <button type="button" class="btn btn-sm" id="btn-toggle-other-co" onclick="toggleDeviceOtherCompany()" style="background:#f1c40f;color:#222;border-color:#f1c40f;">Outra empresa</button>
         <button type="button" class="btn btn-warning btn-sm" id="btn-toggle-active" onclick="toggleDeviceActive()">Desativar</button>
         <button type="button" class="btn btn-danger btn-sm" id="btn-delete-device" onclick="deleteDeviceFromMap()">Excluir</button>
         {% endif %}
@@ -1452,10 +1453,12 @@ function buildDeviceIcon(rec) {
   const placed    = !!rec.is_placed;
   const typeLabel = deviceTypeLabel(rec);
 
-  // Cor do pin: vermelho se desativado, verde se lancado, azul se ainda nao lancado
+  // Cor do pin: vermelho se desativado, amarelo se feito por outra empresa (v138),
+  // verde se lancado, azul se ainda nao lancado
   const isActive = rec.is_active !== false;
-  const pinColor = !isActive ? '#e74c3c' : (hasLaunch ? '#2ecc40' : '#1a73e8');
-  const pinDark  = !isActive ? '#922b21' : (hasLaunch ? '#1a7a25' : '#0d4fa8');
+  const otherCo  = !!rec.other_company;
+  const pinColor = !isActive ? '#e74c3c' : (otherCo ? '#f1c40f' : (hasLaunch ? '#2ecc40' : '#1a73e8'));
+  const pinDark  = !isActive ? '#922b21' : (otherCo ? '#9a7d0a' : (hasLaunch ? '#1a7a25' : '#0d4fa8'));
 
   // Badge de tipo (S / D / BS) — construído sem template aninhado
   var typeBadge = '';
@@ -1540,7 +1543,7 @@ function buildDeviceIcon(rec) {
 function montFilterHit(rec, mf) {
   if (mf === 'req')   return !!rec.mont_req_code;                       // pedida, não montada
   if (mf === 'ready') return !!rec.mont_ready;                          // montada, não feita
-  if (mf === 'none')  return !rec.mont_done && !rec.mont_req_code;      // não pedida, não montada
+  if (mf === 'none')  return !rec.mont_done && !rec.mont_req_code && !rec.other_company; // não pedida, não montada (v138: ignora outra empresa)
   return false;
 }
 window.montFilterHit = montFilterHit;
@@ -2030,6 +2033,14 @@ function openDeviceModalById(id) {
       const btnDelete = document.getElementById('btn-delete-device');
       if (btnDelete) btnDelete.dataset.recordId = rec.id;
 
+      // v138 — botão Outra empresa (pin amarelo)
+      const btnOther = document.getElementById('btn-toggle-other-co');
+      if (btnOther) {
+        btnOther.dataset.recordId = rec.id;
+        btnOther.dataset.on = rec.other_company ? '1' : '0';
+        btnOther.textContent = rec.other_company ? 'Tirar outra empresa' : 'Outra empresa';
+      }
+
       const modal = new bootstrap.Modal(document.getElementById('deviceModal'));
       modal.show();
     }
@@ -2051,6 +2062,24 @@ function openDeviceModalById(id) {
         bootstrap.Modal.getInstance(document.getElementById('deviceModal')).hide();
       } else {
         alert(data.error || 'Erro ao alterar status.');
+      }
+    }
+
+    // v138 — marca/desmarca caixa feita por outra empresa
+    async function toggleDeviceOtherCompany() {
+      const btn = document.getElementById('btn-toggle-other-co');
+      const recId = btn && btn.dataset.recordId;
+      if (!recId) return;
+      const on = btn.dataset.on === '1';
+      if (!confirm(on ? 'Tirar a marcação de outra empresa desta caixa?' : 'Marcar esta caixa como feita por outra empresa (pin amarelo)?')) return;
+      const resp = await fetch('/api/records/' + recId + '/toggle-other-company', { method: 'POST' });
+      const data = await resp.json();
+      if (data.ok) {
+        const rec = allRecords.find(r => r.id == recId);
+        if (rec) { rec.other_company = data.other_company; refreshMarkers(); }
+        bootstrap.Modal.getInstance(document.getElementById('deviceModal')).hide();
+      } else {
+        alert(data.error || 'Erro ao marcar outra empresa.');
       }
     }
 

@@ -1009,6 +1009,8 @@ class Record(db.Model):
     mont_done_at = db.Column(db.DateTime, nullable=True)     # quando o montador deixou pronta
     mont_done_by = db.Column(db.String(120), nullable=True)  # nome do montador
     mont_list_id = db.Column(db.Integer, nullable=True)      # lista de montagem em que foi confirmada
+    # v138 — caixa já feita por outra empresa (nós não vamos fazer) → pin amarelo
+    other_company = db.Column(db.Boolean, nullable=True, default=None)
 
 
 class RecordPhoto(db.Model):
@@ -1393,6 +1395,8 @@ with app.app_context():
     ensure("record", "mont_done_at", "TIMESTAMP")
     ensure("record", "mont_done_by", "VARCHAR(120)")
     ensure("record", "mont_list_id", "INTEGER")
+    # v138 — feito por outra empresa (só ADICIONA coluna)
+    ensure("record", "other_company", "BOOLEAN")
     ensure("device_type", "project_id", "INTEGER")
     ensure("device_type", "value_meio_usd", "DOUBLE PRECISION")
     ensure("device_type", "value_ponta_usd", "DOUBLE PRECISION")
@@ -7170,6 +7174,7 @@ def api_map_records(map_id):
             "placed_by": getattr(r, 'placed_by', None) or '',
             "placed_at": r.placed_at.isoformat() if getattr(r, 'placed_at', None) else None,
             "is_active": getattr(r, 'is_active', None) is not False,
+            "other_company": bool(getattr(r, 'other_company', None)),
             "ribbon_count": getattr(r, 'ribbon_count', None),
             # v123 — montagem
             "box_model": getattr(r, 'box_model', None) or '',
@@ -7319,6 +7324,44 @@ def api_update_record_from_map(record_id):
 
     db.session.commit()
     return jsonify({"ok": True})
+
+@app.route("/api/records/<int:record_id>/toggle-other-company", methods=["POST"])
+@login_required
+def api_toggle_record_other_company(record_id):
+    """v138 — Marca/desmarca caixa como feita por outra empresa (pin amarelo). Somente admin.
+    Só mexe nesse campo: não altera lançamento, fusões, splicer nem valores."""
+    if not bool(getattr(current_user, "is_admin", False)):
+        return jsonify({"ok": False, "error": "Somente admin pode marcar outra empresa."}), 403
+    rec = Record.query.get_or_404(record_id)
+    rec.other_company = not bool(getattr(rec, "other_company", None))
+    db.session.commit()
+    return jsonify({"ok": True, "other_company": bool(rec.other_company)})
+
+
+@app.route("/api/maps/<int:map_id>/other-company", methods=["POST"])
+@admin_required
+def api_map_other_company_bulk(map_id):
+    """v138 — Admin: marca/desmarca em lote caixas feitas por outra empresa, casando pelo nome.
+    JSON: {"devices": ["CC-31281", ...], "value": true}. Só mexe no campo other_company."""
+    mp = CompanyMap.query.get_or_404(map_id)
+    payload = request.get_json(silent=True) or {}
+    value = bool(payload.get("value", True))
+    wanted = {_dev_norm(d) for d in (payload.get("devices") or []) if _dev_norm(d)}
+    q = Record.query.filter(Record.map == mp.name)
+    if mp.company:
+        q = q.filter(Record.company == mp.company)
+    found, updated = set(), 0
+    for r in q.all():
+        k = _dev_norm(r.device)
+        if k in wanted:
+            found.add(k)
+            if bool(getattr(r, "other_company", None)) != value:
+                r.other_company = value
+                updated += 1
+    db.session.commit()
+    not_found = [d for d in (payload.get("devices") or []) if _dev_norm(d) not in found]
+    return jsonify({"ok": True, "updated": updated, "not_found": not_found})
+
 
 @app.route("/api/records/<int:record_id>/toggle-active", methods=["POST"])
 @login_required
