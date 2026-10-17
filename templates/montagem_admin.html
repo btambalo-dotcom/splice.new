@@ -143,6 +143,50 @@
   {% endif %}
 </div>
 
+<!-- v139 — Caixas com splitter faltando (avisado pelo montador) -->
+<div class="m-card p-3 mb-3" id="falta-splitter">
+  <p class="section-title">⚠ Splitter faltando nas caixas</p>
+  {% if missing_rows %}
+  {% set ns = namespace(cnt={}) %}
+  {% for r in missing_rows %}{% for p in r.missing_splitter.split('+') %}{% set k = p.strip() %}{% if k %}{% set _ = ns.cnt.update({k: ns.cnt.get(k, 0) + 1}) %}{% endif %}{% endfor %}{% endfor %}
+  <div class="d-flex flex-wrap gap-2 mb-2">
+    {% for k, v in ns.cnt|dictsort %}<span class="badge" style="background:rgba(239,68,68,.18);border:1px solid #ef4444;color:#fca5a5;font-size:.8rem;">{{ k }} × {{ v }}</span>{% endfor %}
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm table-dark m-table align-middle mb-0">
+      <thead><tr><th>Caixa</th><th>Mapa</th><th>Splitter da caixa</th><th>Falta</th><th>Avisado por</th><th></th></tr></thead>
+      <tbody>
+      {% for r in missing_rows %}
+        <tr id="msr-{{ r.id }}">
+          <td class="fw-semibold">{{ r.device }}</td>
+          <td>{{ r.map }}</td>
+          <td class="text-secondary">{{ r.splitter_name or '—' }}</td>
+          <td style="color:#fca5a5;font-weight:600;">{{ r.missing_splitter }}</td>
+          <td class="text-secondary">{{ r.missing_by or '' }}{% if r.missing_at %} · {{ r.missing_at.strftime('%d/%m %H:%M') }}{% endif %}</td>
+          <td class="text-end"><button type="button" class="btn btn-outline-success btn-xs ms-clear-admin" data-id="{{ r.id }}" data-dev="{{ r.device }}">✔ chegou</button></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <script>
+  document.querySelectorAll('.ms-clear-admin').forEach(function (b) {
+    b.addEventListener('click', async function () {
+      if (!confirm('O splitter da caixa ' + b.dataset.dev + ' chegou? Tirar da lista de faltando.')) return;
+      b.disabled = true;
+      try {
+        var d = await fetch("{{ url_for('montagem_falta_splitter') }}", { method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ record_id: parseInt(b.dataset.id, 10), clear: true }) }).then(function (r) { return r.json(); });
+        if (d.ok) { var tr = document.getElementById('msr-' + b.dataset.id); if (tr) tr.remove(); } else { alert(d.error || 'Erro.'); b.disabled = false; }
+      } catch (e) { alert('Sem conexão.'); b.disabled = false; }
+    });
+  });
+  </script>
+  {% else %}
+  <div class="text-secondary" style="font-size:.85rem;">Nenhuma caixa com splitter faltando. O montador avisa pelo botão <b>⚠ Falta splitter</b> na busca da caixa ou na lista.</div>
+  {% endif %}
+</div>
+
 <!-- Pedidos de material (v135) -->
 <div class="m-card p-3 mb-3" id="material">
   <p class="section-title">📦 Pedidos de material</p>

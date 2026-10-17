@@ -16,6 +16,11 @@
   .btn-go { background:#198754; border:none; color:#fff; font-weight:600; border-radius:10px; min-height:50px; }
   .btn-go:hover { background:#157347; color:#fff; }
   .btn-photo { background:#0d6efd; border:none; color:#fff; font-weight:600; border-radius:10px; min-height:50px; }
+  .ms-badge { display:inline-block; background:rgba(239,68,68,.15); border:1px solid #ef4444; color:#fca5a5; border-radius:8px; padding:.1rem .45rem; font-size:.75rem; font-weight:600; margin-top:.2rem; }
+  .ms-btn { font-size:.75rem; padding:.15rem .5rem; border-radius:8px; }
+  .ms-box { background:#12121c; border:1px solid #ef4444; border-radius:10px; padding:.6rem; margin:.3rem .5rem .6rem; }
+  .ms-box label { display:flex; gap:.5rem; align-items:center; padding:.35rem 0; color:#ddd; font-weight:600; }
+  .ms-box input[type=checkbox] { width:20px; height:20px; }
   .thumb { width:92px; height:92px; object-fit:cover; border-radius:8px; border:1px solid #2a2a3e; }
 </style>
 
@@ -93,8 +98,14 @@
             <td style="font-size:.78rem;">
               {% if r.mont_done_at %}montada · {{ r.mont_done_by or '' }} {{ r.mont_done_at.strftime('%d/%m') }}
               {% elif ok %}já lançada{% else %}<span style="color:#ffc107;">pendente</span>{% endif %}
+              {% if r.missing_splitter and not ok %}<div class="ms-badge">⚠ Falta: {{ r.missing_splitter }}</div>{% endif %}
+              {% if not ok and lst.status != 'cancelada' %}
+              <div><button type="button" class="btn btn-outline-danger ms-btn mt-1" data-ms="{{ r.id }}"
+                      data-parts='{{ splitter_parts(r)|tojson }}' data-cur="{{ r.missing_splitter or '' }}">{{ '✎ Falta splitter' if r.missing_splitter else '⚠ Falta splitter' }}</button></div>
+              {% endif %}
             </td>
           </tr>
+          {% if not ok %}<tr class="ms-row"><td colspan="7" class="p-0" style="border:none;"><div id="msw-{{ r.id }}"></div></td></tr>{% endif %}
         {% endfor %}
         </tbody>
       </table>
@@ -164,6 +175,38 @@
 
 {% block extra_js %}
 <script>
+/* v139 — botão "Falta splitter" (usado na busca e na lista) */
+window.msOpen = function (box, rid, parts, current) {
+  const esc = t => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  if (box.innerHTML) { box.innerHTML = ''; return; }
+  const cur = (current || '').split('+').map(x => x.trim()).filter(Boolean);
+  box.innerHTML = '<div class="ms-box"><div class="small text-secondary mb-1">Qual splitter está faltando nesta caixa?</div>'
+    + (parts || []).map(p => '<label><input type="checkbox" value="' + esc(p) + '"' + (cur.includes(p) ? ' checked' : '') + '> ' + esc(p) + '</label>').join('')
+    + '<input type="text" class="form-control form-control-sm mt-1 ms-other" placeholder="Outro (ex.: 4x8, DC-5)">'
+    + '<div class="d-flex gap-2 mt-2"><button type="button" class="btn btn-danger btn-sm flex-fill ms-save">⚠ Salvar falta</button>'
+    + (current ? '<button type="button" class="btn btn-outline-success btn-sm flex-fill ms-clear">✔ Chegou / resolvido</button>' : '')
+    + '</div><div class="small mt-1 ms-msg"></div></div>';
+  const send = async (body) => {
+    const m = box.querySelector('.ms-msg'); m.textContent = 'Salvando...';
+    try {
+      const d = await fetch("{{ url_for('montagem_falta_splitter') }}", { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) }).then(r => r.json());
+      if (!d.ok) { m.innerHTML = '<span class="text-danger">' + esc(d.error || 'Erro.') + '</span>'; return; }
+      m.innerHTML = '<span class="text-success">' + (d.missing ? 'Salvo: falta ' + esc(d.missing) : 'Marcado como resolvido') + '</span>';
+      setTimeout(() => location.reload(), 900);
+    } catch (e) { m.innerHTML = '<span class="text-danger">Sem conexão. Tente de novo.</span>'; }
+  };
+  box.querySelector('.ms-save').addEventListener('click', () => {
+    const sel = Array.from(box.querySelectorAll('input[type=checkbox]:checked')).map(c => c.value);
+    const other = box.querySelector('.ms-other').value.trim();
+    if (other) sel.push(other);
+    if (!sel.length) { box.querySelector('.ms-msg').innerHTML = '<span class="text-warning">Marque qual splitter falta.</span>'; return; }
+    send({ record_id: rid, splitters: sel });
+  });
+  const cl = box.querySelector('.ms-clear');
+  if (cl) cl.addEventListener('click', () => send({ record_id: rid, clear: true }));
+};
+</script>
+<script>
   (function () {
     var el = document.getElementById('work_date');
     if (el) {
@@ -183,6 +226,13 @@
       hint();
     });
     hint();
+    // v139 — falta splitter
+    document.querySelectorAll('[data-ms]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var parts = []; try { parts = JSON.parse(b.dataset.parts || '[]'); } catch (e) {}
+        msOpen(document.getElementById('msw-' + b.dataset.ms), parseInt(b.dataset.ms, 10), parts, b.dataset.cur || '');
+      });
+    });
     var fp = document.getElementById('form-photo');
     if (fp) fp.addEventListener('submit', function () {
       var b = document.getElementById('btn-photo'); b.disabled = true; b.textContent = 'Lendo a folha... (pode levar ~20s)';

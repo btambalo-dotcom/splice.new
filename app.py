@@ -1011,6 +1011,10 @@ class Record(db.Model):
     mont_list_id = db.Column(db.Integer, nullable=True)      # lista de montagem em que foi confirmada
     # v138 — caixa já feita por outra empresa (nós não vamos fazer) → pin amarelo
     other_company = db.Column(db.Boolean, nullable=True, default=None)
+    # v139 — montador avisa que falta splitter na caixa pedida
+    missing_splitter = db.Column(db.String(200), nullable=True)
+    missing_at = db.Column(db.DateTime, nullable=True)
+    missing_by = db.Column(db.String(120), nullable=True)
 
 
 class RecordPhoto(db.Model):
@@ -1397,6 +1401,10 @@ with app.app_context():
     ensure("record", "mont_list_id", "INTEGER")
     # v138 — feito por outra empresa (só ADICIONA coluna)
     ensure("record", "other_company", "BOOLEAN")
+    # v139 — falta splitter (só ADICIONA colunas)
+    ensure("record", "missing_splitter", "VARCHAR(200)")
+    ensure("record", "missing_at", "TIMESTAMP")
+    ensure("record", "missing_by", "VARCHAR(120)")
     ensure("device_type", "project_id", "INTEGER")
     ensure("device_type", "value_meio_usd", "DOUBLE PRECISION")
     ensure("device_type", "value_ponta_usd", "DOUBLE PRECISION")
@@ -7175,6 +7183,7 @@ def api_map_records(map_id):
             "placed_at": r.placed_at.isoformat() if getattr(r, 'placed_at', None) else None,
             "is_active": getattr(r, 'is_active', None) is not False,
             "other_company": bool(getattr(r, 'other_company', None)),
+            "missing_splitter": getattr(r, 'missing_splitter', None) or '',
             "ribbon_count": getattr(r, 'ribbon_count', None),
             # v123 — montagem
             "box_model": getattr(r, 'box_model', None) or '',
@@ -10232,6 +10241,7 @@ def montagem_admin():
         today_iso=date.today().isoformat(),
         mont_lists=_montagem_lists_for(None, limit=40),
         mat_requests=_material_requests_recent(30),
+        missing_rows=_missing_splitter_rows(),
     )
 
 
@@ -11208,6 +11218,7 @@ def montagem_list_view(list_id):
         box_price=float(getattr(pr, "montador_box_price_usd", None) or 0) if pr else 0,
         today_iso=date.today().isoformat(),
         pending=sum(1 for _, _, ok in rows if not ok),
+        splitter_parts=_splitter_parts,
     )
 
 
@@ -11307,6 +11318,7 @@ def montagem_list_confirm(list_id):
         r.mont_done_at = now
         r.mont_done_by = name
         r.mont_list_id = lst.id
+        r.missing_splitter = None   # v139: montou → splitter chegou
     names = ", ".join(r.device or "?" for r in to_mark)
     e = MontagemEntry(
         user_id=mont.id, montador_name=name, project_id=pr.id, project_name=pr.name, company=pr.company,
@@ -11371,6 +11383,7 @@ def montagem_busca_caixa():
         out.append({"id": r.id, "device": r.device or "", "map": lst.map_name or r.map or "",
                     "list_id": lst.id, "list": _mont_list_code(lst), "splitter": r.splitter_name or "",
                     "model": (getattr(r, "box_model", None) or r.type or ""), "pon": r.pon_name or "",
+                    "missing": getattr(r, "missing_splitter", None) or "", "parts": _splitter_parts(r),
                     "done": done, "done_by": r.mont_done_by or "", "_exact": exact})
     out.sort(key=lambda d: (d["done"], not d["_exact"], d["device"]))
     for d in out:
@@ -11426,6 +11439,7 @@ def montagem_lancar_caixas():
             r.mont_done_at = now
             r.mont_done_by = name
             r.mont_list_id = lst.id
+            r.missing_splitter = None   # v139: montou → splitter chegou
         names = ", ".join(r.device or "?" for r in items)
         e = MontagemEntry(
             user_id=current_user.id, montador_name=name, project_id=pr.id, project_name=pr.name, company=pr.company,
@@ -11454,6 +11468,65 @@ def montagem_lancar_caixas():
     return jsonify({"ok": total_boxes > 0, "boxes": total_boxes, "total_usd": round(total_usd, 2),
                     "done": done_msgs, "errors": errors, "skipped": skipped,
                     "error": "; ".join(errors) if not total_boxes else None})
+
+
+# ---------- v139: montador avisa que falta splitter na caixa ----------
+_MONTADOR_ALLOWED_ENDPOINTS.update({"montagem_falta_splitter"})
+
+
+def _splitter_parts(r):
+    """Peças do splitter da caixa: 'Splitter DC-5 + Tap B 4-12' -> ['Splitter DC-5', 'Tap B 4-12']."""
+    raw = (getattr(r, "splitter_name", None) or "").strip()
+    return [p.strip() for p in raw.split("+") if p.strip()]
+
+
+def _missing_splitter_rows():
+    """Caixas com splitter faltando (para o admin pedir material)."""
+    try:
+        return (Record.query.filter(Record.missing_splitter.isnot(None), Record.missing_splitter != "")
+                .order_by(Record.missing_at.desc()).limit(300).all())
+    except Exception:
+        return []
+
+
+@app.route("/montagem/falta-splitter", methods=["POST"])
+@login_required
+def montagem_falta_splitter():
+    """Marca/limpa qual splitter está faltando na caixa. Só mexe nesses campos
+    (não lança caixa, não mexe em fusões, valores nem payroll)."""
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    if not (getattr(current_user, "is_montador", False) or is_admin):
+        return jsonify({"ok": False, "error": "Sem permissão."}), 403
+    payload = request.get_json(silent=True) or {}
+    try:
+        rid = int(payload.get("record_id"))
+    except Exception:
+        return jsonify({"ok": False, "error": "Caixa inválida."}), 400
+    rec = Record.query.get(rid)
+    if rec is None:
+        return jsonify({"ok": False, "error": "Caixa não encontrada."}), 404
+    if not is_admin:
+        allowed = set()
+        for lst in _mont_open_lists_for_current():
+            allowed.update(lst.record_ids())
+        if rid not in allowed:
+            return jsonify({"ok": False, "error": "Essa caixa não está nas suas listas de montagem."}), 403
+    if payload.get("clear"):
+        rec.missing_splitter = None
+        rec.missing_at = None
+        rec.missing_by = None
+    else:
+        parts = payload.get("splitters") or []
+        if isinstance(parts, str):
+            parts = [parts]
+        parts = [str(p).strip()[:80] for p in parts if str(p).strip()]
+        if not parts:
+            return jsonify({"ok": False, "error": "Escolha qual splitter está faltando."}), 400
+        rec.missing_splitter = " + ".join(dict.fromkeys(parts))[:200]
+        rec.missing_at = datetime.utcnow()
+        rec.missing_by = _montador_display(current_user)
+    db.session.commit()
+    return jsonify({"ok": True, "missing": rec.missing_splitter or "", "device": rec.device or ""})
 
 
 @app.route("/montagem/lista/<int:list_id>/cancelar", methods=["POST"])

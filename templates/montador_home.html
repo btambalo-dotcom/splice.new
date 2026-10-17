@@ -50,7 +50,45 @@
   .bc-dev { font-weight:700; color:#fff; font-size:1.05rem; }
   .bc-sub { color:#8b97ab; font-size:.8rem; }
   .bc-done { opacity:.5; cursor:default; }
+  /* v139 — falta splitter */
+  .ms-badge { display:inline-block; background:rgba(239,68,68,.15); border:1px solid #ef4444; color:#fca5a5; border-radius:8px; padding:.1rem .45rem; font-size:.78rem; font-weight:600; margin-top:.2rem; }
+  .ms-btn { font-size:.78rem; padding:.2rem .55rem; border-radius:8px; }
+  .ms-box { background:#12121c; border:1px solid #ef4444; border-radius:10px; padding:.6rem; margin:.2rem 0 .5rem 2rem; }
+  .ms-box label { display:flex; gap:.5rem; align-items:center; padding:.35rem 0; color:#ddd; font-weight:600; }
+  .ms-box input[type=checkbox] { width:20px; height:20px; }
 </style>
+<script>
+/* v139 — botão "Falta splitter" (usado na busca e na lista) */
+window.msOpen = function (box, rid, parts, current) {
+  const esc = t => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  if (box.innerHTML) { box.innerHTML = ''; return; }
+  const cur = (current || '').split('+').map(x => x.trim()).filter(Boolean);
+  box.innerHTML = '<div class="ms-box"><div class="small text-secondary mb-1">Qual splitter está faltando nesta caixa?</div>'
+    + (parts || []).map(p => '<label><input type="checkbox" value="' + esc(p) + '"' + (cur.includes(p) ? ' checked' : '') + '> ' + esc(p) + '</label>').join('')
+    + '<input type="text" class="form-control form-control-sm mt-1 ms-other" placeholder="Outro (ex.: 4x8, DC-5)">'
+    + '<div class="d-flex gap-2 mt-2"><button type="button" class="btn btn-danger btn-sm flex-fill ms-save">⚠ Salvar falta</button>'
+    + (current ? '<button type="button" class="btn btn-outline-success btn-sm flex-fill ms-clear">✔ Chegou / resolvido</button>' : '')
+    + '</div><div class="small mt-1 ms-msg"></div></div>';
+  const send = async (body) => {
+    const m = box.querySelector('.ms-msg'); m.textContent = 'Salvando...';
+    try {
+      const d = await fetch("{{ url_for('montagem_falta_splitter') }}", { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) }).then(r => r.json());
+      if (!d.ok) { m.innerHTML = '<span class="text-danger">' + esc(d.error || 'Erro.') + '</span>'; return; }
+      m.innerHTML = '<span class="text-success">' + (d.missing ? 'Salvo: falta ' + esc(d.missing) : 'Marcado como resolvido') + '</span>';
+      setTimeout(() => location.reload(), 900);
+    } catch (e) { m.innerHTML = '<span class="text-danger">Sem conexão. Tente de novo.</span>'; }
+  };
+  box.querySelector('.ms-save').addEventListener('click', () => {
+    const sel = Array.from(box.querySelectorAll('input[type=checkbox]:checked')).map(c => c.value);
+    const other = box.querySelector('.ms-other').value.trim();
+    if (other) sel.push(other);
+    if (!sel.length) { box.querySelector('.ms-msg').innerHTML = '<span class="text-warning">Marque qual splitter falta.</span>'; return; }
+    send({ record_id: rid, splitters: sel });
+  });
+  const cl = box.querySelector('.ms-clear');
+  if (cl) cl.addEventListener('click', () => send({ record_id: rid, clear: true }));
+};
+</script>
 <script>
 (function(){
   const q = document.getElementById('bcQ'), res = document.getElementById('bcRes'), act = document.getElementById('bcAct');
@@ -69,9 +107,16 @@
       if (!d.items || !d.items.length) { res.innerHTML = '<div class="bc-sub">Nenhuma caixa com esse número nas suas listas de montagem.</div>'; return; }
       res.innerHTML = d.items.map(i => i.done
         ? '<div class="bc-item bc-done"><span style="width:22px;text-align:center">✅</span><div><div class="bc-dev">' + esc(i.device) + '</div><div class="bc-sub">Já montada' + (i.done_by ? ' por ' + esc(i.done_by) : '') + ' · lista ' + esc(i.list) + '</div></div></div>'
-        : '<label class="bc-item' + (sel.has(i.id) ? ' sel' : '') + '"><input type="checkbox" data-id="' + i.id + '" data-dev="' + esc(i.device) + '"' + (sel.has(i.id) ? ' checked' : '') + '>'
+        : '<div><label class="bc-item' + (sel.has(i.id) ? ' sel' : '') + '"><input type="checkbox" data-id="' + i.id + '" data-dev="' + esc(i.device) + '"' + (sel.has(i.id) ? ' checked' : '') + '>'
           + '<div><div class="bc-dev">' + esc(i.device) + '</div><div class="bc-sub">Lista <b>' + esc(i.list) + '</b> · mapa ' + esc(i.map)
-          + (i.splitter ? ' · ' + esc(i.splitter) : '') + (i.model ? ' · ' + esc(i.model) : '') + '</div></div></label>').join('');
+          + (i.splitter ? ' · ' + esc(i.splitter) : '') + (i.model ? ' · ' + esc(i.model) : '') + '</div>'
+          + (i.missing ? '<div class="ms-badge">⚠ Falta: ' + esc(i.missing) + '</div>' : '') + '</div></label>'
+          + '<div style="margin-left:2.2rem;"><button type="button" class="btn btn-outline-danger ms-btn" data-ms="' + i.id + '">' + (i.missing ? '✎ Falta splitter' : '⚠ Falta splitter') + '</button></div>'
+          + '<div class="ms-wrap" id="msw-' + i.id + '"></div></div>').join('');
+      d.items.forEach(i => {
+        const b = res.querySelector('[data-ms="' + i.id + '"]');
+        if (b) b.addEventListener('click', () => window.msOpen(document.getElementById('msw-' + i.id), i.id, i.parts, i.missing));
+      });
       res.querySelectorAll('input[type=checkbox]').forEach(cb => cb.addEventListener('change', () => {
         const id = parseInt(cb.dataset.id, 10);
         if (cb.checked) sel.set(id, cb.dataset.dev); else sel.delete(id);
