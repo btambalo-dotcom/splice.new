@@ -7589,6 +7589,40 @@ def api_set_record_placed(record_id):
 
 
 
+@app.route("/api/records/<int:record_id>/unset-placed", methods=["POST"])
+@login_required
+def api_unset_record_placed(record_id):
+    """v140 — Admin: desfaz a subida (placed) de um dispositivo.
+    Só mexe em is_placed/placed_by/placed_at. Não apaga fotos, lançamento nem valores."""
+    if not bool(getattr(current_user, "is_admin", False)):
+        return jsonify({"ok": False, "error": "Somente admin pode desfazer subida."}), 403
+    rec = Record.query.get_or_404(record_id)
+    rec.is_placed = False
+    rec.placed_by = None
+    rec.placed_at = None
+    db.session.commit()
+    return jsonify({"ok": True, "record_id": int(rec.id), "is_placed": False})
+
+
+@app.route("/api/maps/<int:map_id>/clear-placed", methods=["POST"])
+@admin_required
+def api_map_clear_placed(map_id):
+    """v140 — Admin: desfaz TODAS as subidas de um mapa.
+    Só mexe em is_placed/placed_by/placed_at. Não apaga fotos, lançamento nem valores."""
+    mp = CompanyMap.query.get_or_404(map_id)
+    q = Record.query.filter(Record.map == mp.name, Record.is_placed == True)  # noqa: E712
+    if mp.company:
+        q = q.filter(Record.company == mp.company)
+    cleared = 0
+    for r in q.all():
+        r.is_placed = False
+        r.placed_by = None
+        r.placed_at = None
+        cleared += 1
+    db.session.commit()
+    return jsonify({"ok": True, "cleared": cleared})
+
+
 @app.route("/maps/<int:map_id>/tests-report")
 @login_required
 def export_map_tests_report(map_id):
