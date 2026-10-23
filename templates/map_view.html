@@ -569,6 +569,7 @@
         <button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Fechar</button>
         {% if current_user.is_admin %}
         <button type="button" class="btn btn-sm" id="btn-toggle-other-co" onclick="toggleDeviceOtherCompany()" style="background:#f1c40f;color:#222;border-color:#f1c40f;">Outra empresa</button>
+        <button type="button" class="btn btn-outline-warning btn-sm" id="btn-unset-placed" onclick="unsetDevicePlaced()" style="display:none;">Tirar subida</button>
         <button type="button" class="btn btn-warning btn-sm" id="btn-toggle-active" onclick="toggleDeviceActive()">Desativar</button>
         <button type="button" class="btn btn-danger btn-sm" id="btn-delete-device" onclick="deleteDeviceFromMap()">Excluir</button>
         {% endif %}
@@ -2041,8 +2042,33 @@ function openDeviceModalById(id) {
         btnOther.textContent = rec.other_company ? 'Tirar outra empresa' : 'Outra empresa';
       }
 
+      // v140 — botão Tirar subida (só aparece se a caixa está como subida)
+      const btnUnplace = document.getElementById('btn-unset-placed');
+      if (btnUnplace) {
+        btnUnplace.dataset.recordId = rec.id;
+        btnUnplace.style.display = rec.is_placed ? '' : 'none';
+      }
+
       const modal = new bootstrap.Modal(document.getElementById('deviceModal'));
       modal.show();
+    }
+
+    // v140 — desfaz a subida (não apaga fotos)
+    async function unsetDevicePlaced() {
+      const btn = document.getElementById('btn-unset-placed');
+      const recId = btn && btn.dataset.recordId;
+      if (!recId) return;
+      if (!confirm('Tirar a marcação de subida desta caixa? (as fotos não são apagadas)')) return;
+      const resp = await fetch('/api/records/' + recId + '/unset-placed', { method: 'POST' });
+      const data = await resp.json();
+      if (data.ok) {
+        const rec = allRecords.find(r => r.id == recId);
+        if (rec) { rec.is_placed = false; rec.placed_by = ''; rec.placed_at = null; }
+        bootstrap.Modal.getInstance(document.getElementById('deviceModal')).hide();
+        loadMarkers();
+      } else {
+        alert(data.error || 'Erro ao tirar subida.');
+      }
     }
 
     async function toggleDeviceActive() {
