@@ -308,7 +308,13 @@
 
   function updateTypes() {
     const company = companySelect.value || '__global__';
-    const pid = (projectSelect && projectSelect.value) ? String(projectSelect.value) : '';
+    let pid = (projectSelect && projectSelect.value) ? String(projectSelect.value) : '';
+    // Modo rápido (splicer) ou sem projeto escolhido: usa o projeto do mapa selecionado
+    if (!pid && mapSelect) {
+      const mopt = mapSelect.options[mapSelect.selectedIndex];
+      if (mopt && mopt.dataset && mopt.dataset.projectId) pid = String(mopt.dataset.projectId);
+    }
+    const prevType = typeSelect ? typeSelect.value : '';
 
     let types = [];
     if (pid && devicesByProject[pid]) {
@@ -347,6 +353,7 @@
       if (t.is_ribbon) opt.dataset.isRibbon = '1';
       typeSelect.appendChild(opt);
     });
+    if (prevType && Array.from(typeSelect.options).some(o => o.value === prevType)) typeSelect.value = prevType;
     updateRibbonVisibility();
   }
 
@@ -467,6 +474,7 @@
 
   mapSelect.addEventListener('change', () => {
     updateMapRoleVisibility();
+    updateTypes();
     updateFtVisibility();
 
     const deviceInput = document.getElementById('device-name-input');
@@ -490,6 +498,7 @@
     const preselectedMap = "{{ form_map_id|default('') }}";
     if (preselectedMap) {
       mapSelect.value = preselectedMap;
+      updateTypes();
     }
 
     const preselectedRole = "{{ form_map_role|default('') }}";
