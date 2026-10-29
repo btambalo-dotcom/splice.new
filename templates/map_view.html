@@ -102,6 +102,7 @@
     .mv-mont-bar { background:rgba(255,152,0,.08); border:1px solid rgba(255,152,0,.45); border-radius:12px; padding:10px 12px; margin-bottom:10px; display:none; }
     .mv-mont-bar.on { display:block; }
     .mv-mont-bar .form-select { background:var(--mv-card); border-color:var(--mv-line); color:#e6ebf3; max-width:200px; }
+    .test-filt.on { background:#1a73e8 !important; border-color:#1a73e8 !important; color:#fff !important; font-weight:700; }
     .mont-filt.on { background:#ff9800 !important; border-color:#ff9800 !important; color:#1a1200 !important; font-weight:700; }
     #montFiltList .mv-chip { cursor:pointer; }
     #montModeBtn.on { background:#ff9800; border-color:#ff9800; color:#1a1200; font-weight:700; }
@@ -237,6 +238,15 @@
     </div>
     <button id="showAllBtn" class="btn btn-sm mv-btn-ghost" data-i18n="show_all">Mostrar tudo</button>
     <span id="deviceSearchHint" class="small mv-muted"></span>
+  </div>
+
+  {# ---------- v142: filtro de testes ---------- #}
+  <div class="mv-toolbar" id="testFilterRow">
+    <span class="mv-muted small">Testes no mapa:</span>
+    <button type="button" class="btn btn-sm mv-btn test-filt on" data-tf="">Todos</button>
+    <button type="button" class="btn btn-sm mv-btn test-filt" data-tf="pend" style="border-color:#ef4444;">📡 Não testados (<b id="tfCntPend">0</b>)</button>
+    <button type="button" class="btn btn-sm mv-btn test-filt" data-tf="done" style="border-color:#22c55e;">✅ Testados (<b id="tfCntDone">0</b>)</button>
+    <span id="tfList" class="small mv-muted"></span>
   </div>
 
   {# ---------- v123: resultado da busca por splitter ---------- #}
@@ -1871,6 +1881,7 @@ const popupHtml = popupParts.join('');
                 marker.openPopup();
               }
             });
+            try { applyTestFilter(false); } catch(e) { console.error('applyTestFilter', e); }
             // Compute robust bounds so a single wrong coordinate doesn't zoom the whole world
             const fitPoints = _robustFitPoints(records);
             const fitBounds = fitPoints.map(p => [p.lat, p.lng]);
@@ -2934,5 +2945,75 @@ function openDeviceModalById(id) {
       .catch(e => alert('Erro de conexão: ' + e));
   }
 
+
+    // ===== v142: filtro de testes no mapa (Todos / Não testados / Testados) =====
+    window._testFilter = '';
+    try { window._testFilter = localStorage.getItem('splicer_testfilt_{{ map_obj.id }}') || ''; } catch(e) {}
+    function isTestableRec(rec){
+      const t = String(rec.type || '').trim().toUpperCase();
+      if (['S','SPLITTER','D','BS'].includes(t) || t.startsWith('CAN')) return false;
+      if (rec.is_active === false) return false;
+      if (rec.other_company) return false;
+      return true;
+    }
+    function isTestedRec(rec){
+      return !!rec.test_done && String(rec.test_levels || '').trim() !== '';
+    }
+    function testFilterHit(rec){
+      const f = window._testFilter || '';
+      if (!f) return true;
+      if (!isTestableRec(rec)) return false;
+      return f === 'pend' ? !isTestedRec(rec) : isTestedRec(rec);
+    }
+    function applyTestFilter(fit){
+      const recs = window._mapRecords || [];
+      const testable = recs.filter(isTestableRec);
+      const pend = testable.filter(r => !isTestedRec(r));
+      const cp = document.getElementById('tfCntPend'); if (cp) cp.textContent = pend.length;
+      const cd = document.getElementById('tfCntDone'); if (cd) cd.textContent = testable.length - pend.length;
+      document.querySelectorAll('.test-filt').forEach(b => b.classList.toggle('on', (b.dataset.tf || '') === (window._testFilter || '')));
+      const shown = [];
+      recs.forEach(rec => {
+        const mk = window._recordMarkers && window._recordMarkers.get(rec.id);
+        if (!mk) return;
+        const hit = testFilterHit(rec);
+        const onMap = markersLayer.hasLayer(mk);
+        if (hit && !onMap) mk.addTo(markersLayer);
+        if (!hit && onMap) markersLayer.removeLayer(mk);
+        if (hit) shown.push(rec);
+      });
+      const list = document.getElementById('tfList');
+      if (list) {
+        if (window._testFilter === 'pend') {
+          list.innerHTML = pend.length
+            ? pend.map(r => '<a href="#" class="tf-dev" data-id="' + r.id + '" style="color:#fca5a5;margin-right:6px;">' + (r.device || ('#' + r.id)) + '</a>').join('')
+            : '<span style="color:#22c55e;">Todos testados ✓</span>';
+        } else {
+          list.innerHTML = '';
+        }
+      }
+      if (fit && shown.length) {
+        const pts = _robustFitPoints(shown).map(p => [p.lat, p.lng]);
+        if (pts.length) leafletMap.fitBounds(pts, { padding: [20, 20], maxZoom: 18 });
+      }
+    }
+    window.applyTestFilter = applyTestFilter;
+    function setTestFilter(f){
+      window._testFilter = f || '';
+      try { localStorage.setItem('splicer_testfilt_{{ map_obj.id }}', window._testFilter); } catch(e) {}
+      applyTestFilter(true);
+    }
+    document.querySelectorAll('.test-filt').forEach(b => b.addEventListener('click', () => setTestFilter(b.dataset.tf || '')));
+    document.addEventListener('click', function(e){
+      const a = e.target.closest && e.target.closest('.tf-dev');
+      if (!a) return;
+      e.preventDefault();
+      const id = Number(a.dataset.id);
+      const rec = (window._mapRecords || []).find(r => r.id === id);
+      const mk = window._recordMarkers && window._recordMarkers.get(id);
+      if (rec) { leafletMap.setView([rec.lat, rec.lng], 19); }
+      if (mk) { try { mk.openPopup(); } catch(err) {} }
+    });
+    if (typeof window.refreshMarkers !== 'function') { window.refreshMarkers = function(){ loadMarkers(); }; }
   </script>
 {% endblock %}
