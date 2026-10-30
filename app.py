@@ -7767,6 +7767,61 @@ def api_add_record_to_map(map_id):
 
 
 
+# ===================== v143: ver fotos que ficaram no R2 (somente leitura) =====================
+@app.route("/admin/r2-record/<int:rid>")
+@admin_required
+def admin_r2_record(rid):
+    """Lista os arquivos do R2 da pasta records/<rid>/ e mostra quais nao estao mais ligados a nenhuma foto.
+    Somente leitura: nao cria, nao apaga e nao altera nada."""
+    info = {"r2_enabled": r2_enabled(), "auto_photo_env_R2_BUCKET": bool(os.environ.get("R2_BUCKET")), "objects": []}
+    rec = Record.query.get(rid)
+    info["device"] = rec.device if rec else None
+    c = r2_client()
+    if c is None:
+        return jsonify(info) if request.args.get("format") == "json" else ("R2 nao configurado: " + json.dumps(info), 200)
+    linked = set(k for (k,) in db.session.query(RecordPhoto.r2_key).filter(RecordPhoto.record_id == rid).all() if k)
+    token = None
+    while True:
+        kw = {"Bucket": r2_bucket(), "Prefix": f"records/{rid}/"}
+        if token:
+            kw["ContinuationToken"] = token
+        resp = c.list_objects_v2(**kw)
+        for o in resp.get("Contents", []) or []:
+            k = o.get("Key") or ""
+            if k.endswith("_thumb.jpg"):
+                continue
+            info["objects"].append({"key": k, "size": o.get("Size"), "modified": o.get("LastModified").isoformat() if o.get("LastModified") else None, "linked": k in linked})
+        if resp.get("IsTruncated"):
+            token = resp.get("NextContinuationToken")
+        else:
+            break
+    info["objects"].sort(key=lambda x: x["modified"] or "")
+    if request.args.get("format") == "json":
+        return jsonify(info)
+    rows = "".join(
+        f'<div style="display:inline-block;width:240px;margin:4px;vertical-align:top;font:12px Arial">'
+        f'<img src="{url_for("admin_r2_object", key=o["key"])}" style="width:240px;height:320px;object-fit:contain;background:#000"><br>'
+        f'{"LIGADA" if o["linked"] else "<b style=color:red>SEM LIGACAO</b>"} · {o["modified"]}<br>{o["key"].split("/")[-1][:60]}</div>'
+        for o in info["objects"])
+    return f"<h3>R2 · record {rid} · {info['device']}</h3><p>{len(info['objects'])} arquivos</p>{rows}"
+
+
+@app.route("/admin/r2-object")
+@admin_required
+def admin_r2_object():
+    key = (request.args.get("key") or "").strip()
+    if not key.startswith("records/"):
+        abort(400)
+    try:
+        b = r2_get_bytes(key)
+    except Exception:
+        abort(404)
+    resp = make_response(b)
+    resp.headers["Content-Type"] = "image/jpeg"
+    resp.headers["Cache-Control"] = "private, max-age=3600"
+    return resp
+
+
 @app.route("/admin/restore_rn51e", methods=["GET", "POST"])
 @admin_required
 def admin_restore_rn51e():
