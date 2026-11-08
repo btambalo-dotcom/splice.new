@@ -126,7 +126,10 @@
 </div>
 {% endif %}
 
-{% set launch_photos = rec.photos | rejectattr('is_test') | list %}
+{% set ns = namespace(launch=[], t1577=[]) %}
+{% for p in rec.photos %}{% if not p.is_test %}{% if (p.filename or '').startswith('t1577__') %}{% set ns.t1577 = ns.t1577 + [p] %}{% else %}{% set ns.launch = ns.launch + [p] %}{% endif %}{% endif %}{% endfor %}
+{% set launch_photos = ns.launch %}
+{% set t1577_photos = ns.t1577 %}
 {% set test_photos = rec.photos | selectattr('is_test') | list %}
 
 {% if launch_photos|length > 0 %}
@@ -180,6 +183,23 @@
             </button>
           </form>
         {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% if t1577_photos|length > 0 or rec.test1577_levels %}
+<div class="card mt-4 p-3" style="border-color:#8e44ad;">
+  <h5 class="mb-2">🟣 Teste 1577 nm</h5>
+  {% if rec.test1577_levels %}<div class="small mb-3">Níveis: <b>{{ rec.test1577_levels }}</b></div>{% endif %}
+  <div class="row g-3">
+    {% for p in t1577_photos %}
+      <div class="col-md-3 col-6">
+        <a href="#" class="js-photo-zoom" data-full="{{ url_for('photo_file', photo_id=p.id) }}">
+          <img src="{{ url_for('photo_file', photo_id=p.id, size='thumb') }}" class="img-fluid rounded border" alt="Teste 1577 {{ loop.index }}">
+        </a>
+        <div class="small mt-1" style="color:#c39bd3;">Teste 1577</div>
       </div>
     {% endfor %}
   </div>

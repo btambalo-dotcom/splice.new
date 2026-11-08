@@ -1003,6 +1003,9 @@ class Record(db.Model):
     test_levels = db.Column(db.Text, nullable=True)
     test_done = db.Column(db.Boolean, default=False)
     test_date = db.Column(db.DateTime, nullable=True)
+    # v144 — teste extra em 1577 nm (fica separado do teste 1310; nunca apaga o 1310)
+    test1577_levels = db.Column(db.Text, nullable=True)
+    test1577_date = db.Column(db.DateTime, nullable=True)
 
     # v123 — Modelo da caixa e montagem (caixa deixada pronta com o splitter pelo montador)
     box_model = db.Column(db.String(120), nullable=True)
@@ -1376,6 +1379,8 @@ with app.app_context():
     ensure("record", "test_levels", "TEXT")
     ensure("record", "test_done", "BOOLEAN")
     ensure("record", "test_date", "TIMESTAMP")
+    ensure("record", "test1577_levels", "TEXT")
+    ensure("record", "test1577_date", "TIMESTAMP")
     ensure("record", "latitude", "DOUBLE PRECISION")
     ensure("record", "longitude", "DOUBLE PRECISION")
     ensure("record", "device_info", "VARCHAR(255)")
@@ -7146,7 +7151,8 @@ def api_map_records(map_id):
     data = []
     for r in query.order_by(Record.id.asc()).all():
         # Separamos miniaturas de lançamento e de teste para mostrar no popup do mapa
-        device_photos = [p for p in r.photos if not getattr(p, "is_test", False) and not (p.filename or "").startswith("placed__")][:4]
+        device_photos = [p for p in r.photos if not getattr(p, "is_test", False) and not (p.filename or "").startswith(("placed__", "t1577__"))][:4]
+        t1577_photos  = [p for p in r.photos if not getattr(p, "is_test", False) and (p.filename or "").startswith("t1577__")]
         test_photos   = [p for p in r.photos if getattr(p, "is_test", False)][:4]
         placed_photos = [p for p in r.photos if not getattr(p, "is_test", False) and (p.filename or "").startswith("placed__")][:4]
         device_type = (r.type or "OTE").strip() or "OTE"
@@ -7169,6 +7175,9 @@ def api_map_records(map_id):
             "test_done": bool(r.test_done),
             "test_levels": r.test_levels or "",
             "test_date": r.test_date.isoformat() if r.test_date else None,
+            "test1577_levels": getattr(r, "test1577_levels", None) or "",
+            "test1577_date": r.test1577_date.isoformat() if getattr(r, "test1577_date", None) else None,
+            "test1577_photo_ids": [p.id for p in t1577_photos],
             "section": r.section or "",
             "created_date": r.created_date.isoformat() if r.created_date else None,
             "address": getattr(r, 'geo_address', None) or '',
@@ -8270,7 +8279,7 @@ def _parse_gps_str(gps_str):
     # Garante que lon negativo se já vier negativo no string
     return lat, lon
 
-def _save_photo_to_record(rec, raw_bytes, fname, content_type, is_test=False, is_placed=False):
+def _save_photo_to_record(rec, raw_bytes, fname, content_type, is_test=False, is_placed=False, prefix=None):
     """Otimiza e salva uma foto em um Record. Retorna True se ok."""
     try:
         opt_bytes, opt_ct = optimize_upload_bytes(raw_bytes, content_type or "image/jpeg")
@@ -8290,6 +8299,8 @@ def _save_photo_to_record(rec, raw_bytes, fname, content_type, is_test=False, is
         safe_fname = fname
         if is_placed and not safe_fname.startswith("placed__"):
             safe_fname = "placed__" + safe_fname
+        if prefix and not safe_fname.startswith(prefix):
+            safe_fname = prefix + safe_fname
 
         photo_rec = RecordPhoto(
             record_id=rec.id,
@@ -8456,6 +8467,25 @@ def _process_photo_result(rec, raw_bytes, fname, content_type, photo_type, parse
         power_dbm  = parsed.get("power_dbm")
         power_uw   = parsed.get("power_uw")
         wavelength = parsed.get("wavelength_nm")
+
+        # v144 — teste 1577 nm: vai para um campo separado, só ACRESCENTA (nunca apaga nada)
+        try:
+            _wl = int(float(wavelength or 0))
+        except Exception:
+            _wl = 0
+        if request.form.get("test_wl") == "1577" or 1570 <= _wl <= 1585:
+            if power_dbm is not None:
+                existing = rec.test1577_levels or ""
+                rec.test1577_levels = (existing + "," + str(power_dbm)) if existing else str(power_dbm)
+            rec.test1577_date = datetime.utcnow()
+            _save_photo_to_record(rec, raw_bytes, fname, content_type, is_test=False, is_placed=False, prefix="t1577__")
+            db.session.commit()
+            return {
+                "file": fname, "ok": True, "action": "test1577",
+                "device": rec.device, "map_name": map_name,
+                "power_dbm": power_dbm, "power_uw": power_uw,
+                "wavelength_nm": wavelength or 1577, "record_id": rec.id,
+            }
 
         # reset_test=1 na primeira foto do lote → apaga teste anterior
         reset = request.form.get("reset_test") == "1"
@@ -10621,7 +10651,7 @@ def _device_photo_counts(record_ids):
     rows = (db.session.query(RecordPhoto.record_id, RecordPhoto.filename, RecordPhoto.is_test)
             .filter(RecordPhoto.record_id.in_(ids)).all())
     for rid, fn, is_test in rows:
-        if is_test or (fn or "").startswith("placed__"):
+        if is_test or (fn or "").startswith(("placed__", "t1577__")):
             continue
         out[rid] = out.get(rid, 0) + 1
     return out
@@ -10941,7 +10971,7 @@ def api_map_reread_splices(map_id):
     out = []
     for r in recs[offset:offset + limit]:
         photos = [p for p in RecordPhoto.query.filter(RecordPhoto.record_id == r.id).order_by(RecordPhoto.id.asc()).all()
-                  if not p.is_test and not (p.filename or "").startswith("placed__")][:4]
+                  if not p.is_test and not (p.filename or "").startswith(("placed__", "t1577__"))][:4]
         found, errs = [], []
         for ph in photos:
             b = _photo_original_bytes(ph)

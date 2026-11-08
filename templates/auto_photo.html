@@ -38,6 +38,13 @@
       <!-- Preview miniaturas -->
       <div id="preview-area" class="d-flex flex-wrap gap-2 mb-3"></div>
 
+      <div class="form-check form-switch mb-3 p-2 ps-5 rounded" style="background:#2a1840;border:1px solid #8e44ad;">
+        <input class="form-check-input" type="checkbox" id="test1577-switch">
+        <label class="form-check-label text-light fw-semibold" for="test1577-switch">
+          🟣 Teste 1577 nm <span class="small text-muted d-block">Ligue quando as fotos forem do teste extra em 1577. Fica separado do teste 1310 e não apaga nada.</span>
+        </label>
+      </div>
+
       <button id="btn-launch" class="btn btn-success w-100 py-2 fw-semibold" disabled>
         ⬆ Lançar automaticamente
       </button>
@@ -128,6 +135,7 @@ btnLaunch.addEventListener('click', async () => {
       try {
         const fd = new FormData();
         fd.append('photos', f, f.name);
+        if (document.getElementById('test1577-switch').checked) fd.append('test_wl', '1577');
         if (testPhotoCount === 0) fd.append('reset_test', '1');
         const resp = await fetch(AUTO_LAUNCH_URL, { method: 'POST', body: fd });
         if (!resp.ok) { allResults.push({ file: f.name, ok: false, error: 'HTTP ' + resp.status }); continue; }
@@ -158,9 +166,9 @@ function renderResults(items) {
   const ok_count   = items.filter(r => r.ok).length;
   const fail_count = items.length - ok_count;
 
-  const actionIcon = { splice: '🔗', test: '📊', placed: '📍' };
-  const actionLabel = { splice: 'Lançado', test: 'Teste', placed: 'Subido' };
-  const actionColor = { splice: 'success', test: 'info', placed: 'warning' };
+  const actionIcon = { splice: '🔗', test: '📊', test1577: '🟣', placed: '📍' };
+  const actionLabel = { splice: 'Lançado', test: 'Teste', test1577: 'Teste 1577', placed: 'Subido' };
+  const actionColor = { splice: 'success', test: 'info', test1577: 'info', placed: 'warning' };
 
   let html = `
     <div class="d-flex gap-3 mb-3">
@@ -193,6 +201,9 @@ function renderResults(items) {
         detail = `🗺 <strong class="text-light">${r.map_name}</strong>
           ${r.wavelength_nm ? `&nbsp;·&nbsp; ${r.wavelength_nm}nm` : ''}
           ${r.power_uw  != null ? `&nbsp;·&nbsp; ${r.power_uw}µW`  : ''}
+          ${r.power_dbm != null ? `&nbsp;·&nbsp; <strong class="text-info">${r.power_dbm} dBm</strong>` : ''}`;
+      } else if (r.action === 'test1577') {
+        detail = `🗺 <strong class="text-light">${r.map_name}</strong> &nbsp;·&nbsp; <b style="color:#c39bd3">1577nm</b>
           ${r.power_dbm != null ? `&nbsp;·&nbsp; <strong class="text-info">${r.power_dbm} dBm</strong>` : ''}`;
       } else if (r.action === 'placed') {
         detail = `🗺 <strong class="text-light">${r.map_name}</strong> &nbsp;·&nbsp; Marcado como subido`;

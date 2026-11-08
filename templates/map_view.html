@@ -246,6 +246,8 @@
     <button type="button" class="btn btn-sm mv-btn test-filt on" data-tf="">Todos</button>
     <button type="button" class="btn btn-sm mv-btn test-filt" data-tf="pend" style="border-color:#ef4444;">📡 Não testados (<b id="tfCntPend">0</b>)</button>
     <button type="button" class="btn btn-sm mv-btn test-filt" data-tf="done" style="border-color:#22c55e;">✅ Testados (<b id="tfCntDone">0</b>)</button>
+    <button type="button" class="btn btn-sm mv-btn test-filt" data-tf="p1577" style="border-color:#8e44ad;">🟣 Falta 1577 (<b id="tfCntP1577">0</b>)</button>
+    <button type="button" class="btn btn-sm mv-btn test-filt" data-tf="d1577" style="border-color:#8e44ad;">🟣 Com 1577 (<b id="tfCntD1577">0</b>)</button>
     <span id="tfList" class="small mv-muted"></span>
   </div>
 
@@ -304,6 +306,7 @@
         <div><span class="mv-dot" style="background:#2ecc40"></span> Lançado ✓</div>
         <div><span class="mv-ico">📡</span> Teste lançado</div>
         <div><span class="mv-ico" style="color:#2ecc40">↑</span> Dispositivo subido</div>
+        <div><span style="background:#8e44ad;color:#fff;border-radius:4px;font:700 9px Arial;padding:1px 3px;">1577</span> Teste 1577 nm lançado</div>
         <div class="mv-legend-hint">Clique em um ponto para editar.</div>
       </div>
     </div>
@@ -1537,8 +1540,14 @@ function buildDeviceIcon(rec) {
     }
     if (montSel) montRing = '<div style="position:absolute;left:-6px;top:-4px;width:44px;height:44px;border-radius:50%;border:3px solid #ff9800;box-shadow:0 0 10px #ff9800;"></div>';
   }
+  // v144 — selo roxo "1577" (canto superior esquerdo) quando tem teste 1577 nm
+  var t1577Svg = '';
+  if (String(rec.test1577_levels || '').trim() !== '' || (rec.test1577_photo_ids && rec.test1577_photo_ids.length)) {
+    t1577Svg = '<div style="position:absolute;top:-7px;left:-10px;background:#8e44ad;color:#fff;border:1px solid #fff;'
+      + 'border-radius:6px;font:700 8px/1 Arial,sans-serif;padding:2px 3px;box-shadow:0 1px 3px rgba(0,0,0,.5);">1577</div>';
+  }
   var html = '<div style="position:relative;width:32px;height:42px;overflow:visible;' + montStyle + '">'
-    + montRing + pinSvg + antennaSvg + placedSvg
+    + montRing + pinSvg + antennaSvg + placedSvg + t1577Svg
     + '</div>';
 
   return L.divIcon({
@@ -1794,6 +1803,18 @@ if (rec.test_photo_ids && rec.test_photo_ids.length > 0) {
     );
   });
   popupParts.push('</div>');
+}
+
+// v144 — teste 1577 nm
+if (String(rec.test1577_levels || '').trim() !== '' || (rec.test1577_photo_ids && rec.test1577_photo_ids.length > 0)) {
+  popupParts.push('<div class="small mt-2" style="color:#c39bd3;"><strong>🟣 Teste 1577 nm:</strong> ' + (rec.test1577_levels || '') + '</div>');
+  if (rec.test1577_photo_ids && rec.test1577_photo_ids.length > 0) {
+    popupParts.push('<div class="mt-1 popup-photos">');
+    rec.test1577_photo_ids.forEach(function(pid) {
+      popupParts.push('<a href="/photo/' + pid + '" target="_blank" class="me-1 mb-1 d-inline-block"><img src="/photo/' + pid + '?size=thumb" class="popup-thumb" alt="Teste 1577"></a>');
+    });
+    popupParts.push('</div>');
+  }
 }
 
 // Fotos da subida (placed)
@@ -2785,6 +2806,10 @@ function openDeviceModalById(id) {
               <input type="file" id="auto-photo-input" class="form-control bg-secondary text-light border-0"
                      accept="image/*" multiple>
             </div>
+            <div class="form-check form-switch mb-3 p-2 ps-5 rounded" style="background:#2a1840;border:1px solid #8e44ad;">
+              <input class="form-check-input" type="checkbox" id="auto-photo-1577">
+              <label class="form-check-label text-light" for="auto-photo-1577">🟣 Teste 1577 nm (fica separado do 1310, não apaga nada)</label>
+            </div>
             <div id="auto-photo-preview" class="d-flex flex-wrap gap-2 mb-3"></div>
             <div id="auto-photo-progress" class="d-none">
               <div class="d-flex align-items-center gap-2 mb-2">
@@ -2866,6 +2891,7 @@ function openDeviceModalById(id) {
           const fd = new FormData();
           fd.append('photos', f, f.name);
           // reset_test=1 na primeira foto de teste do lote para sobrescrever anterior
+          if (document.getElementById('auto-photo-1577') && document.getElementById('auto-photo-1577').checked) fd.append('test_wl', '1577');
           if (testPhotoCount === 0) fd.append('reset_test', '1');
           const resp = await fetch(autoPhotoLaunchUrl, { method: 'POST', body: fd });
           if (!resp.ok) {
@@ -2898,6 +2924,8 @@ function openDeviceModalById(id) {
             const action = r.action || 'splice';
             if (action === 'test') {
               detail = '<span class="text-muted small">' + r.device + ' · 📊 Teste · ' + (r.power_dbm != null ? r.power_dbm + ' dBm' : '') + '</span>';
+            } else if (action === 'test1577') {
+              detail = '<span class="small" style="color:#c39bd3">' + r.device + ' · 🟣 Teste 1577 · ' + (r.power_dbm != null ? r.power_dbm + ' dBm' : '') + '</span>';
             } else if (action === 'placed') {
               detail = '<span class="text-muted small">' + r.device + ' · 📍 Subido</span>';
             } else if (action === 'created') {
@@ -2959,10 +2987,15 @@ function openDeviceModalById(id) {
     function isTestedRec(rec){
       return !!rec.test_done && String(rec.test_levels || '').trim() !== '';
     }
+    function has1577Rec(rec){
+      return String(rec.test1577_levels || '').trim() !== '' || !!(rec.test1577_photo_ids && rec.test1577_photo_ids.length);
+    }
     function testFilterHit(rec){
       const f = window._testFilter || '';
       if (!f) return true;
       if (!isTestableRec(rec)) return false;
+      if (f === 'p1577') return !has1577Rec(rec);
+      if (f === 'd1577') return has1577Rec(rec);
       return f === 'pend' ? !isTestedRec(rec) : isTestedRec(rec);
     }
     function applyTestFilter(fit){
@@ -2971,6 +3004,9 @@ function openDeviceModalById(id) {
       const pend = testable.filter(r => !isTestedRec(r));
       const cp = document.getElementById('tfCntPend'); if (cp) cp.textContent = pend.length;
       const cd = document.getElementById('tfCntDone'); if (cd) cd.textContent = testable.length - pend.length;
+      const n1577 = testable.filter(has1577Rec).length;
+      const c1 = document.getElementById('tfCntP1577'); if (c1) c1.textContent = testable.length - n1577;
+      const c2 = document.getElementById('tfCntD1577'); if (c2) c2.textContent = n1577;
       document.querySelectorAll('.test-filt').forEach(b => b.classList.toggle('on', (b.dataset.tf || '') === (window._testFilter || '')));
       const shown = [];
       recs.forEach(rec => {
@@ -2984,7 +3020,12 @@ function openDeviceModalById(id) {
       });
       const list = document.getElementById('tfList');
       if (list) {
-        if (window._testFilter === 'pend') {
+        const listRecs = window._testFilter === 'p1577' ? testable.filter(r => !has1577Rec(r)) : null;
+        if (listRecs) {
+          list.innerHTML = listRecs.length
+            ? listRecs.map(r => '<a href="#" class="tf-dev" data-id="' + r.id + '" style="color:#c39bd3;margin-right:6px;">' + (r.device || ('#' + r.id)) + '</a>').join('')
+            : '<span style="color:#22c55e;">Todos com 1577 ✓</span>';
+        } else if (window._testFilter === 'pend') {
           list.innerHTML = pend.length
             ? pend.map(r => '<a href="#" class="tf-dev" data-id="' + r.id + '" style="color:#fca5a5;margin-right:6px;">' + (r.device || ('#' + r.id)) + '</a>').join('')
             : '<span style="color:#22c55e;">Todos testados ✓</span>';
