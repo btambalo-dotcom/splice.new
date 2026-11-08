@@ -2021,6 +2021,43 @@ def _detect_media_type(image_bytes: bytes) -> str:
     return 'image/jpeg'  # fallback
 
 
+def read_wavelength_with_ai(image_bytes: bytes):
+    """v145 — segunda leitura só do comprimento de onda do power meter (mapa 982774).
+    Retorna int (ex.: 1310 / 1577) ou None. Nunca levanta exceção."""
+    api_key = os.environ.get('ANTHROPIC_API_KEY')
+    if not image_bytes or not api_key:
+        return None
+    try:
+        prompt = (
+            "Esta é uma foto de um medidor de potência óptica (power meter). Olhe SOMENTE a PRIMEIRA linha do\n"
+            "display, a que tem 'nm' ao lado (comprimento de onda). Os valores possíveis são 1310, 1490, 1550 ou 1577.\n"
+            "Leia os 4 dígitos com muita atenção (1310 = um-TRÊS-um-zero; 1577 = um-CINCO-SETE-SETE).\n"
+            "Se o segundo dígito for 5, NÃO é 1310. Não chute 1310 por padrão.\n"
+            "Responda APENAS o número de 4 dígitos (ex.: 1577). Se não der para ler, responda 0."
+        )
+        payload = {
+            'model': 'claude-sonnet-4-6', 'max_tokens': 10,
+            'messages': [{'role': 'user', 'content': [
+                {'type': 'image', 'source': {'type': 'base64', 'media_type': _detect_media_type(image_bytes),
+                                             'data': base64.b64encode(image_bytes).decode('ascii')}},
+                {'type': 'text', 'text': prompt}]}],
+        }
+        headers = {'x-api-key': api_key, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json'}
+        resp = requests.post('https://api.anthropic.com/v1/messages', headers=headers, data=json.dumps(payload), timeout=30)
+        if resp.status_code != 200:
+            return None
+        txt = ''.join(b.get('text', '') for b in resp.json().get('content', []) if b.get('type') == 'text')
+        m = re.search(r'(\d{4})', txt)
+        return int(m.group(1)) if m else None
+    except Exception:
+        return None
+
+
+def _is_1577_map(map_name) -> bool:
+    """v145 — o teste extra 1577 nm só existe no mapa 982774."""
+    return re.sub(r"\D", "", str(map_name or "")) == "982774" and "RB" not in str(map_name or "").upper()
+
+
 def classify_photo_with_ai(image_bytes: bytes):
     """Classifica o tipo de foto Timemark usando Claude.
 
@@ -2084,8 +2121,14 @@ def classify_photo_with_ai(image_bytes: bytes):
             "    NUNCA conte fibras físicas nem conectores para determinar fusões.\n"
             "  map_role ('PONTA' se só IN, 'MEIO' se IN e OUT), ft_in, ft_out, gps, photo_datetime\n\n"
             "TIPO 'test': mostra um equipamento de medição óptica (power meter laranja/amarelo, OTDR) com display numérico.\n"
-            "  Extraia: device_name (do carimbo Timemark), wavelength_nm (ex: 1550), power_uw (ex: 30.14),\n"
+            "  Extraia: device_name (do carimbo Timemark), wavelength_nm (ex: 1310), power_uw (ex: 30.14),\n"
             "  power_dbm (ex: -15.21), gps, photo_datetime\n"
+            "  COMPRIMENTO DE ONDA (wavelength_nm) — LEIA COM MUITO CUIDADO, é MUITO importante:\n"
+            "  é a PRIMEIRA linha do display, com 'nm' ao lado (ex.: '1310 nm' ou '1577 nm').\n"
+            "  Os valores possíveis são 1310, 1490, 1550 ou 1577. Leia os 4 dígitos um por um:\n"
+            "  1310 = um-TRÊS-um-zero; 1577 = um-CINCO-SETE-SETE. Se o segundo dígito for 5 NÃO é 1310.\n"
+            "  Se a linha estiver pequena, borrada ou com reflexo, olhe de novo antes de responder;\n"
+            "  nunca chute 1310 por padrão. Coloque também em wavelength_text exatamente o que está escrito.\n"
             "  ATENÇÃO na leitura do dBm: o display mostra 3 linhas (wavelength / µW / dBm).\n"
             "  O valor dBm é SEMPRE negativo, tipicamente entre -10.00 e -25.00.\n"
             "  O primeiro dígito após o sinal é SEMPRE 1 ou 2 — NUNCA 4 ou 5.\n"
@@ -2111,7 +2154,7 @@ def classify_photo_with_ai(image_bytes: bytes):
             "{\"photo_type\": \"splice|test|placed|unknown\", \"device_name\": \"...\", "
             "\"device_type\": \"OTE|CAN\", \"splices\": 0, \"splices_confirmed\": false, "
             "\"map_role\": null, \"ft_in\": null, \"ft_out\": null, "
-            "\"wavelength_nm\": null, \"power_uw\": null, \"power_dbm\": null, "
+            "\"wavelength_nm\": null, \"wavelength_text\": null, \"power_uw\": null, \"power_dbm\": null, "
             "\"gps\": null, \"photo_datetime\": null}"
         )
 
@@ -2169,6 +2212,7 @@ def classify_photo_with_ai(image_bytes: bytes):
         elif photo_type == 'test':
             try: result['wavelength_nm'] = int(parsed.get('wavelength_nm') or 0) or None
             except: result['wavelength_nm'] = None
+            result['wavelength_text'] = str(parsed.get('wavelength_text') or '')[:40] or None
             try: result['power_uw'] = float(parsed.get('power_uw') or 0) or None
             except: result['power_uw'] = None
             try: result['power_dbm'] = float(parsed.get('power_dbm') or 0) or None
@@ -8473,7 +8517,18 @@ def _process_photo_result(rec, raw_bytes, fname, content_type, photo_type, parse
             _wl = int(float(wavelength or 0))
         except Exception:
             _wl = 0
-        if request.form.get("test_wl") == "1577" or 1570 <= _wl <= 1585:
+        _is1577 = False
+        if _is_1577_map(map_name or rec.map):
+            _wtxt = str(parsed.get("wavelength_text") or "")
+            if request.form.get("test_wl") == "1577" or 1450 <= _wl <= 1650 or "157" in _wtxt or "155" in _wtxt:
+                _is1577 = True
+            else:
+                # segunda leitura focada só no comprimento de onda (bem sensível)
+                _wl2 = read_wavelength_with_ai(raw_bytes) or 0
+                if 1450 <= _wl2 <= 1650:
+                    _is1577 = True
+                    wavelength = _wl2
+        if _is1577:
             if power_dbm is not None:
                 existing = rec.test1577_levels or ""
                 rec.test1577_levels = (existing + "," + str(power_dbm)) if existing else str(power_dbm)
