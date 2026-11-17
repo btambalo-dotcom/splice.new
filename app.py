@@ -2053,6 +2053,162 @@ def read_wavelength_with_ai(image_bytes: bytes):
         return None
 
 
+def read_power_with_ai(image_bytes: bytes):
+    """v146 — leitura de conferência SÓ do nível (dBm) e da potência (µW) do power meter.
+    Retorna dict {"dbm": float|None, "uw": float|None, "unit": "uw"|"nw"|"mw"|None}. Nunca levanta exceção."""
+    out = {"dbm": None, "uw": None, "unit": None}
+    api_key = os.environ.get('ANTHROPIC_API_KEY')
+    if not image_bytes or not api_key:
+        return out
+    try:
+        prompt = (
+            "Esta é uma foto de um medidor de potência óptica (power meter) com display de 7 segmentos.\n"
+            "O display pode estar girado, de lado ou de cabeça para baixo: gire mentalmente antes de ler.\n"
+            "Leia SOMENTE dois números do display:\n"
+            "1) O NÍVEL em dBm: é o número GRANDE, com sinal de menos na frente e 'dBm' ao lado.\n"
+            "   Formato SEMPRE: sinal, dois dígitos, ponto, dois dígitos (ex.: -20.55, -19.88, -23.83, -24.00).\n"
+            "   Leia dígito por dígito, da esquerda para a direita, e confira cada segmento:\n"
+            "   0 e 8 se confundem (o 8 tem o traço do meio); 1 e 7 (o 7 tem o traço de cima);\n"
+            "   3, 8 e 9 se confundem; 5 e 6 se confundem; 2 e 7 se confundem.\n"
+            "   Reflexo de sol pode apagar um segmento: olhe de novo antes de responder.\n"
+            "   NÃO pule dígitos: '-20.55' não é '-7.55' nem '-2.55'; '-19.88' não é '-13.0' nem '-19.0'.\n"
+            "2) A POTÊNCIA: a linha do meio, com a unidade ao lado (uW, nW ou mW). Ex.: 8.820 uW.\n"
+            "   Alguns medidores (pretos) NÃO mostram essa linha: nesse caso use null.\n"
+            "Responda APENAS JSON, sem explicação:\n"
+            "{\"dbm\": \"-20.55\", \"uw\": \"8.820\", \"unit\": \"uW\"}\n"
+            "Use null no que não der para ler com certeza."
+        )
+        payload = {
+            'model': 'claude-sonnet-4-6', 'max_tokens': 60,
+            'messages': [{'role': 'user', 'content': [
+                {'type': 'image', 'source': {'type': 'base64', 'media_type': _detect_media_type(image_bytes),
+                                             'data': base64.b64encode(image_bytes).decode('ascii')}},
+                {'type': 'text', 'text': prompt}]}],
+        }
+        headers = {'x-api-key': api_key, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json'}
+        resp = requests.post('https://api.anthropic.com/v1/messages', headers=headers, data=json.dumps(payload), timeout=30)
+        if resp.status_code != 200:
+            return out
+        txt = ''.join(b.get('text', '') for b in resp.json().get('content', []) if b.get('type') == 'text').strip()
+        m = re.search(r'\{.*\}', txt, re.S)
+        if not m:
+            return out
+        d = json.loads(m.group(0))
+        out["dbm"] = _to_float_or_none(d.get("dbm"))
+        out["uw"] = _to_float_or_none(d.get("uw"))
+        u = str(d.get("unit") or "").strip().lower().replace("µ", "u").replace("μ", "u")
+        out["unit"] = u if u in ("uw", "nw", "mw") else None
+        return out
+    except Exception:
+        return out
+
+
+def _to_float_or_none(v):
+    """v146 — converte '−20,55' / '-20.55 dBm' / -20.55 em float; None se não der."""
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    t = str(v).strip().replace("−", "-").replace("–", "-").replace(",", ".")
+    m = re.search(r'-?\d+(?:\.\d+)?', t)
+    if not m:
+        return None
+    try:
+        return float(m.group(0))
+    except Exception:
+        return None
+
+
+def _dbm_plausible(d):
+    """v146 — nível de power meter em campo: negativo, entre -45 e -1 dBm."""
+    return d is not None and -45.0 <= d <= -1.0
+
+
+def _expected_dbm_from_power(uw, unit=None):
+    """v146 — dBm que corresponde à potência lida. Sem unidade conhecida devolve as 3 hipóteses (µW, nW, mW)."""
+    import math as _math
+    if uw is None or uw <= 0:
+        return []
+    base = 10.0 * _math.log10(uw / 1000.0)  # supondo µW
+    if unit == "uw":
+        return [base]
+    if unit == "nw":
+        return [base - 30.0]
+    if unit == "mw":
+        return [base + 30.0]
+    return [base, base - 30.0, base + 30.0]
+
+
+def reconcile_power_reading(first_dbm, first_uw, second, third_reader=None):
+    """v146 — decide o nível final a partir de duas leituras independentes da mesma foto.
+
+    first_dbm / first_uw: leitura da classificação geral.
+    second: dict de read_power_with_ai (leitura de conferência).
+    third_reader: função sem argumentos que faz mais uma leitura (só é chamada se as duas discordarem
+                  e a potência em µW não desempatar).
+
+    Retorna (dbm_final, status): status = 'ok' (as leituras bateram), 'corrigido' (a conferência
+    corrigiu a primeira leitura) ou 'conferir' (não deu para ter certeza — olhar a foto).
+    """
+    d1 = first_dbm if _dbm_plausible(first_dbm) else None
+    d2 = (second or {}).get("dbm")
+    d2 = d2 if _dbm_plausible(d2) else None
+    # Sinal: o display sempre mostra negativo; leitura positiva plausível vira negativa.
+    if d1 is None and first_dbm is not None and _dbm_plausible(-abs(first_dbm)):
+        d1 = -abs(first_dbm)
+    if d2 is None and (second or {}).get("dbm") is not None and _dbm_plausible(-abs(second["dbm"])):
+        d2 = -abs(second["dbm"])
+
+    exps = []
+    exps += _expected_dbm_from_power(first_uw, None)
+    exps += _expected_dbm_from_power((second or {}).get("uw"), (second or {}).get("unit"))
+    exps = [e for e in exps if -46.0 <= e <= 0.0]
+
+    def _fits(d):
+        return d is not None and any(abs(d - e) <= 0.06 for e in exps)
+
+    if d1 is None and d2 is None:
+        return None, "conferir"
+    if d1 is not None and d2 is not None and abs(d1 - d2) < 0.005:
+        return d1, "ok"
+    if d1 is None or d2 is None:
+        only = d1 if d1 is not None else d2
+        if not exps or _fits(only):
+            return only, ("ok" if _fits(only) else "conferir")
+        return only, "conferir"
+    # As duas leituras discordam: a potência (µW) desempata.
+    f1, f2 = _fits(d1), _fits(d2)
+    if f1 and not f2:
+        return d1, "ok"
+    if f2 and not f1:
+        return d2, "corrigido"
+    both_fit = f1 and f2
+    # Sem desempate pela potência: terceira leitura, vale a maioria.
+    if third_reader is not None:
+        try:
+            d3 = (third_reader() or {}).get("dbm")
+        except Exception:
+            d3 = None
+        if _dbm_plausible(d3):
+            if abs(d3 - d1) < 0.005:
+                return d1, "ok"
+            if abs(d3 - d2) < 0.005:
+                return d2, "corrigido"
+    if both_fit:
+        # As duas batem com a potência (diferença de centésimo): fica a mais próxima do valor calculado.
+        _dist = lambda d: min(abs(d - e) for e in exps)
+        return (d1, "ok") if _dist(d1) <= _dist(d2) else (d2, "corrigido")
+    return d2, "conferir"
+
+
+def _fmt_dbm(d):
+    """v146 — nível sempre com 2 casas (ex.: -20.70), como aparece no display."""
+    try:
+        return "%.2f" % float(d)
+    except Exception:
+        return str(d)
+
+
 def _is_1577_map(map_name) -> bool:
     """v145 — o teste extra 1577 nm só existe no mapa 982774."""
     return re.sub(r"\D", "", str(map_name or "")) == "982774" and "RB" not in str(map_name or "").upper()
@@ -2217,6 +2373,20 @@ def classify_photo_with_ai(image_bytes: bytes):
             except: result['power_uw'] = None
             try: result['power_dbm'] = float(parsed.get('power_dbm') or 0) or None
             except: result['power_dbm'] = None
+            # v146 — conferência do nível: segunda leitura só do dBm/µW e desempate pela potência.
+            try:
+                _second = read_power_with_ai(image_bytes)
+                _final, _status = reconcile_power_reading(
+                    result.get('power_dbm'), result.get('power_uw'), _second,
+                    third_reader=lambda: read_power_with_ai(image_bytes))
+                result['power_dbm_first'] = result.get('power_dbm')
+                if _final is not None:
+                    result['power_dbm'] = _final
+                result['power_check'] = _status
+                if result.get('power_uw') is None and _second.get('uw') is not None and _second.get('unit') in (None, 'uw'):
+                    result['power_uw'] = _second.get('uw')
+            except Exception:
+                result['power_check'] = 'conferir'
 
         return photo_type, result, None
 
@@ -7197,7 +7367,8 @@ def api_map_records(map_id):
         # Separamos miniaturas de lançamento e de teste para mostrar no popup do mapa
         device_photos = [p for p in r.photos if not getattr(p, "is_test", False) and not (p.filename or "").startswith(("placed__", "t1577__"))][:4]
         t1577_photos  = [p for p in r.photos if not getattr(p, "is_test", False) and (p.filename or "").startswith("t1577__")]
-        test_photos   = [p for p in r.photos if getattr(p, "is_test", False)][:4]
+        # v146 — todas as fotos de teste (antes cortava em 4 e parecia que as outras não tinham subido)
+        test_photos   = sorted([p for p in r.photos if getattr(p, "is_test", False)], key=lambda p: p.id)
         placed_photos = [p for p in r.photos if not getattr(p, "is_test", False) and (p.filename or "").startswith("placed__")][:4]
         device_type = (r.type or "OTE").strip() or "OTE"
 
@@ -8531,7 +8702,7 @@ def _process_photo_result(rec, raw_bytes, fname, content_type, photo_type, parse
         if _is1577:
             if power_dbm is not None:
                 existing = rec.test1577_levels or ""
-                rec.test1577_levels = (existing + "," + str(power_dbm)) if existing else str(power_dbm)
+                rec.test1577_levels = (existing + "," + _fmt_dbm(power_dbm)) if existing else _fmt_dbm(power_dbm)
             rec.test1577_date = datetime.utcnow()
             _save_photo_to_record(rec, raw_bytes, fname, content_type, is_test=False, is_placed=False, prefix="t1577__")
             db.session.commit()
@@ -8539,6 +8710,7 @@ def _process_photo_result(rec, raw_bytes, fname, content_type, photo_type, parse
                 "file": fname, "ok": True, "action": "test1577",
                 "device": rec.device, "map_name": map_name,
                 "power_dbm": power_dbm, "power_uw": power_uw,
+                "power_check": parsed.get("power_check"), "power_dbm_first": parsed.get("power_dbm_first"),
                 "wavelength_nm": wavelength or 1577, "record_id": rec.id,
             }
 
@@ -8554,7 +8726,7 @@ def _process_photo_result(rec, raw_bytes, fname, content_type, photo_type, parse
 
         # Formato: cada porta é um valor dBm separado por vírgula
         if power_dbm is not None:
-            dbm_str = str(power_dbm)
+            dbm_str = _fmt_dbm(power_dbm)
             existing = rec.test_levels or ""
             rec.test_levels = (existing + "," + dbm_str) if existing else dbm_str
 
@@ -8568,6 +8740,7 @@ def _process_photo_result(rec, raw_bytes, fname, content_type, photo_type, parse
             "file": fname, "ok": True, "action": "test",
             "device": rec.device, "map_name": map_name,
             "power_dbm": power_dbm, "power_uw": power_uw,
+            "power_check": parsed.get("power_check"), "power_dbm_first": parsed.get("power_dbm_first"),
             "wavelength_nm": wavelength, "record_id": rec.id,
         }
 

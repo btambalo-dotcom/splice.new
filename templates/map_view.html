@@ -2934,9 +2934,9 @@ function openDeviceModalById(id) {
           if (r.ok) {
             const action = r.action || 'splice';
             if (action === 'test') {
-              detail = '<span class="text-muted small">' + r.device + ' · 📊 Teste · ' + (r.power_dbm != null ? r.power_dbm + ' dBm' : '') + '</span>';
+              detail = '<span class="text-muted small">' + r.device + ' · 📊 Teste · ' + (r.power_dbm != null ? r.power_dbm + ' dBm' : '') + (r.power_check === 'conferir' ? ' · <b class="text-warning">⚠️ confira o nível na foto</b>' : '') + '</span>';
             } else if (action === 'test1577') {
-              detail = '<span class="small" style="color:#c39bd3">' + r.device + ' · 🟣 Teste 1577 · ' + (r.power_dbm != null ? r.power_dbm + ' dBm' : '') + '</span>';
+              detail = '<span class="small" style="color:#c39bd3">' + r.device + ' · 🟣 Teste 1577 · ' + (r.power_dbm != null ? r.power_dbm + ' dBm' : '') + (r.power_check === 'conferir' ? ' · <b class="text-warning">⚠️ confira o nível na foto</b>' : '') + '</span>';
             } else if (action === 'placed') {
               detail = '<span class="text-muted small">' + r.device + ' · 📍 Subido</span>';
             } else if (action === 'created') {

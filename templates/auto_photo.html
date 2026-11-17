@@ -166,6 +166,12 @@ function renderResults(items) {
   const ok_count   = items.filter(r => r.ok).length;
   const fail_count = items.length - ok_count;
 
+  // v146 — aviso quando a IA não teve certeza do nível, ou quando a conferência corrigiu a 1ª leitura
+  const powerCheckNote = (r) => {
+    if (r.power_check === 'conferir') return ' &nbsp;<span class="badge bg-warning text-dark">⚠️ confira o nível na foto</span>';
+    if (r.power_check === 'corrigido' && r.power_dbm_first != null) return ' &nbsp;<span class="text-muted small">(1ª leitura: ' + r.power_dbm_first + ')</span>';
+    return '';
+  };
   const actionIcon = { splice: '🔗', test: '📊', test1577: '🟣', placed: '📍' };
   const actionLabel = { splice: 'Lançado', test: 'Teste', test1577: 'Teste 1577', placed: 'Subido' };
   const actionColor = { splice: 'success', test: 'info', test1577: 'info', placed: 'warning' };
@@ -201,10 +207,10 @@ function renderResults(items) {
         detail = `🗺 <strong class="text-light">${r.map_name}</strong>
           ${r.wavelength_nm ? `&nbsp;·&nbsp; ${r.wavelength_nm}nm` : ''}
           ${r.power_uw  != null ? `&nbsp;·&nbsp; ${r.power_uw}µW`  : ''}
-          ${r.power_dbm != null ? `&nbsp;·&nbsp; <strong class="text-info">${r.power_dbm} dBm</strong>` : ''}`;
+          ${r.power_dbm != null ? `&nbsp;·&nbsp; <strong class="text-info">${r.power_dbm} dBm</strong>` : ''}${powerCheckNote(r)}`;
       } else if (r.action === 'test1577') {
         detail = `🗺 <strong class="text-light">${r.map_name}</strong> &nbsp;·&nbsp; <b style="color:#c39bd3">1577nm</b>
-          ${r.power_dbm != null ? `&nbsp;·&nbsp; <strong class="text-info">${r.power_dbm} dBm</strong>` : ''}`;
+          ${r.power_dbm != null ? `&nbsp;·&nbsp; <strong class="text-info">${r.power_dbm} dBm</strong>` : ''}${powerCheckNote(r)}`;
       } else if (r.action === 'placed') {
         detail = `🗺 <strong class="text-light">${r.map_name}</strong> &nbsp;·&nbsp; Marcado como subido`;
       }
