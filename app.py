@@ -1037,6 +1037,16 @@ class RecordPhoto(db.Model):
     record = db.relationship('Record', backref=db.backref('photos', lazy=True))
 
 
+class PhotoHash(db.Model):
+    """v147 — assinatura (MD5) de cada foto salva, para ignorar foto repetida no Foto Auto.
+    Tabela separada de propósito: não altera a tabela record_photo."""
+    __tablename__ = "photo_hash"
+    photo_id = db.Column(db.Integer, primary_key=True, autoincrement=False)
+    raw_md5 = db.Column(db.String(32), index=True)   # arquivo como foi enviado
+    opt_md5 = db.Column(db.String(32), index=True)   # arquivo como ficou salvo (otimizado)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
 class Expense(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
@@ -8494,6 +8504,57 @@ def _parse_gps_str(gps_str):
     # Garante que lon negativo se já vier negativo no string
     return lat, lon
 
+def _photo_is_duplicate(rec, raw_bytes, content_type) -> bool:
+    """v147 — True se esta mesma foto já está salva neste dispositivo.
+    Compara o arquivo enviado e o arquivo otimizado com as assinaturas guardadas; para fotos antigas
+    (sem assinatura) calcula na hora a partir do que está salvo (banco ou R2) e guarda.
+    Nunca levanta exceção: em caso de erro devolve False (não bloqueia o lançamento)."""
+    try:
+        import hashlib as _hashlib
+        raw_h = _hashlib.md5(raw_bytes).hexdigest()
+        try:
+            opt_b, _ct = optimize_upload_bytes(raw_bytes, content_type or "image/jpeg")
+            opt_h = _hashlib.md5(opt_b).hexdigest()
+        except Exception:
+            opt_h = None
+        photos = RecordPhoto.query.filter_by(record_id=rec.id).all()
+        if not photos:
+            return False
+        known = {h.photo_id: h for h in PhotoHash.query.filter(PhotoHash.photo_id.in_([p.id for p in photos])).all()}
+        dup = False
+        added = False
+        for p in photos:
+            h = known.get(p.id)
+            if h is None:
+                b = None
+                try:
+                    if p.data:
+                        b = bytes(p.data)
+                    elif getattr(p, "r2_key", None) and r2_enabled():
+                        b = r2_get_bytes(p.r2_key)
+                except Exception:
+                    b = None
+                if not b:
+                    continue
+                h = PhotoHash(photo_id=p.id, raw_md5=None, opt_md5=_hashlib.md5(b).hexdigest())
+                db.session.add(h)
+                added = True
+            if (h.raw_md5 and h.raw_md5 == raw_h) or (h.opt_md5 and (h.opt_md5 == opt_h or h.opt_md5 == raw_h)):
+                dup = True
+        if added:
+            try:
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+        return dup
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        return False
+
+
 def _save_photo_to_record(rec, raw_bytes, fname, content_type, is_test=False, is_placed=False, prefix=None):
     """Otimiza e salva uma foto em um Record. Retorna True se ok."""
     try:
@@ -8528,6 +8589,16 @@ def _save_photo_to_record(rec, raw_bytes, fname, content_type, is_test=False, is
         )
         db.session.add(photo_rec)
         db.session.flush()
+
+        # v147 — guarda a assinatura da foto (para ignorar se for enviada de novo)
+        try:
+            import hashlib as _hashlib
+            with db.session.begin_nested():
+                db.session.add(PhotoHash(photo_id=photo_rec.id,
+                                         raw_md5=_hashlib.md5(raw_bytes).hexdigest(),
+                                         opt_md5=_hashlib.md5(opt_bytes).hexdigest()))
+        except Exception:
+            pass
 
         if os.environ.get("R2_BUCKET"):
             r2_key = r2_key_for_record_photo(rec.id, safe_fname)
@@ -8714,8 +8785,9 @@ def _process_photo_result(rec, raw_bytes, fname, content_type, photo_type, parse
                 "wavelength_nm": wavelength or 1577, "record_id": rec.id,
             }
 
-        # reset_test=1 na primeira foto do lote → apaga teste anterior
-        reset = request.form.get("reset_test") == "1"
+        # v147 — foto nova de teste só ACRESCENTA. Antes, a primeira foto de cada lote (reset_test=1)
+        # apagava níveis e fotos do teste anterior. Agora só apaga com pedido explícito (replace_test=1).
+        reset = request.form.get("replace_test") == "1"
         if reset:
             rec.test_levels = None
             # Remove fotos de teste antigas
@@ -8826,18 +8898,11 @@ def auto_photo_launch(map_id):
         rec = _find_record_by_name(device_name, map_name, company)
 
         # Verifica duplicação por hash da foto (evita lançar a mesma foto duas vezes)
-        import hashlib as _hashlib
-        photo_hash = _hashlib.md5(raw_bytes).hexdigest()
         if rec:
-            # Checa se já existe foto com o mesmo hash neste record
-            existing_hashes = [
-                _hashlib.md5(p.data).hexdigest()
-                for p in RecordPhoto.query.filter_by(record_id=rec.id).all()
-                if p.data
-            ]
-            if photo_hash in existing_hashes:
+            # v147 — antes comparava o arquivo enviado com o arquivo já otimizado (nunca batia)
+            if _photo_is_duplicate(rec, raw_bytes, photo_file.content_type or "image/jpeg"):
                 results.append({
-                    "file": fname, "ok": False,
+                    "file": fname, "ok": False, "duplicate": True,
                     "error": f"Foto já lançada anteriormente para '{device_name}'. Ignorado."
                 })
                 continue
@@ -9093,16 +9158,9 @@ def auto_photo_global_launch():
             continue
 
         # Verifica duplicata por hash MD5 da foto
-        import hashlib as _hashlib
-        photo_hash = _hashlib.md5(raw_bytes).hexdigest()
-        existing_hashes = [
-            _hashlib.md5(p.data).hexdigest()
-            for p in RecordPhoto.query.filter_by(record_id=rec.id).all()
-            if p.data
-        ]
-        if photo_hash in existing_hashes:
+        if _photo_is_duplicate(rec, raw_bytes, photo_file.content_type or "image/jpeg"):
             results.append({
-                "file": fname, "ok": False,
+                "file": fname, "ok": False, "duplicate": True,
                 "error": f"Foto já lançada anteriormente para '{device_name}'. Ignorado."
             })
             continue
