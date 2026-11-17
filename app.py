@@ -2339,7 +2339,12 @@ def classify_photo_with_ai(image_bytes: bytes):
         resp = requests.post('https://api.anthropic.com/v1/messages', headers=headers,
                              data=json.dumps(payload), timeout=40)
         if resp.status_code != 200:
-            return 'unknown', {}, f'Erro HTTP {resp.status_code} ao chamar Claude.'
+            # v148 — mostra o motivo real devolvido pela API (antes escondia)
+            try:
+                _why = (resp.json().get('error') or {}).get('message') or ''
+            except Exception:
+                _why = (resp.text or '')[:200]
+            return 'unknown', {}, f'Erro HTTP {resp.status_code} ao chamar Claude. {str(_why)[:220]}'.strip()
 
         content_blocks = resp.json().get('content', [])
         raw = ''
@@ -7999,6 +8004,31 @@ def api_add_record_to_map(map_id):
 
 
 
+
+
+# ===================== v148: diagnostico da API da IA (somente leitura) =====================
+@app.route("/admin/ai-ping")
+@admin_required
+def admin_ai_ping():
+    """Faz uma chamada minima (so texto) a API da IA e devolve o status e a mensagem de erro, se houver.
+    Somente leitura: nao cria, nao apaga e nao altera nada."""
+    api_key = os.environ.get('ANTHROPIC_API_KEY')
+    if not api_key:
+        return jsonify({"ok": False, "error": "ANTHROPIC_API_KEY nao configurada"})
+    try:
+        payload = {'model': 'claude-sonnet-4-6', 'max_tokens': 5,
+                   'messages': [{'role': 'user', 'content': 'Responda apenas: ok'}]}
+        headers = {'x-api-key': api_key, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json'}
+        resp = requests.post('https://api.anthropic.com/v1/messages', headers=headers, data=json.dumps(payload), timeout=30)
+        try:
+            body = resp.json()
+        except Exception:
+            body = {"raw": (resp.text or "")[:400]}
+        err = body.get("error") if isinstance(body, dict) else None
+        return jsonify({"ok": resp.status_code == 200, "status": resp.status_code, "model": payload['model'],
+                        "error": err, "request_id": resp.headers.get("request-id")})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
 
 
 # ===================== v143: ver fotos que ficaram no R2 (somente leitura) =====================
