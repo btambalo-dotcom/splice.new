@@ -582,6 +582,7 @@
           Abrir no Google Maps
         </a>
         <button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Fechar</button>
+        <button type="button" class="btn btn-info btn-sm" id="btn-print-label" onclick="openLabelPrint()">🏷️ Imprimir etiqueta</button>
         {% if current_user.is_admin %}
         <button type="button" class="btn btn-sm" id="btn-toggle-other-co" onclick="toggleDeviceOtherCompany()" style="background:#f1c40f;color:#222;border-color:#f1c40f;">Outra empresa</button>
         <button type="button" class="btn btn-outline-warning btn-sm" id="btn-unset-placed" onclick="unsetDevicePlaced()" style="display:none;">Tirar subida</button>
@@ -591,6 +592,75 @@
         <button type="submit" class="btn btn-primary">Salvar</button>
       </div>
     </form>
+  </div>
+</div>
+
+<!-- v149 — Modal: Imprimir etiqueta (NIIMBOT D110) -->
+<div class="modal fade" id="labelModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-content bg-dark text-light">
+      <div class="modal-header">
+        <h5 class="modal-title">🏷️ Imprimir etiqueta</h5>
+        <span id="etq-conn" class="badge bg-secondary ms-2">Desconectada</span>
+        <button type="button" class="btn-close btn-close-white ms-auto" data-bs-dismiss="modal" aria-label="Fechar"></button>
+      </div>
+      <div class="modal-body">
+        <div class="small text-muted mb-2" id="etq-device" style="word-break:break-all;"></div>
+
+        <label class="form-label mb-1">Modelo</label>
+        <select class="form-select bg-dark text-light border-secondary mb-2" id="etq-mode">
+          <option value="tampa">Tampa da caixa — 1 etiqueta com todos (ex.: OLT04 45P 6S 21-24)</option>
+          <option value="splitter">Splitter na bandeja — 1 etiqueta por splitter (ex.: OLT04 45P 6S)</option>
+          <option value="splitter_portas">Splitter com portas — 1 etiqueta por splitter (ex.: OLT04 45P 6S 21-24)</option>
+          <option value="nome">Nome do dispositivo</option>
+        </select>
+
+        <label class="form-label mb-1">Texto <span class="text-muted small">(cada linha = 1 linha; linha em branco = nova etiqueta)</span></label>
+        <textarea class="form-control bg-dark text-light border-secondary mb-2" id="etq-text" rows="4" style="font-family:monospace;"></textarea>
+
+        <div class="row g-2 mb-2">
+          <div class="col-6">
+            <label class="form-label mb-1 small">Papel</label>
+            <select class="form-select form-select-sm bg-dark text-light border-secondary" id="etq-paper">
+              <option value="continuous">Contínuo (rolo 12 mm)</option>
+              <option value="gaps">Com intervalo (etiqueta cortada)</option>
+            </select>
+          </div>
+          <div class="col-6">
+            <label class="form-label mb-1 small">Comprimento</label>
+            <select class="form-select form-select-sm bg-dark text-light border-secondary" id="etq-length">
+              <option value="0">Automático (pelo texto)</option>
+              <option value="25">25 mm</option>
+              <option value="30">30 mm</option>
+              <option value="40">40 mm</option>
+              <option value="50">50 mm</option>
+              <option value="60">60 mm</option>
+            </select>
+          </div>
+          <div class="col-6">
+            <label class="form-label mb-1 small">Escuro (densidade)</label>
+            <select class="form-select form-select-sm bg-dark text-light border-secondary" id="etq-density">
+              <option value="1">1 — claro</option>
+              <option value="2">2</option>
+              <option value="3">3 — escuro</option>
+            </select>
+          </div>
+          <div class="col-6">
+            <label class="form-label mb-1 small">Cópias</label>
+            <input type="number" min="1" max="20" class="form-control form-control-sm bg-dark text-light border-secondary" id="etq-copies" value="1">
+          </div>
+        </div>
+
+        <div class="small text-muted mb-1">Prévia <span id="etq-count"></span></div>
+        <div id="etq-preview" class="p-2 rounded" style="background:#222;"></div>
+        <div id="etq-status" class="small mt-2"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-light btn-sm me-auto" id="etq-share">Compartilhar imagem</button>
+        <button type="button" class="btn btn-outline-info btn-sm" id="etq-connect">Conectar</button>
+        <button type="button" class="btn btn-primary" id="etq-print">Imprimir</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -683,6 +753,7 @@
 {% block extra_js %}
   {{ super() }}
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="{{ url_for('static', filename='js/etiqueta.js') }}?v=149"></script>
   <script>
     // Fallback: se Leaflet não carregou, tenta unpkg
     if (typeof L === 'undefined') {
