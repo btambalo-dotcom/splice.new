@@ -806,13 +806,13 @@ const IS_ADMIN = {{ "true" if current_user.is_admin else "false" }};
       const linhas = String(rec.device || '').split('/').map((tok) => {
         const m = tok.match(/OLT\s*0*\d+_(\d+P)(?:_(\d)S)?/i);
         if (!m) return esc(tok.trim());
-        if (!m[2]) return '<b>' + m[1] + '</b> <span style="opacity:.7">1x8</span>';
+        if (!m[2]) return '<b>' + m[1] + '</b> <span style="color:#555">1x8</span>';
         const s = parseInt(m[2], 10);
-        return '<b>' + m[1] + ' ' + s + 'S</b> <span style="opacity:.7">portas ' + (4 * s - 3) + '-' + (4 * s) + '</span>';
+        return '<b>' + m[1] + ' ' + s + 'S</b> <span style="color:#555">portas ' + (4 * s - 3) + '-' + (4 * s) + '</span>';
       });
       return '<div style="font-size:14px;line-height:1.35;min-width:180px">' +
         '<div class="mb-1">' + linhas.join('<br>') + '</div>' +
-        '<div>📍 ' + esc(end) + (folha ? ' <span style="opacity:.6">· ' + esc(folha) + '</span>' : '') + '</div>' +
+        '<div>📍 ' + esc(end) + (folha ? ' <span style="color:#666">· ' + esc(folha) + '</span>' : '') + '</div>' +
         '<div>🧵 <b>' + esc(mc[1].trim()) + '</b></div>' +
         (fibras ? '<div>🔆 Fibras <b>' + esc(fibras) + '</b></div>' : '') +
         (aprox ? '<div style="color:#f59e0b">⚠️ posição aproximada</div>' : '') +
