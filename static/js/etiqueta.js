@@ -303,19 +303,15 @@
   window.openLabelPrint = function (rec) {
     currentRec = rec || null;
     if (!currentRec) {
+      // aberto pela janela do dispositivo: usa o que está nos campos (mesmo sem salvar)
       const id = document.getElementById('device-record-id').value;
-      const all = window.allRecords || [];
-      currentRec = all.find((r) => String(r.id) === String(id)) ||
-        { device: document.getElementById('device-name').value };
-    }
-    // usa o nome que está no campo (se o usuário editou e ainda não salvou)
-    if (currentRec && !currentRec.info) {
+      const all = window._mapRecords || window.allRecords || [];
+      currentRec = Object.assign({}, all.find((r) => String(r.id) === String(id)) || {});
+      const nameField = document.getElementById('device-name');
+      if (nameField && nameField.value) currentRec.device = nameField.value;
       const inf = document.getElementById('device-info');
-      if (inf && inf.value) currentRec = Object.assign({}, currentRec, { info: inf.value });
+      if (inf && inf.value) currentRec.info = inf.value;
     }
-    const nameField = document.getElementById('device-name');
-    if (nameField && nameField.value) currentRec = Object.assign({}, currentRec, { device: nameField.value });
-
     document.getElementById('etq-device').textContent = currentRec.device || '';
     syncCfgInputs();
     const sps = parseSplitters(currentRec.device);
@@ -329,6 +325,14 @@
     const dev = bootstrap.Modal.getInstance(document.getElementById('deviceModal'));
     if (dev) dev.hide();
     bootstrap.Modal.getOrCreateInstance(document.getElementById('labelModal')).show();
+  };
+
+  // v154 — botão "Etiqueta" direto no balão do pin
+  window.printLabelFromMap = function (id) {
+    const all = window._mapRecords || [];
+    const rec = all.find((r) => String(r.id) === String(id));
+    try { if (window.leafletMap) window.leafletMap.closePopup(); } catch (e) { /* */ }
+    window.openLabelPrint(rec || null);
   };
 
   document.addEventListener('DOMContentLoaded', () => {

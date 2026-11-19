@@ -755,7 +755,7 @@
 {% block extra_js %}
   {{ super() }}
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="{{ url_for('static', filename='js/etiqueta.js') }}?v=153"></script>
+  <script src="{{ url_for('static', filename='js/etiqueta.js') }}?v=154"></script>
   <script>
     // Fallback: se Leaflet não carregou, tenta unpkg
     if (typeof L === 'undefined') {
@@ -1970,6 +1970,9 @@ if (!IS_OWNER_READONLY) {
   );
   popupParts.push(
     '<button class="btn btn-warning btn-sm" onclick="copyDeviceInfoFromRecord(' + rec.id + ')">Copiar info</button>'
+  );
+  popupParts.push(
+    '<button class="btn btn-info btn-sm" onclick="printLabelFromMap(' + rec.id + ')">🏷️ Etiqueta</button>'
   );
 
   if (!_isCanType(rec) && Number(rec.splices || 0) > 0) {
