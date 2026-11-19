@@ -52,7 +52,7 @@
       const segsSel = data.segments.filter((x) => sel.has(x.id));
       const nDone = segsSel.filter((x) => x.status !== 'done').length, nUndo = segsSel.length - nDone;
       h += '<div style="margin-top:6px;padding:6px;border-radius:10px;background:#422006;border:1px solid #f59e0b">' +
-        '<b style="color:#fde68a !important">' + sel.size + ' trecho(s) selecionado(s)</b>' +
+        '<b style="color:#fde68a !important">' + sel.size + ' trecho(s) selecionado(s) — ainda não lançado</b>' +
         (nDone ? ' · ' + nDone + ' para <b style="color:#4ade80 !important">passado</b>' : '') +
         (nUndo ? ' · ' + nUndo + ' para <b style="color:#f87171 !important">não passado</b>' : '') +
         '<div style="margin-top:5px;display:flex;gap:6px;justify-content:center;flex-wrap:wrap">' +
@@ -97,15 +97,16 @@
     layer.clearLayers();
     if (!on || !data) { if (m.hasLayer(layer)) m.removeLayer(layer); renderBanner(); return; }
     // vermelhos embaixo, verdes por cima
-    const segs = data.segments.slice().sort((x, y) => (x.status === 'done') - (y.status === 'done'));
+    const segs = data.segments.slice().sort((x, y) => (sel.has(x.id) ? 1 : 0) - (sel.has(y.id) ? 1 : 0) || (x.status === 'done') - (y.status === 'done'));
     for (const s of segs) {
       if (!s.coords || s.coords.length < 2) continue;
-      const done = s.status === 'done';
+      // selecionado já aparece na cor nova (verde), mas só grava depois de ✅ Lançar
+      const done = sel.has(s.id) ? s.status !== 'done' : s.status === 'done';
       const color = done ? '#22c55e' : '#ef4444';
       // linha grossa invisível para facilitar o toque no celular
       const isSel = sel.has(s.id);
       const hit = L.polyline(s.coords, { color: '#000', opacity: 0.01, weight: 24 });
-      const casing = L.polyline(s.coords, { color: isSel ? '#facc15' : '#111', opacity: isSel ? 0.95 : 0.55, weight: isSel ? 15 : 9, interactive: false });
+      const casing = L.polyline(s.coords, { color: isSel ? '#facc15' : '#111', opacity: isSel ? 0.9 : 0.55, weight: isSel ? 11 : 9, interactive: false });
       const line = L.polyline(s.coords, { color, opacity: 0.95, weight: 6, dashArray: done ? null : '10 7' });
       if (data.can_edit) {
         [hit, line].forEach((pl) => pl.on('click', (ev) => {
@@ -170,7 +171,7 @@
     let h = '<b>Confirmar lançamento?</b><br>';
     if (toDone.length) h += '<br>🟢 <b>' + toDone.length + '</b> trecho(s) como <b>CABO PASSADO</b> (' + ft(mDone) + ')';
     if (toPend.length) h += '<br>🔴 <b>' + toPend.length + '</b> trecho(s) voltam para <b>NÃO PASSADO</b>';
-    h += '<br><br><span style="color:#9ca3af;font-size:13px">Confira no mapa: os trechos selecionados estão com borda amarela.</span>';
+    h += '<br><br><span style="color:#9ca3af;font-size:13px">Confira no mapa: os trechos selecionados estão com borda amarela. Se cancelar, nada é gravado.</span>';
     if (!(await ask(h, '✅ Sim, lançar'))) return;
     busy = true;
     try {
