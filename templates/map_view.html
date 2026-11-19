@@ -801,20 +801,22 @@ const IS_ADMIN = {{ "true" if current_user.is_admin else "false" }};
       const end = (parts[1] || '').replace(/,\s*Sebring,\s*FL\s*$/i, '');
       const folha = (info.match(/Folha\s+(SP-\d+)/i) || [])[1] || '';
       const mf = info.match(/FIBRAS\s+([^|]+)/i);
-      const fibras = mf ? mf[1].trim().split(';').map((f) => f.trim().replace(/^OLT\d+_(\d+P)_SBNGFL\s+/i, '$1 · ').replace(/^OLT\d+_SBNGFL\s+/i, 'Alim. ')).join(' + ') : '';
+      const fibras = mf ? mf[1].trim().split(';').map((f) => f.trim().replace(/^(OLT\d+)_(\d+P)_SBNGFL\s+/i, '$1 $2 · ').replace(/^(OLT\d+)_SBNGFL\s+/i, '$1 alim. ')).join(' + ') : '';
       const aprox = /POSIÇÃO APROXIMADA/i.test(info);
       const linhas = String(rec.device || '').split('/').map((tok) => {
-        const m = tok.match(/OLT\s*0*\d+_(\d+P)(?:_(\d)S)?/i);
+        const m = tok.match(/(OLT)\s*0*(\d+)_(\d+P)(?:_(\d)S)?/i);
         if (!m) return esc(tok.trim());
-        if (!m[2]) return '<b>' + m[1] + '</b> · 1x8';
-        const s = parseInt(m[2], 10);
-        return '<b>' + m[1] + ' ' + s + 'S</b> · portas ' + (4 * s - 3) + '-' + (4 * s);
+        const olt = 'OLT' + String(m[2]).padStart(2, '0');
+        if (!m[4]) return '<b>' + olt + ' ' + m[3] + '</b> · splitter 1x8';
+        const s = parseInt(m[4], 10);
+        return '<b>' + olt + ' ' + m[3] + ' ' + s + 'S</b> · portas ' + (4 * s - 3) + '-' + (4 * s);
       });
       return '<div style="font-size:14px;line-height:1.35;min-width:180px">' +
         '<div class="mb-1">' + linhas.join('<br>') + '</div>' +
         '<div>📍 ' + esc(end) + (folha ? ' · ' + esc(folha) : '') + '</div>' +
         '<div>🧵 <b>' + esc(mc[1].trim()) + '</b></div>' +
         (fibras ? '<div>🔆 Fibras <b>' + esc(fibras) + '</b></div>' : '') +
+        (rec.source_from ? '<div>⚡ Vem de <b>' + esc(rec.source_from) + '</b></div>' : '') +
         (aprox ? '<div style="color:#f59e0b">⚠️ posição aproximada</div>' : '') +
         '</div>';
     }
@@ -1587,8 +1589,20 @@ function buildDeviceIcon(rec) {
               + ' fill="white" font-family="Arial,sans-serif">' + typeLabel + '</text>';
   }
 
+  // v152 — splitter 1x8 (info começa com "1X8"): ícone quadrado roxo escrito 1x8
+  const is1x8 = /^\s*1X8\b/i.test(String(rec.info || ''));
+  var pinSvg;
+  if (is1x8) {
+    const c8 = !isActive ? '#e74c3c' : (otherCo ? '#f1c40f' : (hasLaunch ? '#2ecc40' : '#7e22ce'));
+    pinSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="42" viewBox="0 0 32 42">'
+      + '<path d="M16 41 L10 32 L22 32 Z" fill="' + c8 + '"/>'
+      + '<rect x="1.5" y="3" width="29" height="29" rx="6" fill="' + c8 + '" stroke="white" stroke-width="2"'
+      + ' style="filter:drop-shadow(0 2px 3px rgba(0,0,0,0.5))"/>'
+      + '<text x="16" y="22.5" text-anchor="middle" font-size="12" font-weight="800" fill="white" font-family="Arial,sans-serif">1x8</text>'
+      + '</svg>';
+  } else
   // SVG principal do pin (gota)
-  var pinSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="42" viewBox="0 0 32 42">'
+  pinSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="42" viewBox="0 0 32 42">'
     + '<path d="M16 2 C8.268 2 2 8.268 2 16 C2 24.418 16 40 16 40 C16 40 30 24.418 30 16 C30 8.268 23.732 2 16 2 Z"'
     + ' fill="' + pinColor + '" stroke="' + pinDark + '" stroke-width="1.5"'
     + ' style="filter:drop-shadow(0 2px 3px rgba(0,0,0,0.5))"/>'
@@ -1829,16 +1843,16 @@ if (_pc) {
 popupParts.push('<div class="fw-bold mb-1">' + (rec.device || t("no_name")) + '</div>');
 popupParts.push('<div class="small text-info"><strong>' + t("type") + ':</strong> ' + ((rec.type || 'OTE')) + '</div>');
 }
-if (rec.address) {
+if (rec.address && !_pc) {
   popupParts.push('<div class="small text-muted">' + t("address") + ': ' + rec.address + '</div>');
 }
-if (rec.pon_name) {
+if (rec.pon_name && !_pc) {
   popupParts.push('<div class="small text-warning"><strong>' + t("pon") + ':</strong> ' + rec.pon_name + '</div>');
 }
 if (rec.section) {
   popupParts.push('<div class="small text-muted">' + t("section") + ': ' + rec.section + '</div>');
 }
-if (rec.splitter_name) {
+if (rec.splitter_name && !_pc) {
   popupParts.push('<div class="small text-muted">' + t("splitter") + ': ' + rec.splitter_name + '</div>');
 }
 if (rec.box_model) {
@@ -1856,7 +1870,7 @@ if (rec.mont_manual) {
     (IS_ADMIN ? ' <button class="btn btn-outline-warning btn-sm py-0 px-1 ms-1" style="font-size:10px" onclick="undoMontagem(' + rec.id + ')">desfazer</button>' : '') +
     '</div>');
 }
-if (rec.source_from) {
+if (rec.source_from && !_pc) {
   popupParts.push('<div class="small text-muted">' + t("from") + ': ' + rec.source_from + '</div>');
 }
 if (rec.source_out) {
