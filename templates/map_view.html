@@ -649,8 +649,8 @@
             </select>
           </div>
           <div class="col-6">
-            <label class="form-label mb-1 small">Cópias</label>
-            <input type="number" min="1" max="20" class="form-control form-control-sm bg-dark text-light border-secondary" id="etq-copies" value="1">
+            <label class="form-label mb-1 small">Cópias da caixa <span class="text-muted">(cabo sai 1)</span></label>
+            <input type="number" min="1" max="20" class="form-control form-control-sm bg-dark text-light border-secondary" id="etq-copies" value="3">
           </div>
         </div>
 
@@ -757,7 +757,7 @@
 {% block extra_js %}
   {{ super() }}
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="{{ url_for('static', filename='js/etiqueta.js') }}?v=156"></script>
+  <script src="{{ url_for('static', filename='js/etiqueta.js') }}?v=157"></script>
   <script>
     // Fallback: se Leaflet não carregou, tenta unpkg
     if (typeof L === 'undefined') {

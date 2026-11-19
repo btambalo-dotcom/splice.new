@@ -12,12 +12,12 @@
   const HEAD_PX = 96;             // largura da cabeça da D110 = 12 mm
   const CFG_KEY = 'splicer_etiqueta_cfg';
 
-  const CFG_VER = 156;
+  const CFG_VER = 157;
   const DEFAULT_CFG = {
     paper: 'gaps',         // continuous | gaps  (v156: começa em etiqueta cortada 12x30)
     lengthMm: 30,          // 0 = automático (só contínuo)
     density: 3,
-    copies: 1,
+    copies: 3,             // v157: cópias da etiqueta da caixa (cabo sai 1 só)
     marginMm: 3,
   };
 
@@ -29,7 +29,8 @@
   function loadCfg() {
     try {
       const c = JSON.parse(localStorage.getItem(CFG_KEY) || '{}');
-      if ((c.ver || 0) < CFG_VER) { c.paper = DEFAULT_CFG.paper; c.lengthMm = DEFAULT_CFG.lengthMm; c.ver = CFG_VER; }
+      if ((c.ver || 0) < 156) { c.paper = DEFAULT_CFG.paper; c.lengthMm = DEFAULT_CFG.lengthMm; }
+      if ((c.ver || 0) < 157) { c.copies = DEFAULT_CFG.copies; c.ver = CFG_VER; }
       return Object.assign({}, DEFAULT_CFG, c);
     }
     catch (e) { return Object.assign({}, DEFAULT_CFG); }
@@ -169,6 +170,18 @@
     return canvas;
   }
 
+  // v157 — ordem de impressão: no modelo "Caixa completa" a etiqueta do cabo sai 1 vez
+  // e o jogo de etiquetas da caixa sai "cópias" vezes (padrão 3 por OTE).
+  function printSequence(labels) {
+    const copies = Math.max(1, parseInt(cfg.copies, 10) || 1);
+    const mode = (document.getElementById('etq-mode') || {}).value;
+    const seq = [];
+    let rest = labels;
+    if (mode === 'completa' && labels.length > 1) { seq.push(labels[0]); rest = labels.slice(1); }
+    for (let k = 0; k < copies; k++) rest.forEach((l) => seq.push(l));
+    return seq;
+  }
+
   function renderPreview() {
     const box = document.getElementById('etq-preview');
     if (!box) return;
@@ -180,8 +193,12 @@
       box.appendChild(c);
     });
     const copies = Math.max(1, parseInt(cfg.copies, 10) || 1);
-    document.getElementById('etq-count').textContent =
-      labels.length ? `${labels.length} etiqueta(s) × ${copies} cópia(s)` : 'Nenhuma etiqueta';
+    const mode = document.getElementById('etq-mode').value;
+    const total = printSequence(labels).length;
+    document.getElementById('etq-count').textContent = !labels.length ? 'Nenhuma etiqueta' :
+      (mode === 'completa' && labels.length > 1
+        ? `cabo 1× + caixa ${copies}× = ${total} etiqueta(s)`
+        : `${labels.length} etiqueta(s) × ${copies} = ${total}`);
   }
 
   // ---------- impressora ----------
@@ -246,30 +263,30 @@
       const c = await connect();
       const lib = window.niimbluelib;
       const taskName = c.getPrintTaskType() || 'D110';
-      const copies = Math.max(1, parseInt(cfg.copies, 10) || 1);
+      const seq = printSequence(labels);
       const labelType = cfg.paper === 'gaps' ? lib.LabelType.WithGaps : lib.LabelType.Continuous;
       let meta = null;
       try { meta = c.getModelMetadata(); } catch (e) { /* */ }
       const dir = (meta && meta.printDirection) || 'left';
 
-      for (let i = 0; i < labels.length; i++) {
-        setStatus(`Imprimindo ${i + 1}/${labels.length}...`);
-        const encoded = lib.ImageEncoder.encodeCanvas(renderLabel(labels[i]), 0, dir);
-        const task = c.protocol.newPrintTask(taskName, {
-          totalPages: copies,
-          labelType,
-          density: parseInt(cfg.density, 10) || 3,
-          statusPollIntervalMs: 100,
-          statusTimeoutMs: 8000,
-        });
-        try {
-          await task.printInit();
-          await task.printPage(encoded, copies);
+      const task = c.protocol.newPrintTask(taskName, {
+        totalPages: seq.length,
+        labelType,
+        density: parseInt(cfg.density, 10) || 3,
+        statusPollIntervalMs: 100,
+        statusTimeoutMs: 8000,
+      });
+      try {
+        await task.printInit();
+        for (let i = 0; i < seq.length; i++) {
+          setStatus(`Imprimindo ${i + 1}/${seq.length}...`);
+          const encoded = lib.ImageEncoder.encodeCanvas(renderLabel(seq[i]), 0, dir);
+          await task.printPage(encoded, 1);
           await task.waitForPageFinished();
-          await task.waitForFinished();
-        } finally {
-          try { await task.printEnd(); } catch (e) { /* */ }
         }
+        await task.waitForFinished();
+      } finally {
+        try { await task.printEnd(); } catch (e) { /* */ }
       }
       setStatus('Pronto! Etiqueta(s) impressa(s).', 'ok');
     } catch (e) {
