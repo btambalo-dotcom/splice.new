@@ -625,13 +625,14 @@
             <label class="form-label mb-1 small">Papel</label>
             <select class="form-select form-select-sm bg-dark text-light border-secondary" id="etq-paper">
               <option value="continuous">Contínuo (rolo 12 mm)</option>
-              <option value="gaps">Com intervalo (etiqueta cortada)</option>
+              <option value="gaps">Etiqueta cortada (com intervalo)</option>
             </select>
           </div>
           <div class="col-6">
             <label class="form-label mb-1 small">Comprimento</label>
             <select class="form-select form-select-sm bg-dark text-light border-secondary" id="etq-length">
               <option value="0">Automático (pelo texto)</option>
+              <option value="22">22 mm</option>
               <option value="25">25 mm</option>
               <option value="30">30 mm</option>
               <option value="40">40 mm</option>
@@ -756,7 +757,7 @@
 {% block extra_js %}
   {{ super() }}
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="{{ url_for('static', filename='js/etiqueta.js') }}?v=155"></script>
+  <script src="{{ url_for('static', filename='js/etiqueta.js') }}?v=156"></script>
   <script>
     // Fallback: se Leaflet não carregou, tenta unpkg
     if (typeof L === 'undefined') {

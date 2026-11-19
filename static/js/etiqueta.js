@@ -12,9 +12,10 @@
   const HEAD_PX = 96;             // largura da cabeça da D110 = 12 mm
   const CFG_KEY = 'splicer_etiqueta_cfg';
 
+  const CFG_VER = 156;
   const DEFAULT_CFG = {
-    paper: 'continuous',   // continuous | gaps
-    lengthMm: 0,           // 0 = automático (só contínuo)
+    paper: 'gaps',         // continuous | gaps  (v156: começa em etiqueta cortada 12x30)
+    lengthMm: 30,          // 0 = automático (só contínuo)
     density: 3,
     copies: 1,
     marginMm: 3,
@@ -26,11 +27,15 @@
 
   // ---------- configuração ----------
   function loadCfg() {
-    try { return Object.assign({}, DEFAULT_CFG, JSON.parse(localStorage.getItem(CFG_KEY) || '{}')); }
+    try {
+      const c = JSON.parse(localStorage.getItem(CFG_KEY) || '{}');
+      if ((c.ver || 0) < CFG_VER) { c.paper = DEFAULT_CFG.paper; c.lengthMm = DEFAULT_CFG.lengthMm; c.ver = CFG_VER; }
+      return Object.assign({}, DEFAULT_CFG, c);
+    }
     catch (e) { return Object.assign({}, DEFAULT_CFG); }
   }
   function saveCfg() {
-    try { localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); } catch (e) { /* sem storage */ }
+    try { cfg.ver = CFG_VER; localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); } catch (e) { /* sem storage */ }
   }
 
   // ---------- leitura do nome do dispositivo ----------
@@ -88,7 +93,8 @@
     if (mode === 'cabo') {               // nome do cabo + fibras usadas na caixa
       const ci = cableInfo(rec);
       if (!ci.cabo) return '';
-      return [ci.cabo.replace(/\s+(\d+)$/, ' $1F')].concat(shortFibras(ci.fibras)).join('\n');
+      const fs = shortFibras(ci.fibras).map((f, i) => (i ? f.replace(/^OLT\d+\s+/, '') : f));
+      return [ci.cabo.replace(/\s+(\d+)$/, ' $1F'), fs.join(' + ')].filter(Boolean).join('\n');
     }
     if (mode === 'tampa') {                // 1 etiqueta, no máximo 2 linhas (3+ splitters: "A" / "B/C", como na foto)
       return twoLines(sps.map(lineFull)).join('\n');
@@ -109,10 +115,19 @@
 
   // Texto -> lista de etiquetas (linha em branco separa etiquetas)
   function textToLabels(text) {
-    return String(text || '')
+    const blocks = String(text || '')
       .split(/\n\s*\n/)
       .map((b) => b.split('\n').map((l) => l.trim()).filter(Boolean))
       .filter((l) => l.length);
+    if (cfg.paper !== 'gaps') return blocks;
+    // v156 — etiqueta cortada: separa o que estava junto com "/" e põe no máximo 2 linhas por etiqueta
+    const out = [];
+    blocks.forEach((lines) => {
+      const items = [];
+      lines.forEach((l) => l.split('/').map((x) => x.trim()).filter(Boolean).forEach((x) => items.push(x)));
+      for (let i = 0; i < items.length; i += 2) out.push(items.slice(i, i + 2));
+    });
+    return out;
   }
 
   // ---------- desenho ----------
