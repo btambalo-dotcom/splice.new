@@ -789,6 +789,35 @@ const IS_ADMIN = {{ "true" if current_user.is_admin else "false" }};
     window._recordMarkers = new Map();
     let currentFocusRecordId = initialFocusRecordId;
 
+
+    // v151 — popup resumido para pins com "CABO ... | FIBRAS ..." (mapas importados de PDF)
+    function _splicerPinCompact(rec) {
+      const info = String(rec.info || '');
+      const mc = info.match(/CABO\s+([^|]+)/i);
+      if (!mc) return '';
+      const esc = (x) => String(x == null ? '' : x).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+      const parts = info.split('|').map((x) => x.trim());
+      const tipo = (parts[0] || '').toUpperCase();
+      const end = (parts[1] || '').replace(/,\s*Sebring,\s*FL\s*$/i, '');
+      const folha = (info.match(/Folha\s+(SP-\d+)/i) || [])[1] || '';
+      const mf = info.match(/FIBRAS\s+([^|]+)/i);
+      const fibras = mf ? mf[1].trim().split(';').map((f) => f.trim().replace(/^OLT\d+_(\d+P)_SBNGFL\s+/i, '$1 · ').replace(/^OLT\d+_SBNGFL\s+/i, 'Alim. ')).join(' + ') : '';
+      const aprox = /POSIÇÃO APROXIMADA/i.test(info);
+      const linhas = String(rec.device || '').split('/').map((tok) => {
+        const m = tok.match(/OLT\s*0*\d+_(\d+P)(?:_(\d)S)?/i);
+        if (!m) return esc(tok.trim());
+        if (!m[2]) return '<b>' + m[1] + '</b> <span style="opacity:.7">1x8</span>';
+        const s = parseInt(m[2], 10);
+        return '<b>' + m[1] + ' ' + s + 'S</b> <span style="opacity:.7">portas ' + (4 * s - 3) + '-' + (4 * s) + '</span>';
+      });
+      return '<div style="font-size:14px;line-height:1.35;min-width:180px">' +
+        '<div class="mb-1">' + linhas.join('<br>') + '</div>' +
+        '<div>📍 ' + esc(end) + (folha ? ' <span style="opacity:.6">· ' + esc(folha) + '</span>' : '') + '</div>' +
+        '<div>🧵 <b>' + esc(mc[1].trim()) + '</b></div>' +
+        (fibras ? '<div>🔆 Fibras <b>' + esc(fibras) + '</b></div>' : '') +
+        (aprox ? '<div style="color:#f59e0b">⚠️ posição aproximada</div>' : '') +
+        '</div>';
+    }
     function _median(arr){
       if(!arr.length) return null;
       const a=[...arr].sort((x,y)=>x-y);
@@ -1793,8 +1822,13 @@ async function loadMarkers() {
 
               const popupParts = [];
 popupParts.push('<div class="device-popup">');
+const _pc = _splicerPinCompact(rec);
+if (_pc) {
+  popupParts.push(_pc);
+} else {
 popupParts.push('<div class="fw-bold mb-1">' + (rec.device || t("no_name")) + '</div>');
 popupParts.push('<div class="small text-info"><strong>' + t("type") + ':</strong> ' + ((rec.type || 'OTE')) + '</div>');
+}
 if (rec.address) {
   popupParts.push('<div class="small text-muted">' + t("address") + ': ' + rec.address + '</div>');
 }
@@ -1831,7 +1865,7 @@ if (rec.source_out) {
 if (rec.splicer && !(String(rec.splicer).toUpperCase() === 'ADMIN' && Number(rec.splices || 0) === 0 && Number(rec.has_photos || 0) === 0)) {
   popupParts.push('<div class="small text-muted">Splicer: ' + rec.splicer + '</div>');
 }
-if (rec.info) {
+if (rec.info && !_pc) {
   popupParts.push('<div class="small mb-1">' + rec.info + '</div>');
 }
 if (rec.ft_lines && rec.ft_lines.length) {
