@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Acesso da Construção · SPLICER{% endblock %}
+{% block content %}
+<div class="container py-3" style="max-width:860px">
+  <a href="{{ url_for('manage_users') }}" class="small">← Usuários</a>
+  <h4 class="mt-2 mb-1">🚧 Acesso da Construção — {{ u.splicer_name or u.username }}</h4>
+  <p class="text-secondary small mb-3">
+    Marque <b>Empresa inteira</b> para liberar todos os mapas da empresa (inclusive os que forem criados depois),
+    ou marque só os mapas que ele pode ver. Sem nada marcado, ele não vê nenhum mapa.
+  </p>
+  {% if not u.is_construcao %}
+  <div class="alert alert-warning py-2 small">Este usuário não está como 🚧 Construção. O acesso abaixo só vale para usuários da Construção.</div>
+  {% endif %}
+  <form method="post">
+    {% for comp, maps in groups.items() %}
+    {% set cid = loop.index %}
+    <div class="card p-3 mb-3">
+      <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+        <h6 class="mb-0">🏢 {{ comp }}</h6>
+        <label class="d-flex align-items-center gap-2 small mb-0" style="cursor:pointer">
+          <input type="checkbox" class="form-check-input mt-0" name="company_all" value="{{ comp }}"
+                 id="ca{{ cid }}" {% if comp in comp_all %}checked{% endif %} onchange="syncComp({{ cid }})">
+          <b>Empresa inteira</b>
+        </label>
+      </div>
+      <div class="mt-2" id="maps{{ cid }}">
+        {% for m in maps %}
+        <label class="d-flex align-items-center gap-2 small py-1" style="cursor:pointer">
+          <input type="checkbox" class="form-check-input mt-0" name="map_id" value="{{ m.id }}"
+                 {% if m.id in map_sel or comp in comp_all %}checked{% endif %}>
+          {{ m.name }}{% if m.is_active is sameas false %} <span class="text-secondary">(inativo)</span>{% endif %}
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+    <button class="btn btn-success">Salvar acesso</button>
+  </form>
+</div>
+<script>
+function syncComp(cid) {
+  const all = document.getElementById('ca' + cid).checked;
+  document.querySelectorAll('#maps' + cid + ' input').forEach(i => { if (all) i.checked = true; i.disabled = all; });
+}
+document.querySelectorAll('input[name="company_all"]').forEach(el => syncComp(el.id.slice(2)));
+</script>
+{% endblock %}

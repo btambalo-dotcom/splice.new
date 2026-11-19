@@ -247,7 +247,9 @@
               </td>
 
               <td>
-                {% if u.is_montador %}
+                {% if u.is_construcao and not u.is_admin %}
+                  <a href="{{ url_for('cons_access_page', uid=u.id) }}" class="btn btn-sm btn-outline-warning py-0" style="font-size:.75rem;">🗺️ Empresa e mapas</a>
+                {% elif u.is_montador %}
                   <a href="{{ url_for('montagem_admin', user_id=u.id) }}" style="color:#20c997;font-size:.75rem;">ver produção →</a>
                 {% elif not u.is_admin and not u.is_company_owner %}
                   {% set u_sp = user_pricings.get(u.id, []) %}

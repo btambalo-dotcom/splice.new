@@ -1059,6 +1059,16 @@ class CamLink(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
+class ConsAccess(db.Model):
+    """v163 — o que o usuário da Construção pode ver: uma empresa inteira (map_id vazio) ou mapas escolhidos."""
+    __tablename__ = "cons_access"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, index=True, nullable=False)
+    company = db.Column(db.String(120), nullable=True)
+    map_id = db.Column(db.Integer, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
 class CableSegment(db.Model):
     """v162 — trecho de cabo no mapa (rua entre duas caixas). status: pending (vermelho) / done (verde).
     Tabela nova: não altera record/user."""
@@ -2620,6 +2630,17 @@ def _is_construcao_only(user=None) -> bool:
             and not bool(getattr(u, "is_admin", False))
     except Exception:
         return False
+
+
+def _cons_allowed_map_ids(user=None):
+    """Mapas que o usuário da Construção pode ver (empresa inteira + mapas escolhidos)."""
+    u = user or current_user
+    rows = ConsAccess.query.filter_by(user_id=u.id).all()
+    ids = {r.map_id for r in rows if r.map_id}
+    comps = {r.company for r in rows if r.company and not r.map_id}
+    if comps:
+        ids |= {m.id for m in CompanyMap.query.filter(CompanyMap.company.in_(list(comps))).all()}
+    return ids
 
 
 _CONSTRUCAO_ALLOWED_ENDPOINTS = {
@@ -4276,7 +4297,10 @@ def my_maps():
     query = CompanyMap.query
     user_company = None
 
-    if not current_user.is_admin:
+    if _is_construcao_only():
+        _ids = list(_cons_allowed_map_ids()) or [-1]
+        query = query.filter(CompanyMap.id.in_(_ids))
+    elif not current_user.is_admin:
         if getattr(current_user, "is_company_owner", False):
             # Dono da empresa só vê mapas da própria empresa
             user_company = (getattr(current_user, "company_name", None) or "").strip()
@@ -7021,6 +7045,12 @@ def ensure_map_access(mp: CompanyMap):
     if not current_user.is_authenticated:
         abort(403)
 
+    # v163 — Construção: só os mapas/empresa liberados para ela
+    if _is_construcao_only():
+        if mp.id not in _cons_allowed_map_ids():
+            abort(403)
+        return
+
     # Admin ou dono da empresa: acesso total
     if getattr(current_user, "is_admin", False) or getattr(current_user, "is_company_owner", False):
         return
@@ -8931,6 +8961,40 @@ def api_cable_delete(sid):
     db.session.delete(sg)
     db.session.commit()
     return jsonify({"ok": True})
+
+
+@app.route("/users/<int:uid>/construcao-acesso", methods=["GET", "POST"])
+@admin_required
+def cons_access_page(uid):
+    """v163 — escolhe empresa(s) e mapas que o usuário da Construção pode ver."""
+    u = User.query.get_or_404(uid)
+    maps = CompanyMap.query.order_by(CompanyMap.company, CompanyMap.name).all()
+    if request.method == "POST":
+        comps = set(request.form.getlist("company_all"))
+        mids = set()
+        for x in request.form.getlist("map_id"):
+            try:
+                mids.add(int(x))
+            except Exception:
+                pass
+        ConsAccess.query.filter_by(user_id=u.id).delete()
+        for c in sorted(comps):
+            db.session.add(ConsAccess(user_id=u.id, company=c, map_id=None))
+        comp_of = {m.id: m.company for m in maps}
+        for mid in sorted(mids):
+            if comp_of.get(mid) in comps:
+                continue   # já está liberado pela empresa inteira
+            db.session.add(ConsAccess(user_id=u.id, company=comp_of.get(mid), map_id=mid))
+        db.session.commit()
+        flash("Acesso da construção salvo.", "success")
+        return redirect(url_for("cons_access_page", uid=u.id))
+    rows = ConsAccess.query.filter_by(user_id=u.id).all()
+    comp_all = {r.company for r in rows if r.company and not r.map_id}
+    map_sel = {r.map_id for r in rows if r.map_id}
+    groups = {}
+    for m in maps:
+        groups.setdefault(m.company or "—", []).append(m)
+    return render_template("cons_access.html", u=u, groups=groups, comp_all=comp_all, map_sel=map_sel)
 
 
 if __name__ == "__main__":
