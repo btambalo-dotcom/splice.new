@@ -63,7 +63,8 @@
     </div>
     <button id="shoot" disabled aria-label="Tirar foto"></button>
     <div class="side">
-      <div class="btn g" id="btn-save" style="display:none">💾 Salvar na galeria</div>
+      <div class="btn g" id="btn-launch" style="display:none;font-weight:700">🚀 Lançar</div>
+      <div class="btn" id="btn-save" style="display:none">💾 Salvar na galeria</div>
       <div class="btn" id="btn-flip">🔄 Câmera</div>
     </div>
   </div>
@@ -305,46 +306,72 @@
     ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
   }
 
-  // ---------- fila de envio (guarda no celular até o servidor confirmar) ----------
+  // ---------- fotos guardadas no celular: só envia depois de "Lançar" ----------
+  // Guarda os bytes (ArrayBuffer) e não Blob: o Safari do iPhone falha ao enviar Blob lido do IndexedDB.
   let dbp = null;
   function idb() {
     if (dbp) return dbp;
     dbp = new Promise((res, rej) => {
-      const r = indexedDB.open('splicer-cam', 1);
-      r.onupgradeneeded = () => r.result.createObjectStore('q', { keyPath: 'id', autoIncrement: true });
+      const r = indexedDB.open('splicer-cam', 2);
+      r.onupgradeneeded = () => { if (!r.result.objectStoreNames.contains('q')) r.result.createObjectStore('q', { keyPath: 'id', autoIncrement: true }); };
       r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
     });
     return dbp;
   }
   async function qAdd(item) { const d = await idb(); return new Promise((res, rej) => { const t = d.transaction('q', 'readwrite'); const rq = t.objectStore('q').add(item); rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error); }); }
+  async function qPut(item) { const d = await idb(); return new Promise((res) => { const t = d.transaction('q', 'readwrite'); t.objectStore('q').put(item); t.oncomplete = () => res(); }); }
   async function qDel(id) { const d = await idb(); return new Promise((res) => { const t = d.transaction('q', 'readwrite'); t.objectStore('q').delete(id); t.oncomplete = () => res(); }); }
   async function qAll() { const d = await idb(); return new Promise((res) => { const t = d.transaction('q', 'readonly'); const rq = t.objectStore('q').getAll(); rq.onsuccess = () => res(rq.result || []); }); }
+  const bytesOf = async (it) => { if (it.buf) return it.buf; try { return it.blob ? await it.blob.arrayBuffer() : null; } catch (e) { return null; } };
+
+  // confirmação na tela
+  function ask(html, okTxt) {
+    return new Promise((res) => {
+      const o = document.createElement('div');
+      o.style.cssText = 'position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;padding:18px';
+      o.innerHTML = '<div style="background:#111827;border:1px solid #374151;border-radius:16px;max-width:420px;width:100%;padding:18px;font-size:16px;line-height:1.45">' + html +
+        '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">' +
+        '<div class="btn" data-r="0" style="padding:10px 14px;font-size:15px">Cancelar</div>' +
+        '<div class="btn g" data-r="1" style="padding:10px 14px;font-size:15px">' + okTxt + '</div></div></div>';
+      o.addEventListener('click', (e) => { const r = e.target.getAttribute && e.target.getAttribute('data-r'); if (r === '0' || r === '1') { o.remove(); res(r === '1'); } });
+      document.body.appendChild(o);
+    });
+  }
 
   let sending = false;
+  async function refreshBar() {
+    const items = await qAll();
+    const wait = items.filter((x) => !x.approved), go = items.filter((x) => x.approved);
+    $('btn-launch').style.display = wait.length ? '' : 'none';
+    $('btn-launch').textContent = '🚀 Lançar (' + wait.length + ')';
+    $('btn-save').style.display = items.length || savedBlobs.length ? '' : 'none';
+    if (go.length && !sending) say('Enviando ' + go.length + ' foto(s)…', '#93c5fd');
+  }
   async function flush() {
     if (sending) return; sending = true;
     try {
-      const items = await qAll();
+      const items = (await qAll()).filter((x) => x.approved);
       for (const it of items) {
+        const buf = await bytesOf(it);
+        if (!buf) { await qDel(it.id); continue; }
         const fd = new FormData();
         fd.append('record_id', it.record_id);
-        fd.append('photo', new File([it.blob], it.name, { type: 'image/jpeg' }));
-        let d = null;
+        fd.append('photo', new Blob([buf], { type: 'image/jpeg' }), it.name);
+        let d = null, r = null;
         try {
-          const r = await fetch(BASE + '/upload', { method: 'POST', body: fd });
+          r = await fetch(BASE + '/upload', { method: 'POST', body: fd });
           d = await r.json().catch(() => null);
-          if (!r.ok && r.status < 500) { await qDel(it.id); markThumb(it.tid, '⚠️'); say('Erro: ' + ((d && d.error) || r.status), '#f87171'); continue; }
-          if (!r.ok) throw new Error('HTTP ' + r.status);
         } catch (e) {
-          say('Sem sinal — a foto fica guardada e envia sozinha depois (' + items.length + ' na fila).', '#fbbf24');
+          say('Sem sinal — as fotos ficam guardadas e enviam sozinhas depois.', '#fbbf24');
           break;
         }
+        if (!r.ok && r.status >= 500) { say(((d && d.error) || ('Servidor ocupado (' + r.status + ')')) + ' — tento de novo em instantes.', '#fbbf24'); break; }
         await qDel(it.id);
-        markThumb(it.tid, '✓');
-        say(resultText(d, it.device), '#4ade80');
+        markThumb(it.tid || ('q' + it.id), r.ok && d && d.ok !== false ? '✓' : '⚠️');
+        say(r.ok ? resultText(d, it.device) : ('⚠️ ' + ((d && d.error) || ('Erro ' + r.status))), r.ok ? '#4ade80' : '#f87171');
         poll();
       }
-    } finally { sending = false; }
+    } finally { sending = false; refreshBar(); }
   }
   function resultText(d, dev) {
     if (!d) return 'Enviada: ' + dev;
@@ -359,31 +386,66 @@
   setInterval(flush, 15000);
   window.addEventListener('online', flush);
 
+  // Lançar: pergunta antes e manda tudo para a IA lançar
+  $('btn-launch').onclick = async () => {
+    const wait = (await qAll()).filter((x) => !x.approved);
+    if (!wait.length) return;
+    const byDev = {};
+    wait.forEach((x) => { byDev[x.device] = (byDev[x.device] || 0) + 1; });
+    let h = '<b>Lançar ' + wait.length + ' foto(s)?</b><br><br>';
+    Object.entries(byDev).forEach(([dv, n]) => { h += '📦 <b>' + dv.replace(/</g, '&lt;') + '</b>: ' + n + ' foto(s)<br>'; });
+    h += '<br><span style="color:#9ca3af;font-size:14px">A IA lê as fotos e lança como no Foto Auto (fusões, teste ou subida).</span>';
+    if (!(await ask(h, '🚀 Sim, lançar'))) return;
+    for (const x of wait) { x.approved = true; await qPut(x); }
+    refreshBar(); flush();
+  };
+
   let tidSeq = 0;
-  function addThumb(canvas) {
-    const tid = 't' + (++tidSeq);
-    const t = document.createElement('canvas'); const k = 64 / canvas.height;
-    t.width = Math.round(canvas.width * k); t.height = 64;
-    t.getContext('2d').drawImage(canvas, 0, 0, t.width, t.height);
+  function addThumbFrom(src, w, h, tid) {
+    const t = document.createElement('canvas'); const k = 64 / h;
+    t.width = Math.round(w * k); t.height = 64;
+    t.getContext('2d').drawImage(src, 0, 0, t.width, t.height);
     const div = document.createElement('div'); div.className = 'th'; div.id = tid;
     div.innerHTML = '<img src="' + t.toDataURL('image/jpeg', 0.7) + '"><span>⏳</span>';
     $('thumbs').prepend(div);
-    return tid;
+    // tocar na miniatura: apagar a foto antes de lançar
+    div.onclick = async () => {
+      const items = await qAll(); const it = items.find((x) => (x.tid || ('q' + x.id)) === tid);
+      if (!it || it.approved) return;
+      if (await ask('<b>Apagar esta foto?</b><br><span style="color:#9ca3af;font-size:14px">Ela ainda não foi lançada.</span>', '🗑️ Apagar')) {
+        await qDel(it.id); div.remove(); refreshBar();
+      }
+    };
   }
   function markThumb(tid, s) { const el = tid && document.getElementById(tid); if (el) el.querySelector('span').textContent = s; }
   function say(t, color) { $('msg').textContent = t; $('msg').style.color = color || '#fff'; }
 
+  const savedBlobs = [];   // fotos desta sessão para "Salvar na galeria"
   async function finish(src, w, h) {
     if (!target) return;
     await fontsReady;
     const { canvas, name } = stamp(src, w, h);
     const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.9));
     lastBlob = blob; lastName = name;
-    $('btn-save').style.display = '';
-    const tid = addThumb(canvas);
-    await qAdd({ record_id: target.record_id, device: target.device, name, blob, tid, at: Date.now() });
-    say('Enviando…', '#93c5fd');
-    flush();
+    savedBlobs.push({ blob, name });
+    const tid = 't' + Date.now() + '_' + (++tidSeq);
+    addThumbFrom(canvas, canvas.width, canvas.height, tid);
+    const buf = await blob.arrayBuffer();
+    await qAdd({ record_id: target.record_id, device: target.device, name, buf, tid, at: Date.now(), approved: false });
+    say('Foto guardada. Tire as outras e toque em 🚀 Lançar.', '#fde68a');
+    refreshBar();
+  }
+  // ao abrir: mostra as fotos que ficaram guardadas
+  async function restore() {
+    for (const it of await qAll()) {
+      const buf = await bytesOf(it); if (!buf) continue;
+      try {
+        const bmp = await createImageBitmap(new Blob([buf], { type: 'image/jpeg' }));
+        addThumbFrom(bmp, bmp.width, bmp.height, it.tid || ('q' + it.id));
+        if (it.approved) markThumb(it.tid || ('q' + it.id), '⏫');
+      } catch (e) {}
+    }
+    refreshBar();
   }
 
   // tirar foto pela câmera ao vivo
@@ -408,16 +470,20 @@
   };
   // salvar na galeria (folha de compartilhar do iPhone → Salvar Imagem)
   $('btn-save').onclick = async () => {
-    if (!lastBlob) return;
-    const file = new File([lastBlob], lastName, { type: 'image/jpeg' });
-    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      try { await navigator.share({ files: [file] }); } catch (e) {}
+    let list = savedBlobs.slice();
+    if (!list.length) {
+      for (const it of await qAll()) { const b = await bytesOf(it); if (b) list.push({ blob: new Blob([b], { type: 'image/jpeg' }), name: it.name }); }
+    }
+    if (!list.length) return;
+    const files = list.map((x) => new File([x.blob], x.name, { type: 'image/jpeg' }));
+    if (navigator.canShare && navigator.canShare({ files })) {
+      try { await navigator.share({ files }); } catch (e) {}
     } else {
-      const a = document.createElement('a'); a.href = URL.createObjectURL(lastBlob); a.download = lastName; a.click();
+      files.forEach((f) => { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; a.click(); });
     }
   };
 
-  poll(); startGps(); startCam(); flush();
+  poll(); startGps(); startCam(); restore().then(flush);
 })();
 </script>
 </body>

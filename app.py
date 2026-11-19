@@ -8768,6 +8768,15 @@ def cam_state(token):
 
 @app.route("/cam/<token>/upload", methods=["POST"])
 def cam_upload(token):
+    try:
+        return _cam_upload_impl(token)
+    except Exception as e:
+        db.session.rollback()
+        traceback.print_exc()
+        return jsonify({"ok": False, "error": f"Erro no servidor: {type(e).__name__}: {e}"[:300]}), 500
+
+
+def _cam_upload_impl(token):
     """Recebe a foto já carimbada pelo celular e faz o mesmo que o Foto Auto,
     mas no dispositivo escolhido (não depende da IA achar o nome).
     A foto SEMPRE fica salva no dispositivo, mesmo se a IA falhar."""
