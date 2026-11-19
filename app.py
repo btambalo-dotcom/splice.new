@@ -2568,6 +2568,25 @@ def pwa_favicon():
     return send_file(os.path.join(app.static_folder, "icons", "icon-32.png"), mimetype="image/png")
 
 
+# --------- v158: dono de empresa não vê quem fez a caixa ---------
+def _hide_people():
+    """True quando o usuário logado é dono de empresa (cliente) e não admin/master.
+    Nesse caso escondemos nomes de splicer / quem subiu / quem montou."""
+    try:
+        if not current_user.is_authenticated:
+            return False
+        if getattr(current_user, "is_admin", False) or getattr(current_user, "is_master_owner", False):
+            return False
+        return bool(getattr(current_user, "is_company_owner", False))
+    except Exception:
+        return False
+
+
+@app.context_processor
+def _inject_hide_people():
+    return {"hide_splicer": _hide_people()}
+
+
 # --------- Rotas ---------
 @app.route("/", methods=["GET", "POST"])
 @login_required
@@ -2612,7 +2631,7 @@ def index():
     # filtros principais
     if company_filter:
         query = query.filter(Record.company == company_filter)
-    if splicer_filter and (is_admin or is_owner):
+    if splicer_filter and (is_admin or is_owner) and not _hide_people():
         # apenas admin / dono de empresa podem filtrar por outro splicer
         query = query.filter(Record.splicer == splicer_filter)
     if map_filter:
@@ -2812,7 +2831,7 @@ def build_filtered_record_query_from_request():
         query = query.filter(Record.device == device_filter)
 
     # Filtro de splicer (somente admin ou dono de empresa)
-    if splicer_filter and (is_admin or is_owner):
+    if splicer_filter and (is_admin or is_owner) and not _hide_people():
         query = query.filter(Record.splicer == splicer_filter)
 
     # Filtro por datas
@@ -7433,6 +7452,10 @@ def api_map_records(map_id):
         })
         # v129 — pedida e ainda não montada / montada e ainda não feita pelo splicer
         _d = data[-1]
+        if _hide_people():
+            _d["splicer"] = ""
+            _d["placed_by"] = ""
+            _d["mont_done_by"] = ""
         _d["mont_req_code"] = mont_req.get(r.id, "") if not _d["mont_done"] else ""
         _d["mont_ready"] = bool(getattr(r, 'mont_done_at', None)) and not _record_is_lancado(r, len(device_photos))
     return jsonify({"records": data})
@@ -7821,7 +7844,7 @@ def api_set_record_placed(record_id):
         "ok": True,
         "record_id": int(rec.id),
         "is_placed": bool(rec.is_placed),
-        "placed_by": rec.placed_by or "",
+        "placed_by": "" if _hide_people() else (rec.placed_by or ""),
         "placed_at": rec.placed_at.isoformat() if rec.placed_at else None,
         "saved_photos": saved_placed_photos,
     })

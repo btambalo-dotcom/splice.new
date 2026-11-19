@@ -104,7 +104,7 @@
               <th>Data</th>
               <th>Código</th>
               <th>Descrição</th>
-              <th>Splicer</th>
+              {% if not hide_splicer %}<th>Splicer</th>{% endif %}
               <th class="text-end">Qty</th>
               <th class="text-end">$/unit</th>
               <th class="text-end">Total</th>
@@ -120,7 +120,7 @@
                 {{ e.description }}
                 {% if e.notes %}<br><span class="text-muted">{{ e.notes }}</span>{% endif %}
               </td>
-              <td class="small text-muted">{{ e.splicer or '—' }}</td>
+              {% if not hide_splicer %}<td class="small text-muted">{{ e.splicer or '—' }}</td>{% endif %}
               <td class="text-end">{{ e.quantity }}</td>
               <td class="text-end text-muted small">${{ "%.2f"|format(e.unit_price) }}</td>
               <td class="text-end fw-bold">${{ "%.2f"|format(e.total_usd) }}</td>

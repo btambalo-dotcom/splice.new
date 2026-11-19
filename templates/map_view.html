@@ -770,6 +770,7 @@
     const importKmzUrl = "{{ url_for('api_import_kmz', map_id=map_obj.id) }}";
     const importHafUrl = "{{ url_for('api_import_haf', map_id=map_obj.id) }}";
     const importSpliceReportUrl = "{{ url_for('api_import_splice_report', map_id=map_obj.id) }}";
+    const HIDE_PEOPLE = {{ 'true' if hide_splicer else 'false' }};
     const addRecordUrl = "{{ url_for('api_add_record_to_map', map_id=map_obj.id) }}";
     const sectionColorsUrl = "{{ url_for('map_section_colors', map_id=map_obj.id) }}";
     const autoPhotoLaunchUrl = "{{ url_for('auto_photo_launch', map_id=map_obj.id) }}";
@@ -1868,7 +1869,7 @@ if (rec.mont_ready) {
   popupParts.push('<div class="small" style="color:#4ade80">✅ Montada e ainda não feita pelo splicer</div>');
 }
 if (rec.mont_manual) {
-  popupParts.push('<div class="small" style="color:#ffb74d">🧰 Montada por <strong>' + (rec.mont_done_by || '?') + '</strong>' +
+  popupParts.push('<div class="small" style="color:#ffb74d">🧰 Montada' + (HIDE_PEOPLE ? '' : ' por <strong>' + (rec.mont_done_by || '?') + '</strong>') +
     (rec.mont_done_at ? ' em ' + String(rec.mont_done_at).slice(0, 10) : '') +
     (IS_ADMIN ? ' <button class="btn btn-outline-warning btn-sm py-0 px-1 ms-1" style="font-size:10px" onclick="undoMontagem(' + rec.id + ')">desfazer</button>' : '') +
     '</div>');
@@ -2008,7 +2009,7 @@ if (!IS_OWNER_READONLY) {
 if (rec.is_placed) {
   const placedDateStr = rec.placed_at ? String(rec.placed_at).slice(0, 10) : '';
   popupParts.push(
-    '<div class="small text-success mt-1">⬆ Subido por: <strong>' + (rec.placed_by || '?') + '</strong>' +
+    '<div class="small text-success mt-1">⬆ Subido' + (HIDE_PEOPLE ? '' : ' por: <strong>' + (rec.placed_by || '?') + '</strong>') +
     (placedDateStr ? ' em ' + placedDateStr : '') + '</div>'
   );
 }

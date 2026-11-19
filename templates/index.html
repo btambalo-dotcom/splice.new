@@ -161,7 +161,7 @@
           <th>Map</th>
           <th class="nowrap-cell">Type</th>
           <th>Device</th>
-          <th>Splicer</th>
+          {% if not hide_splicer %}<th>Splicer</th>{% endif %}
           <th>Splices / Fitas</th>
           {% if current_user.is_admin %}<th>Códigos</th>{% endif %}
           {% if can_view_values %}<th>$ Fusões</th>
@@ -192,7 +192,7 @@
                 {{ r.device }}
               {% endif %}
             </td>
-            <td>{{ r.splicer }}</td>
+            {% if not hide_splicer %}<td>{{ r.splicer }}</td>{% endif %}
             <td>
               {% if r.ribbon_count and r.ribbon_count > 0 %}
                 <span class="badge" style="background:#6f42c1;">RIBBON {{ r.ribbon_count }} fita{{ 's' if r.ribbon_count != 1 else '' }}</span>
