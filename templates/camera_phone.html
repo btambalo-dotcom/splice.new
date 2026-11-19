@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Câmera">
+<meta name="theme-color" content="#000000">
+<link rel="manifest" href="{{ url_for('cam_manifest', token=token) }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/apple-touch-icon.png') }}">
+<title>SPLICER Câmera</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: #000; color: #fff; font-family: -apple-system, system-ui, Roboto, sans-serif; overflow: hidden; }
+  #top { position: fixed; top: 0; left: 0; right: 0; padding: calc(env(safe-area-inset-top) + 8px) 12px 8px; background: linear-gradient(#000d, #0000); z-index: 5; }
+  #dev { font-size: 19px; font-weight: 800; line-height: 1.15; word-break: break-word; }
+  #map { font-size: 13px; color: #9ca3af; }
+  #status { font-size: 12px; color: #fbbf24; margin-top: 2px; }
+  #video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #111; }
+  #bottom { position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 14px calc(env(safe-area-inset-bottom) + 14px); background: linear-gradient(#0000, #000e 35%); z-index: 5; }
+  #row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  #shoot { width: 78px; height: 78px; border-radius: 50%; border: 5px solid #fff; background: #fff3; flex: none; }
+  #shoot:active { background: #fff9; }
+  #shoot:disabled { opacity: .35; }
+  .side { width: 92px; display: flex; flex-direction: column; gap: 6px; }
+  .btn { background: #1f2937; color: #fff; border: 1px solid #374151; border-radius: 10px; padding: 8px 6px; font-size: 12px; text-align: center; }
+  .btn.g { background: #065f46; border-color: #10b981; }
+  #fus { width: 100%; background: #111827; color: #fff; border: 1px solid #374151; border-radius: 10px; padding: 8px; font-size: 15px; text-align: center; }
+  #thumbs { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 8px; min-height: 0; }
+  .th { position: relative; flex: none; }
+  .th img { height: 64px; border-radius: 6px; display: block; }
+  .th span { position: absolute; left: 2px; bottom: 2px; font-size: 10px; background: #000b; padding: 1px 4px; border-radius: 4px; }
+  #msg { font-size: 13px; min-height: 18px; margin-bottom: 6px; }
+  #none { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; text-align: center; padding: 30px; z-index: 4; background: #000c; }
+  #flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 9; transition: opacity .25s; }
+  #file { display: none; }
+</style>
+</head>
+<body>
+<video id="video" playsinline muted autoplay></video>
+<div id="flash"></div>
+<div id="top">
+  <div id="dev">Carregando…</div>
+  <div id="map"></div>
+  <div id="status">GPS: aguardando…</div>
+</div>
+<div id="none">
+  <div>
+    <div style="font-size:42px">📱</div>
+    <div style="font-size:18px;font-weight:700;margin:8px 0">Nenhum dispositivo escolhido</div>
+    <div style="color:#9ca3af;font-size:14px">No iPad/computador, abra o mapa e toque em <b>📷 Foto no celular</b> no pin. Esta tela muda sozinha.</div>
+  </div>
+</div>
+<div id="bottom">
+  <div id="thumbs"></div>
+  <div id="msg"></div>
+  <div id="row">
+    <div class="side">
+      <input id="fus" type="number" inputmode="numeric" placeholder="Fusões">
+      <div class="btn" id="btn-native">📁 Câmera iPhone</div>
+    </div>
+    <button id="shoot" disabled aria-label="Tirar foto"></button>
+    <div class="side">
+      <div class="btn g" id="btn-save" style="display:none">💾 Salvar na galeria</div>
+      <div class="btn" id="btn-flip">🔄 Câmera</div>
+    </div>
+  </div>
+</div>
+<input type="file" id="file" accept="image/*" capture="environment">
+
+<script>
+(() => {
+  const TOKEN = {{ token|tojson }};
+  const BASE = '/cam/' + encodeURIComponent(TOKEN);
+  const $ = (id) => document.getElementById(id);
+  let target = null;           // {record_id, device, map}
+  let pos = null;              // {lat, lng, acc}
+  let addr = '';               // endereço do GPS
+  let addrKey = '';
+  let facing = 'environment';
+  let stream = null;
+  let lastBlob = null, lastName = '';
+
+  // ---------- dispositivo escolhido (iPad manda, celular segue) ----------
+  async function poll() {
+    try {
+      const r = await fetch(BASE + '/state', { cache: 'no-store' });
+      const d = await r.json();
+      if (!d.record_id) { target = null; showTarget(); return; }
+      if (!target || target.record_id !== d.record_id) {
+        target = d; showTarget();
+        if (navigator.vibrate) navigator.vibrate(80);
+        $('fus').value = '';
+        say('Pronto para: ' + d.device, '#4ade80');
+      } else { target = d; }
+    } catch (e) { /* sem sinal: mantém o último */ }
+  }
+  function showTarget() {
+    $('none').style.display = target ? 'none' : 'flex';
+    $('dev').textContent = target ? target.device : '—';
+    $('map').textContent = target ? ('MAP: ' + target.map + (target.n_photos != null ? ' · ' + target.n_photos + ' foto(s)' : '')) : '';
+    $('shoot').disabled = !target;
+  }
+  setInterval(() => { if (!document.hidden) poll(); }, 2500);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { poll(); startCam(); } else stopCam(); });
+
+  // ---------- GPS + endereço ----------
+  function startGps() {
+    if (!navigator.geolocation) { $('status').textContent = 'GPS indisponível'; return; }
+    navigator.geolocation.watchPosition((p) => {
+      pos = { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy };
+      $('status').textContent = 'GPS ±' + Math.round(pos.acc) + ' m' + (addr ? ' · ' + addr : '');
+      lookupAddr();
+    }, (e) => { $('status').textContent = 'GPS: ' + (e.code === 1 ? 'permita a localização' : 'sem sinal'); },
+    { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
+  }
+  const ABBR = [[/\bBoulevard\b/i,'Blvd'],[/\bDrive\b/i,'Dr'],[/\bRoad\b/i,'Rd'],[/\bAvenue\b/i,'Ave'],[/\bStreet\b/i,'St'],
+                [/\bCircle\b/i,'Cir'],[/\bLane\b/i,'Ln'],[/\bCourt\b/i,'Ct'],[/\bParkway\b/i,'Pkwy'],[/\bHighway\b/i,'Hwy'],
+                [/\bPlace\b/i,'Pl'],[/\bTerrace\b/i,'Ter'],[/\bTrail\b/i,'Trl']];
+  const abbr = (s) => ABBR.reduce((a, [r, t]) => a.replace(r, t), s || '');
+  let addrBusy = false;
+  async function lookupAddr() {
+    if (!pos || addrBusy) return;
+    const key = pos.lat.toFixed(4) + ',' + pos.lng.toFixed(4);
+    if (key === addrKey) return;
+    addrBusy = true;
+    try {
+      let a = '';
+      try {
+        const r = await fetch('https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/reverseGeocode?f=json&featureTypes=PointAddress,StreetAddress&location=' + pos.lng + ',' + pos.lat);
+        const j = await r.json();
+        const ad = j && j.address;
+        if (ad && ad.Address) a = abbr(ad.Address) + ', ' + (ad.City || '') + ' ' + (ad.RegionAbbr || ad.Region || '') + ' ' + (ad.Postal || '');
+      } catch (e) {}
+      if (!a) {
+        const r = await fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&lat=' + pos.lat + '&lon=' + pos.lng);
+        const j = await r.json(); const ad = j.address || {};
+        const street = [ad.house_number, abbr(ad.road || '')].filter(Boolean).join(' ');
+        const city = ad.city || ad.town || ad.village || ad.hamlet || '';
+        const st = (ad['ISO3166-2-lvl4'] || '').split('-')[1] || ad.state || '';
+        a = [street, [city, st, ad.postcode].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+      }
+      if (a) { addr = a.replace(/\s+/g, ' ').trim(); addrKey = key; }
+    } catch (e) {}
+    addrBusy = false;
+    if (pos) $('status').textContent = 'GPS ±' + Math.round(pos.acc) + ' m' + (addr ? ' · ' + addr : '');
+  }
+
+  // ---------- câmera ao vivo ----------
+  async function startCam() {
+    if (stream || document.hidden) return;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: facing }, width: { ideal: 4032 }, height: { ideal: 3024 } }
+      });
+      $('video').srcObject = stream;
+      await $('video').play().catch(() => {});
+    } catch (e) {
+      stream = null;
+      say('Câmera ao vivo bloqueada — use 📁 Câmera iPhone (ou permita a câmera).', '#fbbf24');
+    }
+  }
+  function stopCam() { if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; } }
+  $('btn-flip').onclick = () => { facing = facing === 'environment' ? 'user' : 'environment'; stopCam(); startCam(); };
+
+  // ---------- carimbo ----------
+  const DIAS = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
+  const MESES = ['jan.','fev.','mar.','abr.','mai.','jun.','jul.','ago.','set.','out.','nov.','dez.'];
+  function fmtCoord(v, pos_, neg) { return Math.abs(v).toFixed(6) + '°' + (v >= 0 ? pos_ : neg); }
+  function wrap(ctx, text, maxW) {
+    const words = String(text).split(/(\s+|\/)/).filter(w => w !== '');
+    const lines = []; let cur = '';
+    for (const w of words) {
+      const t = cur + w;
+      if (ctx.measureText(t).width > maxW && cur.trim()) { lines.push(cur.trim()); cur = w.trim() ? w : ''; }
+      else cur = t;
+    }
+    if (cur.trim()) lines.push(cur.trim());
+    return lines;
+  }
+  function stamp(src, sw, sh) {
+    const MAX = 2400;
+    const k = Math.min(1, MAX / Math.max(sw, sh));
+    const W = Math.round(sw * k), H = Math.round(sh * k);
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(src, 0, 0, W, H);
+
+    const now = new Date();
+    const U = Math.min(W, H) / 1000;              // unidade relativa
+    const pad = 40 * U, x0 = 28 * U;
+    const big = 78 * U, mid = 46 * U, small = 38 * U;
+    const maxW = W - x0 - pad * 2 - 20 * U;
+
+    const hh = now.getHours(), mm = String(now.getMinutes()).padStart(2, '0');
+    const hm = ((hh % 12) || 12) + ':' + mm, ap = hh < 12 ? 'AM' : 'PM';
+    const off = -now.getTimezoneOffset() / 60;
+    const dateStr = DIAS[now.getDay()] + ', ' + now.getDate() + ' ' + MESES[now.getMonth()] + ' ' + now.getFullYear() + ' GMT' + (off >= 0 ? '+' : '') + off;
+
+    const bold = [];
+    ctx.font = '700 ' + mid + 'px -apple-system, system-ui, Roboto, sans-serif';
+    wrap(ctx, 'MAP: ' + target.map, maxW).forEach(l => bold.push(l));
+    wrap(ctx, 'DEVICE: ' + target.device, maxW).forEach(l => bold.push(l));
+    const fus = $('fus').value.trim();
+    if (fus !== '') bold.push(String(parseInt(fus, 10)));
+    const reg = [dateStr];
+    ctx.font = '400 ' + small + 'px -apple-system, system-ui, Roboto, sans-serif';
+    if (addr) wrap(ctx, addr, maxW).forEach(l => reg.push(l));
+    if (pos) reg.push(fmtCoord(pos.lat, 'N', 'S') + ', ' + fmtCoord(pos.lng, 'E', 'W'));
+
+    const lh = 1.32;
+    const textH = bold.length * mid * lh + reg.length * small * lh;
+    const timeBoxH = big * 1.45;
+    let y = H - pad - textH;
+    const boxTop = y - timeBoxH - 22 * U;
+
+    // caixa da hora
+    ctx.font = '600 ' + big + 'px -apple-system, system-ui, Roboto, sans-serif';
+    const tW = ctx.measureText(hm).width;
+    ctx.font = '600 ' + (big * 0.42) + 'px -apple-system, system-ui, Roboto, sans-serif';
+    const aW = ctx.measureText(ap).width;
+    const boxW = tW + aW + big * 1.55;
+    ctx.fillStyle = 'rgba(52,26,14,0.92)';
+    roundRect(ctx, x0, boxTop, boxW, timeBoxH, 14 * U); ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.font = '600 ' + big + 'px -apple-system, system-ui, Roboto, sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(hm, x0 + 22 * U, boxTop + timeBoxH / 2 + 4 * U);
+    ctx.font = '600 ' + (big * 0.42) + 'px -apple-system, system-ui, Roboto, sans-serif';
+    ctx.fillText(ap, x0 + 30 * U + tW, boxTop + timeBoxH * 0.32);
+    const cx = x0 + boxW - big * 0.62, cy = boxTop + timeBoxH / 2, r = big * 0.36;
+    ctx.fillStyle = '#f5b400'; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#3a2410'; ctx.lineWidth = r * 0.22; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.beginPath(); ctx.moveTo(cx - r * 0.42, cy + r * 0.02); ctx.lineTo(cx - r * 0.1, cy + r * 0.32); ctx.lineTo(cx + r * 0.45, cy - r * 0.3); ctx.stroke();
+
+    // barra amarela + textos
+    const barX = x0 + 6 * U;
+    ctx.fillStyle = '#f5b400';
+    ctx.fillRect(barX, y - 6 * U, 7 * U, textH + 6 * U);
+    ctx.textBaseline = 'top';
+    ctx.shadowColor = 'rgba(0,0,0,0.85)'; ctx.shadowBlur = 8 * U; ctx.shadowOffsetX = 2 * U; ctx.shadowOffsetY = 2 * U;
+    ctx.fillStyle = '#fff';
+    const tx = barX + 28 * U;
+    ctx.font = '700 ' + mid + 'px -apple-system, system-ui, Roboto, sans-serif';
+    bold.forEach(l => { ctx.fillText(l, tx, y); y += mid * lh; });
+    ctx.font = '400 ' + small + 'px -apple-system, system-ui, Roboto, sans-serif';
+    reg.forEach(l => { ctx.fillText(l, tx, y); y += small * lh; });
+    // assinatura discreta
+    ctx.font = '600 ' + (small * 0.8) + 'px -apple-system, system-ui, Roboto, sans-serif';
+    ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillText('SPLICER', W - pad, H - pad - small * 0.8);
+    ctx.textAlign = 'left'; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
+
+    const p2 = (n) => String(n).padStart(2, '0');
+    const clean = (s) => String(s || '').replace(/[^A-Za-z0-9_-]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+    const name = now.getFullYear() + p2(now.getMonth() + 1) + p2(now.getDate()) + '_' + p2(hh) + p2(now.getMinutes()) + p2(now.getSeconds())
+      + '_' + clean((addr || '').split(',')[0]) + '_MAP_' + clean(target.map) + '_DEVICE_' + clean(target.device).slice(0, 60) + '.jpg';
+    return { canvas: c, name };
+  }
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+  }
+
+  // ---------- fila de envio (guarda no celular até o servidor confirmar) ----------
+  let dbp = null;
+  function idb() {
+    if (dbp) return dbp;
+    dbp = new Promise((res, rej) => {
+      const r = indexedDB.open('splicer-cam', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('q', { keyPath: 'id', autoIncrement: true });
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    });
+    return dbp;
+  }
+  async function qAdd(item) { const d = await idb(); return new Promise((res, rej) => { const t = d.transaction('q', 'readwrite'); const rq = t.objectStore('q').add(item); rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error); }); }
+  async function qDel(id) { const d = await idb(); return new Promise((res) => { const t = d.transaction('q', 'readwrite'); t.objectStore('q').delete(id); t.oncomplete = () => res(); }); }
+  async function qAll() { const d = await idb(); return new Promise((res) => { const t = d.transaction('q', 'readonly'); const rq = t.objectStore('q').getAll(); rq.onsuccess = () => res(rq.result || []); }); }
+
+  let sending = false;
+  async function flush() {
+    if (sending) return; sending = true;
+    try {
+      const items = await qAll();
+      for (const it of items) {
+        const fd = new FormData();
+        fd.append('record_id', it.record_id);
+        fd.append('photo', new File([it.blob], it.name, { type: 'image/jpeg' }));
+        let d = null;
+        try {
+          const r = await fetch(BASE + '/upload', { method: 'POST', body: fd });
+          d = await r.json().catch(() => null);
+          if (!r.ok && r.status < 500) { await qDel(it.id); markThumb(it.tid, '⚠️'); say('Erro: ' + ((d && d.error) || r.status), '#f87171'); continue; }
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+        } catch (e) {
+          say('Sem sinal — a foto fica guardada e envia sozinha depois (' + items.length + ' na fila).', '#fbbf24');
+          break;
+        }
+        await qDel(it.id);
+        markThumb(it.tid, '✓');
+        say(resultText(d, it.device), '#4ade80');
+        poll();
+      }
+    } finally { sending = false; }
+  }
+  function resultText(d, dev) {
+    if (!d) return 'Enviada: ' + dev;
+    if (d.duplicate) return 'Foto repetida, já estava em ' + dev;
+    const a = d.action;
+    if (a === 'test' || a === 'test1577') return '✓ Teste lançado em ' + dev + (d.power_dbm != null ? ' (' + d.power_dbm + ' dBm)' : '');
+    if (a === 'placed') return '✓ Subida registrada em ' + dev;
+    if (a === 'saved') return '✓ Foto salva em ' + dev + (d.note ? ' — ' + d.note : '');
+    if (d.ok === false) return '⚠️ ' + (d.error || 'Erro');
+    return '✓ Lançado em ' + dev + (d.splices != null ? ' · ' + d.splices + ' fusões' : '');
+  }
+  setInterval(flush, 15000);
+  window.addEventListener('online', flush);
+
+  let tidSeq = 0;
+  function addThumb(canvas) {
+    const tid = 't' + (++tidSeq);
+    const t = document.createElement('canvas'); const k = 64 / canvas.height;
+    t.width = Math.round(canvas.width * k); t.height = 64;
+    t.getContext('2d').drawImage(canvas, 0, 0, t.width, t.height);
+    const div = document.createElement('div'); div.className = 'th'; div.id = tid;
+    div.innerHTML = '<img src="' + t.toDataURL('image/jpeg', 0.7) + '"><span>⏳</span>';
+    $('thumbs').prepend(div);
+    return tid;
+  }
+  function markThumb(tid, s) { const el = tid && document.getElementById(tid); if (el) el.querySelector('span').textContent = s; }
+  function say(t, color) { $('msg').textContent = t; $('msg').style.color = color || '#fff'; }
+
+  async function finish(src, w, h) {
+    if (!target) return;
+    const { canvas, name } = stamp(src, w, h);
+    const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.9));
+    lastBlob = blob; lastName = name;
+    $('btn-save').style.display = '';
+    const tid = addThumb(canvas);
+    await qAdd({ record_id: target.record_id, device: target.device, name, blob, tid, at: Date.now() });
+    say('Enviando…', '#93c5fd');
+    flush();
+  }
+
+  // tirar foto pela câmera ao vivo
+  $('shoot').onclick = async () => {
+    if (!target) return;
+    const v = $('video');
+    $('flash').style.opacity = 0.8; setTimeout(() => $('flash').style.opacity = 0, 120);
+    if (stream && v.videoWidth) {
+      await finish(v, v.videoWidth, v.videoHeight);
+    } else {
+      $('file').click();
+    }
+  };
+  // câmera nativa do iPhone (qualidade máxima)
+  $('btn-native').onclick = () => { if (target) $('file').click(); };
+  $('file').onchange = async (e) => {
+    const f = e.target.files && e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    const img = new Image();
+    img.onload = () => { finish(img, img.naturalWidth, img.naturalHeight); URL.revokeObjectURL(img.src); };
+    img.src = URL.createObjectURL(f);
+  };
+  // salvar na galeria (folha de compartilhar do iPhone → Salvar Imagem)
+  $('btn-save').onclick = async () => {
+    if (!lastBlob) return;
+    const file = new File([lastBlob], lastName, { type: 'image/jpeg' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file] }); } catch (e) {}
+    } else {
+      const a = document.createElement('a'); a.href = URL.createObjectURL(lastBlob); a.download = lastName; a.click();
+    }
+  };
+
+  poll(); startGps(); startCam(); flush();
+})();
+</script>
+</body>
+</html>

@@ -584,6 +584,7 @@
         <button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Fechar</button>
 {% if not hide_splicer %}
         <button type="button" class="btn btn-info btn-sm" id="btn-print-label" onclick="openLabelPrint()">🏷️ Imprimir etiqueta</button>
+        <button type="button" class="btn btn-success btn-sm" onclick="sendToPhone()">📷 Foto no celular</button>
         {% endif %}
         {% if current_user.is_admin %}
         <button type="button" class="btn btn-sm" id="btn-toggle-other-co" onclick="toggleDeviceOtherCompany()" style="background:#f1c40f;color:#222;border-color:#f1c40f;">Outra empresa</button>
@@ -762,6 +763,32 @@
   {{ super() }}
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 {% if not hide_splicer %}<script src="{{ url_for('static', filename='js/etiqueta.js') }}?v=157"></script>{% endif %}
+  {% if not hide_splicer %}
+  <script>
+  // v160 — escolhe o dispositivo para o celular (link da câmera) fotografar
+  async function sendToPhone(recId) {
+    if (!recId) { const el = document.getElementById('device-record-id'); recId = el && el.value; }
+    if (!recId) { alert('Abra um dispositivo primeiro.'); return; }
+    try {
+      const r = await fetch("{{ url_for('api_camera_target') }}", {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ record_id: Number(recId) })
+      });
+      const d = await r.json();
+      if (!d.ok) { alert(d.error || 'Erro'); return; }
+      let box = document.getElementById('cam-toast');
+      if (!box) {
+        box = document.createElement('div'); box.id = 'cam-toast';
+        box.style.cssText = 'position:fixed;left:50%;bottom:90px;transform:translateX(-50%);z-index:99999;background:#065f46;color:#fff;border:1px solid #10b981;border-radius:12px;padding:10px 14px;font-size:14px;max-width:92vw;box-shadow:0 6px 24px #0008';
+        document.body.appendChild(box);
+      }
+      box.innerHTML = '📷 Celular pronto para <b>' + String(d.device).replace(/</g,'&lt;') + '</b><br><span style="font-size:12px;opacity:.85">Abra o app Câmera no celular. Ou <a href="' + d.link + '" target="_blank" style="color:#a7f3d0">tirar foto aqui</a>.</span>';
+      box.style.display = 'block';
+      clearTimeout(window._camToastT); window._camToastT = setTimeout(() => box.style.display = 'none', 6000);
+    } catch (e) { alert('Sem conexão.'); }
+  }
+  </script>
+  {% endif %}
   <script>
     // Fallback: se Leaflet não carregou, tenta unpkg
     if (typeof L === 'undefined') {
@@ -1980,6 +2007,9 @@ if (!IS_OWNER_READONLY) {
   );
   if (!HIDE_PEOPLE) popupParts.push(
     '<button class="btn btn-info btn-sm" onclick="printLabelFromMap(' + rec.id + ')">🏷️ Etiqueta</button>'
+  );
+  if (!HIDE_PEOPLE) popupParts.push(
+    '<button class="btn btn-success btn-sm" onclick="sendToPhone(' + rec.id + ')">📷 Foto no celular</button>'
   );
 
   if (!_isCanType(rec) && Number(rec.splices || 0) > 0) {

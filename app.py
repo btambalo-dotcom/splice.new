@@ -1047,6 +1047,17 @@ class PhotoHash(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
+class CamLink(db.Model):
+    """v160 — link de câmera por usuário (celular tira foto com carimbo e manda para o dispositivo).
+    Tabela nova e separada: não altera user/record."""
+    __tablename__ = "cam_link"
+    user_id = db.Column(db.Integer, primary_key=True, autoincrement=False)
+    token = db.Column(db.String(64), unique=True, index=True, nullable=False)
+    record_id = db.Column(db.Integer, nullable=True)   # dispositivo escolhido no iPad/computador
+    set_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
 class Expense(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
@@ -8517,6 +8528,209 @@ def settings_hourly_rate_delete(rid: int):
     db.session.commit()
     flash("Taxa horária removida.", "success")
     return redirect(next_url or url_for("settings"))
+
+
+# ─────────────────────────────────────────────────────────────
+#  v160 — LINK DA CÂMERA (celular tira foto com carimbo e lança no dispositivo)
+# ─────────────────────────────────────────────────────────────
+import secrets as _cam_secrets
+
+
+def _cam_get_or_create(user_id: int):
+    cl = CamLink.query.get(user_id)
+    if not cl:
+        cl = CamLink(user_id=user_id, token=_cam_secrets.token_urlsafe(18))
+        db.session.add(cl)
+        db.session.commit()
+    return cl
+
+
+def _cam_user_from_token(token: str):
+    cl = CamLink.query.filter_by(token=token).first() if token else None
+    if not cl:
+        abort(404)
+    u = User.query.get(cl.user_id)
+    if not u or getattr(u, "is_active", True) is False:
+        abort(404)
+    if getattr(u, "is_company_owner", False) and not getattr(u, "is_admin", False):
+        abort(403)
+    return cl, u
+
+
+def _cam_map_for_record(rec):
+    return CompanyMap.query.filter(
+        CompanyMap.name == rec.map, CompanyMap.company == rec.company
+    ).order_by(CompanyMap.id.asc()).first()
+
+
+def _cam_user_can_use_map(u, mp) -> bool:
+    if mp is None:
+        return bool(getattr(u, "is_admin", False))
+    if getattr(u, "is_admin", False):
+        return True
+    if mp.allowed_splicers and u not in mp.allowed_splicers:
+        return False
+    return True
+
+
+@app.route("/camera")
+@login_required
+def camera_link_page():
+    if _hide_people():
+        flash("Dono de empresa só pode visualizar.", "danger")
+        return redirect(url_for("index"))
+    cl = _cam_get_or_create(current_user.id)
+    my_link = url_for("cam_phone", token=cl.token, _external=True)
+    users_links = []
+    if getattr(current_user, "is_admin", False):
+        for u in User.query.order_by(User.username).all():
+            if getattr(u, "is_company_owner", False) and not getattr(u, "is_admin", False):
+                continue
+            if getattr(u, "is_active", True) is False:
+                continue
+            c = CamLink.query.get(u.id)
+            users_links.append({
+                "id": u.id, "name": (u.splicer_name or u.username),
+                "link": url_for("cam_phone", token=c.token, _external=True) if c else None,
+            })
+    rec = Record.query.get(cl.record_id) if cl.record_id else None
+    return render_template("camera_link.html", my_link=my_link, users_links=users_links, target=rec)
+
+
+@app.route("/camera/regenerate", methods=["POST"])
+@login_required
+def camera_link_regenerate():
+    """Gera link novo (o antigo para de funcionar). Admin pode gerar para outro usuário."""
+    uid = current_user.id
+    if getattr(current_user, "is_admin", False) and request.form.get("user_id"):
+        uid = int(request.form.get("user_id"))
+    elif _hide_people():
+        abort(403)
+    cl = CamLink.query.get(uid)
+    if cl:
+        cl.token = _cam_secrets.token_urlsafe(18)
+        db.session.commit()
+    else:
+        _cam_get_or_create(uid)
+    flash("Link da câmera gerado.", "success")
+    return redirect(url_for("camera_link_page"))
+
+
+@app.route("/api/camera/target", methods=["POST"])
+@login_required
+def api_camera_target():
+    """iPad/computador escolhe o dispositivo; o celular do mesmo usuário passa a fotografar para ele."""
+    if _hide_people():
+        return jsonify({"ok": False, "error": "Dono de empresa não pode lançar fotos."}), 403
+    data = request.get_json(silent=True) or {}
+    rid = data.get("record_id") or request.form.get("record_id")
+    try:
+        rid = int(rid)
+    except Exception:
+        return jsonify({"ok": False, "error": "Dispositivo inválido."}), 400
+    rec = Record.query.get(rid)
+    if not rec:
+        return jsonify({"ok": False, "error": "Dispositivo não encontrado."}), 404
+    mp = _cam_map_for_record(rec)
+    if not _cam_user_can_use_map(current_user, mp):
+        return jsonify({"ok": False, "error": "Sem acesso a este mapa."}), 403
+    cl = _cam_get_or_create(current_user.id)
+    cl.record_id = rec.id
+    cl.set_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"ok": True, "device": rec.device, "map": rec.map,
+                    "link": url_for("cam_phone", token=cl.token, _external=True)})
+
+
+@app.route("/cam/<token>")
+def cam_phone(token):
+    cl, u = _cam_user_from_token(token)
+    return render_template("camera_phone.html", token=token,
+                           user_name=(u.splicer_name or u.username))
+
+
+@app.route("/cam/<token>/manifest.json")
+def cam_manifest(token):
+    _cam_user_from_token(token)
+    return jsonify({
+        "name": "SPLICER Câmera", "short_name": "Câmera",
+        "start_url": url_for("cam_phone", token=token),
+        "scope": url_for("cam_phone", token=token),
+        "display": "standalone", "background_color": "#000000", "theme_color": "#000000",
+        "icons": [{"src": url_for("static", filename="icons/icon-192.png"), "sizes": "192x192", "type": "image/png"},
+                  {"src": url_for("static", filename="icons/icon-512.png"), "sizes": "512x512", "type": "image/png"}],
+    })
+
+
+@app.route("/cam/<token>/state")
+def cam_state(token):
+    cl, u = _cam_user_from_token(token)
+    rec = Record.query.get(cl.record_id) if cl.record_id else None
+    if not rec:
+        return jsonify({"ok": True, "record_id": None})
+    return jsonify({
+        "ok": True, "record_id": rec.id, "device": rec.device, "map": rec.map,
+        "set_at": cl.set_at.isoformat() + "Z" if cl.set_at else None,
+        "n_photos": RecordPhoto.query.filter_by(record_id=rec.id).count(),
+    })
+
+
+@app.route("/cam/<token>/upload", methods=["POST"])
+def cam_upload(token):
+    """Recebe a foto já carimbada pelo celular e faz o mesmo que o Foto Auto,
+    mas no dispositivo escolhido (não depende da IA achar o nome).
+    A foto SEMPRE fica salva no dispositivo, mesmo se a IA falhar."""
+    cl, u = _cam_user_from_token(token)
+    try:
+        rid = int(request.form.get("record_id") or 0)
+    except Exception:
+        rid = 0
+    rec = Record.query.get(rid) if rid else None
+    if not rec:
+        return jsonify({"ok": False, "error": "Dispositivo não encontrado."}), 404
+    mp = _cam_map_for_record(rec)
+    if not _cam_user_can_use_map(u, mp):
+        return jsonify({"ok": False, "error": "Sem acesso a este mapa."}), 403
+    f = request.files.get("photo")
+    if not f:
+        return jsonify({"ok": False, "error": "Foto não recebida."}), 400
+    raw = f.read()
+    fname = f.filename or "foto.jpg"
+    ctype = f.content_type or "image/jpeg"
+    if not raw:
+        return jsonify({"ok": False, "error": "Foto vazia."}), 400
+    if _photo_is_duplicate(rec, raw, ctype):
+        return jsonify({"ok": True, "duplicate": True, "action": "duplicate", "device": rec.device})
+
+    splicer_name = getattr(u, "splicer_name", None) or u.username
+    company = rec.company
+    project_id = mp.project_id if mp else rec.project_id
+    map_name = rec.map
+    try:
+        photo_type, parsed, ai_error = classify_photo_with_ai(raw)
+    except Exception as e:
+        photo_type, parsed, ai_error = "unknown", {}, str(e)
+    if ai_error or photo_type not in ("splice", "test", "placed"):
+        # IA não ajudou: guarda a foto no dispositivo mesmo assim (nunca perde foto)
+        _save_photo_to_record(rec, raw, fname, ctype)
+        db.session.commit()
+        return jsonify({"ok": True, "action": "saved", "device": rec.device,
+                        "note": ai_error or "Foto salva (tipo não reconhecido)."})
+    parsed = dict(parsed or {})
+    parsed["device_name"] = rec.device
+    try:
+        result = _process_photo_result(rec, raw, fname, ctype, photo_type, parsed,
+                                       splicer_name, company, project_id, map_name)
+    except Exception as e:
+        db.session.rollback()
+        traceback.print_exc()
+        rec = Record.query.get(rid)
+        _save_photo_to_record(rec, raw, fname, ctype)
+        db.session.commit()
+        return jsonify({"ok": True, "action": "saved", "device": rec.device, "note": f"Foto salva; lançamento automático falhou: {e}"})
+    result = dict(result or {})
+    result.setdefault("device", rec.device)
+    return jsonify(result)
 
 
 if __name__ == "__main__":

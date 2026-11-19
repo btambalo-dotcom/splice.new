@@ -86,6 +86,7 @@
             {% if (not current_user.is_company_owner) or current_user.is_admin %}
             <a href="{{ url_for('entry') }}" class="btn btn-sm btn-outline-light me-2" data-i18n="entry">Lançar</a>
             <a href="{{ url_for('auto_photo_page') }}" class="btn btn-sm btn-success me-2">📷 Foto Auto</a>
+            <a href="{{ url_for('camera_link_page') }}" class="btn btn-sm btn-outline-success me-2">📱 Link câmera</a>
 
             {% if current_user.is_master_owner %}
             <a href="{{ url_for('owner_report') }}" class="btn btn-sm btn-warning me-2">🔐 Owner</a>
