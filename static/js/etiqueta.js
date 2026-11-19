@@ -76,6 +76,12 @@
     });
   }
 
+  function twoLines(items) {
+    if (items.length <= 2) return items;
+    const n1 = Math.floor(items.length / 2);
+    return [items.slice(0, n1).join('/'), items.slice(n1).join('/')];
+  }
+
   // Modelos (as opções das fotos de campo)
   function buildText(mode, rec) {
     const sps = parseSplitters(rec.device);
@@ -84,8 +90,13 @@
       if (!ci.cabo) return '';
       return [ci.cabo.replace(/\s+(\d+)$/, ' $1F')].concat(shortFibras(ci.fibras)).join('\n');
     }
-    if (mode === 'tampa') {                // 1 etiqueta, uma linha por splitter com portas
-      return sps.map(lineFull).join('\n');
+    if (mode === 'tampa') {                // 1 etiqueta, no máximo 2 linhas (3+ splitters: "A" / "B/C", como na foto)
+      return twoLines(sps.map(lineFull)).join('\n');
+    }
+    if (mode === 'completa') {             // etiqueta do cabo + etiqueta da tampa
+      const cab = buildText('cabo', rec);
+      const tam = buildText('tampa', rec);
+      return [cab, tam].filter(Boolean).join('\n\n');
     }
     if (mode === 'splitter') {             // 1 etiqueta por splitter (bandeja)
       return sps.map(lineShort).join('\n\n');
@@ -309,7 +320,8 @@
     syncCfgInputs();
     const sps = parseSplitters(currentRec.device);
     const has1x4 = sps.some((s) => s.s);
-    document.getElementById('etq-mode').value = has1x4 ? 'tampa' : 'splitter';
+    const hasCabo = !!cableInfo(currentRec).cabo;
+    document.getElementById('etq-mode').value = hasCabo ? 'completa' : (has1x4 ? 'tampa' : 'splitter');
     applyMode();
     setStatus(hasBluetooth() ? '' : 'Sem Bluetooth neste navegador (no iPad use o Bluefy) — dá para usar "Compartilhar imagem".', hasBluetooth() ? '' : 'err');
     updateConnLabel();

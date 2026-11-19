@@ -609,6 +609,7 @@
 
         <label class="form-label mb-1">Modelo</label>
         <select class="form-select bg-dark text-light border-secondary mb-2" id="etq-mode">
+          <option value="completa">Caixa completa — etiqueta do cabo + etiqueta da tampa</option>
           <option value="tampa">Tampa da caixa — 1 etiqueta com todos (ex.: OLT04 45P 6S 21-24)</option>
           <option value="splitter">Splitter na bandeja — 1 etiqueta por splitter (ex.: OLT04 45P 6S)</option>
           <option value="splitter_portas">Splitter com portas — 1 etiqueta por splitter (ex.: OLT04 45P 6S 21-24)</option>
@@ -754,7 +755,7 @@
 {% block extra_js %}
   {{ super() }}
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="{{ url_for('static', filename='js/etiqueta.js') }}?v=150"></script>
+  <script src="{{ url_for('static', filename='js/etiqueta.js') }}?v=153"></script>
   <script>
     // Fallback: se Leaflet não carregou, tenta unpkg
     if (typeof L === 'undefined') {
