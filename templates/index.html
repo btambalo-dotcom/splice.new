@@ -122,10 +122,17 @@
       Download fotos filtradas (.zip)
     </a>
     {% else %}
+    {% if hide_splicer %}
+    <a class="btn btn-sm btn-outline-secondary me-2"
+       href="{{ url_for('export_pdf', company=company_filter, map=map_filter, start=start, end=end, no_values=1) }}">
+      PDF sem valores
+    </a>
+    {% else %}
     <a class="btn btn-sm btn-outline-info me-2"
        href="{{ url_for('export_pdf', company=company_filter, splicer=splicer_filter, map=map_filter, start=start, end=end) }}">
       PDF com valores
     </a>
+    {% endif %}
     <a class="btn btn-sm btn-success me-2"
        href="{{ url_for('export_excel', company=company_filter, splicer=splicer_filter, map=map_filter, start=start, end=end) }}">
       Export Excel

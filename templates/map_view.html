@@ -582,7 +582,9 @@
           Abrir no Google Maps
         </a>
         <button type="button" class="btn btn-outline-light" data-bs-dismiss="modal">Fechar</button>
+{% if not hide_splicer %}
         <button type="button" class="btn btn-info btn-sm" id="btn-print-label" onclick="openLabelPrint()">🏷️ Imprimir etiqueta</button>
+        {% endif %}
         {% if current_user.is_admin %}
         <button type="button" class="btn btn-sm" id="btn-toggle-other-co" onclick="toggleDeviceOtherCompany()" style="background:#f1c40f;color:#222;border-color:#f1c40f;">Outra empresa</button>
         <button type="button" class="btn btn-outline-warning btn-sm" id="btn-unset-placed" onclick="unsetDevicePlaced()" style="display:none;">Tirar subida</button>
@@ -595,6 +597,7 @@
   </div>
 </div>
 
+{% if not hide_splicer %}
 <!-- v149 — Modal: Imprimir etiqueta (NIIMBOT D110) -->
 <div class="modal fade" id="labelModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
@@ -667,6 +670,7 @@
     </div>
   </div>
 </div>
+{% endif %}
 
 <!-- Modal: Subir dispositivo (placed) -->
 <div class="modal fade" id="placedModal" tabindex="-1" aria-hidden="true">
@@ -757,7 +761,7 @@
 {% block extra_js %}
   {{ super() }}
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="{{ url_for('static', filename='js/etiqueta.js') }}?v=157"></script>
+{% if not hide_splicer %}<script src="{{ url_for('static', filename='js/etiqueta.js') }}?v=157"></script>{% endif %}
   <script>
     // Fallback: se Leaflet não carregou, tenta unpkg
     if (typeof L === 'undefined') {
@@ -1974,7 +1978,7 @@ if (!IS_OWNER_READONLY) {
   popupParts.push(
     '<button class="btn btn-warning btn-sm" onclick="copyDeviceInfoFromRecord(' + rec.id + ')">Copiar info</button>'
   );
-  popupParts.push(
+  if (!HIDE_PEOPLE) popupParts.push(
     '<button class="btn btn-info btn-sm" onclick="printLabelFromMap(' + rec.id + ')">🏷️ Etiqueta</button>'
   );
 

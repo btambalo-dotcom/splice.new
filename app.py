@@ -5399,6 +5399,9 @@ def export_pdf():
 
     # Flag opcional: se "no_values=1", não mostra colunas de valores em dinheiro.
     no_values = request.args.get("no_values") == "1"
+    # v159 — dono de empresa só pode baixar o PDF SEM valores
+    if _hide_people():
+        no_values = True
 
     # Usa exatamente a mesma lógica de filtros/permissões da tela principal
     query = build_filtered_record_query_from_request()
@@ -5568,6 +5571,8 @@ def export_invoice():
     A invoice contém: nome do mapa, número do dispositivo, número de fusões,
     valor do dispositivo e total, somados por mapa/dispositivo no período.
     """
+    if _hide_people():
+        return "Acesso negado.", 403
     # mesmos filtros do index / export_pdf
     company_filter = request.args.get("company") or None
     splicer_filter = request.args.get("splicer") or None
@@ -9899,6 +9904,8 @@ def export_summit_report():
     Lê billing_codes_json de cada Record, agrupa por código e por dia,
     e preenche o template Excel exatamente como o contratante espera.
     """
+    if _hide_people():
+        return "Acesso negado.", 403
     import openpyxl, io, os, json
     from datetime import timedelta
     from collections import defaultdict
