@@ -43,7 +43,7 @@
     const mDone = done.reduce((a, s) => a + (s.length_m || 0), 0);
     const mAll = segs.reduce((a, s) => a + (s.length_m || 0), 0);
     const last = data.last;
-    let h = '<b>🧵 Cabo passado</b> · <span style="color:#4ade80">■ passado</span> <span style="color:#f87171">■ falta</span>';
+    let h = '<b>🧵 Cabo passado</b> · <b style="color:#4ade80 !important">━ verde = passado</b> · <b style="color:#f87171 !important">┅ vermelho = falta</b>';
     if (segs.length) h += '<br>' + done.length + ' de ' + segs.length + ' trechos · ' + ft(mDone) + ' de ' + ft(mAll) + (mAll ? ' (' + Math.round(100 * mDone / mAll) + '%)' : '');
     else h += '<br><span style="color:#fbbf24">Nenhum trecho cadastrado ainda.</span>';
     h += '<br>Última atualização: ' + (last ? '<b>' + esc(last.by || '?') + '</b> · ' + fmtDT(last.at) : '<i>nenhuma</i>');
