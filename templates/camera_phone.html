@@ -166,20 +166,41 @@
   function stopCam() { if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; } }
   $('btn-flip').onclick = () => { facing = facing === 'environment' ? 'user' : 'environment'; stopCam(); startCam(); };
 
-  // ---------- carimbo ----------
+  // ---------- carimbo (mesmo layout do Timemark; medidas tiradas de uma foto 1512x2016) ----------
   const DIAS = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
   const MESES = ['jan.','fev.','mar.','abr.','mai.','jun.','jul.','ago.','set.','out.','nov.','dez.'];
-  function fmtCoord(v, pos_, neg) { return Math.abs(v).toFixed(6) + '°' + (v >= 0 ? pos_ : neg); }
+  const FONT_BASE = {{ url_for('static', filename='fonts/')|tojson }};
+  const FONTS = [['CamBold','cam-bold'],['CamReg','cam-reg'],['CamLight','cam-light'],['CamCond','cam-cond']];
+  const fontsReady = Promise.all(FONTS.map(([fam, file]) => {
+    try { const ff = new FontFace(fam, 'url(' + FONT_BASE + file + '.woff?v=1)'); document.fonts.add(ff); return ff.load().catch(() => null); }
+    catch (e) { return null; }
+  }));
+  const F = (fam, px) => px.toFixed(1) + 'px ' + fam + ', Roboto, -apple-system, system-ui, sans-serif';
+  function fmtCoord(v, p_, n_) { return Math.abs(v).toFixed(6) + '°' + (v >= 0 ? p_ : n_); }
   function wrap(ctx, text, maxW) {
-    const words = String(text).split(/(\s+|\/)/).filter(w => w !== '');
+    const parts = String(text).split(/(\s+)/).filter(w => w !== '');
     const lines = []; let cur = '';
-    for (const w of words) {
+    for (const w of parts) {
       const t = cur + w;
-      if (ctx.measureText(t).width > maxW && cur.trim()) { lines.push(cur.trim()); cur = w.trim() ? w : ''; }
+      if (ctx.measureText(t.trim()).width > maxW && cur.trim()) { lines.push(cur.trim()); cur = w.trim() ? w : ''; }
       else cur = t;
     }
     if (cur.trim()) lines.push(cur.trim());
-    return lines;
+    // palavra única maior que a linha: quebra por caractere
+    const out = [];
+    for (const l of lines) {
+      if (ctx.measureText(l).width <= maxW) { out.push(l); continue; }
+      let c = '';
+      for (const ch of l) { if (ctx.measureText(c + ch).width > maxW && c) { out.push(c); c = ch; } else c += ch; }
+      if (c) out.push(c);
+    }
+    return out;
+  }
+  function verifyCode() {
+    const A = 'ABCDEFGHJKLMNPQRSTUVWXYZ0123456789'; let s = '';
+    const r = (window.crypto && crypto.getRandomValues) ? crypto.getRandomValues(new Uint8Array(16)) : Array.from({length: 16}, () => Math.random() * 256);
+    for (let i = 0; i < 16; i++) s += A[r[i] % A.length];
+    return s;
   }
   function stamp(src, sw, sh) {
     const MAX = 2400;
@@ -189,70 +210,88 @@
     const ctx = c.getContext('2d');
     ctx.drawImage(src, 0, 0, W, H);
 
+    const u = Math.min(W, H) / 1512;              // 1 unidade = 1 px numa foto 1512 de largura
     const now = new Date();
-    const U = Math.min(W, H) / 1000;              // unidade relativa
-    const pad = 40 * U, x0 = 28 * U;
-    const big = 78 * U, mid = 46 * U, small = 38 * U;
-    const maxW = W - x0 - pad * 2 - 20 * U;
-
-    const hh = now.getHours(), mm = String(now.getMinutes()).padStart(2, '0');
-    const hm = ((hh % 12) || 12) + ':' + mm, ap = hh < 12 ? 'AM' : 'PM';
+    const hh = now.getHours(), mi = String(now.getMinutes()).padStart(2, '0');
+    const hm = ((hh % 12) || 12) + ':' + mi, ap = hh < 12 ? 'AM' : 'PM';
     const off = -now.getTimezoneOffset() / 60;
     const dateStr = DIAS[now.getDay()] + ', ' + now.getDate() + ' ' + MESES[now.getMonth()] + ' ' + now.getFullYear() + ' GMT' + (off >= 0 ? '+' : '') + off;
 
+    const X = 64 * u;                              // início do texto
+    const maxW = W - X - 60 * u;
+    const BOLD = 62 * u, REG = 45 * u, BSTEP = 73 * u, RSTEP = 82 * u;
+
+    ctx.font = F('CamBold', BOLD);
     const bold = [];
-    ctx.font = '700 ' + mid + 'px -apple-system, system-ui, Roboto, sans-serif';
     wrap(ctx, 'MAP: ' + target.map, maxW).forEach(l => bold.push(l));
     wrap(ctx, 'DEVICE: ' + target.device, maxW).forEach(l => bold.push(l));
     const fus = $('fus').value.trim();
-    if (fus !== '') bold.push(String(parseInt(fus, 10)));
+    if (fus !== '' && !isNaN(parseInt(fus, 10))) bold.push(String(parseInt(fus, 10)));
+    ctx.font = F('CamReg', REG);
     const reg = [dateStr];
-    ctx.font = '400 ' + small + 'px -apple-system, system-ui, Roboto, sans-serif';
     if (addr) wrap(ctx, addr, maxW).forEach(l => reg.push(l));
     if (pos) reg.push(fmtCoord(pos.lat, 'N', 'S') + ', ' + fmtCoord(pos.lng, 'E', 'W'));
 
-    const lh = 1.32;
-    const textH = bold.length * mid * lh + reg.length * small * lh;
-    const timeBoxH = big * 1.45;
-    let y = H - pad - textH;
-    const boxTop = y - timeBoxH - 22 * U;
+    // posições de baixo para cima
+    const lastRegBase = H - 50 * u;
+    const regBase = reg.map((_, i) => lastRegBase - (reg.length - 1 - i) * RSTEP);
+    const lastBoldBase = regBase[0] - 91 * u;
+    const boldBase = bold.map((_, i) => lastBoldBase - (bold.length - 1 - i) * BSTEP);
+    const capTop = boldBase[0] - 44 * u;
+
+    const shadow = (on) => {
+      ctx.shadowColor = on ? 'rgba(0,0,0,0.55)' : 'transparent';
+      ctx.shadowBlur = on ? 6 * u : 0; ctx.shadowOffsetX = on ? 1.5 * u : 0; ctx.shadowOffsetY = on ? 1.5 * u : 0;
+    };
 
     // caixa da hora
-    ctx.font = '600 ' + big + 'px -apple-system, system-ui, Roboto, sans-serif';
-    const tW = ctx.measureText(hm).width;
-    ctx.font = '600 ' + (big * 0.42) + 'px -apple-system, system-ui, Roboto, sans-serif';
-    const aW = ctx.measureText(ap).width;
-    const boxW = tW + aW + big * 1.55;
-    ctx.fillStyle = 'rgba(52,26,14,0.92)';
-    roundRect(ctx, x0, boxTop, boxW, timeBoxH, 14 * U); ctx.fill();
-    ctx.fillStyle = '#fff';
-    ctx.font = '600 ' + big + 'px -apple-system, system-ui, Roboto, sans-serif';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(hm, x0 + 22 * U, boxTop + timeBoxH / 2 + 4 * U);
-    ctx.font = '600 ' + (big * 0.42) + 'px -apple-system, system-ui, Roboto, sans-serif';
-    ctx.fillText(ap, x0 + 30 * U + tW, boxTop + timeBoxH * 0.32);
-    const cx = x0 + boxW - big * 0.62, cy = boxTop + timeBoxH / 2, r = big * 0.36;
-    ctx.fillStyle = '#f5b400'; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = '#3a2410'; ctx.lineWidth = r * 0.22; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    ctx.beginPath(); ctx.moveTo(cx - r * 0.42, cy + r * 0.02); ctx.lineTo(cx - r * 0.1, cy + r * 0.32); ctx.lineTo(cx + r * 0.45, cy - r * 0.3); ctx.stroke();
+    const boxH = 128 * u, boxBottom = capTop - 41 * u, boxTop = boxBottom - boxH, boxX = 28 * u;
+    ctx.font = F('CamLight', 110 * u);
+    const SX = 0.67;                                // dígitos estreitos como no Timemark
+    const tW = ctx.measureText(hm).width * SX;
+    ctx.font = F('CamCond', 36 * u);
+    const pmX = X + tW + 22 * u, pmW = ctx.measureText(ap).width;
+    const cx = pmX + pmW + 76 * u, cy = boxTop + 65 * u, r = 38 * u;
+    const boxW = cx + 67 * u - boxX;
+    shadow(false);
+    ctx.fillStyle = 'rgba(57,26,18,0.97)';
+    roundRect(ctx, boxX, boxTop, boxW, boxH, 12 * u); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.textBaseline = 'alphabetic';
+    ctx.save(); ctx.translate(X, boxTop + 101 * u); ctx.scale(SX, 1);
+    ctx.font = F('CamLight', 110 * u); ctx.fillText(hm, 0, 0); ctx.restore();
+    ctx.font = F('CamCond', 36 * u); ctx.fillText(ap, pmX, boxTop + 53 * u);
+    ctx.fillStyle = '#fdb200'; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#5e3412'; ctx.lineWidth = 6.5 * u; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.beginPath(); ctx.moveTo(cx - 15 * u, cy + 1 * u); ctx.lineTo(cx - 4 * u, cy + 12 * u); ctx.lineTo(cx + 16 * u, cy - 10 * u); ctx.stroke();
 
-    // barra amarela + textos
-    const barX = x0 + 6 * U;
-    ctx.fillStyle = '#f5b400';
-    ctx.fillRect(barX, y - 6 * U, 7 * U, textH + 6 * U);
-    ctx.textBaseline = 'top';
-    ctx.shadowColor = 'rgba(0,0,0,0.85)'; ctx.shadowBlur = 8 * U; ctx.shadowOffsetX = 2 * U; ctx.shadowOffsetY = 2 * U;
-    ctx.fillStyle = '#fff';
-    const tx = barX + 28 * U;
-    ctx.font = '700 ' + mid + 'px -apple-system, system-ui, Roboto, sans-serif';
-    bold.forEach(l => { ctx.fillText(l, tx, y); y += mid * lh; });
-    ctx.font = '400 ' + small + 'px -apple-system, system-ui, Roboto, sans-serif';
-    reg.forEach(l => { ctx.fillText(l, tx, y); y += small * lh; });
-    // assinatura discreta
-    ctx.font = '600 ' + (small * 0.8) + 'px -apple-system, system-ui, Roboto, sans-serif';
-    ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(255,255,255,0.85)';
-    ctx.fillText('SPLICER', W - pad, H - pad - small * 0.8);
-    ctx.textAlign = 'left'; ctx.shadowBlur = 0; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
+    // barra amarela
+    ctx.fillStyle = '#fdb100';
+    ctx.fillRect(28 * u, capTop - 4 * u, 6 * u, (lastRegBase + 8 * u) - (capTop - 4 * u));
+
+    // textos
+    shadow(true); ctx.fillStyle = '#fff';
+    ctx.font = F('CamBold', BOLD);
+    bold.forEach((l, i) => ctx.fillText(l, X, boldBase[i]));
+    ctx.font = F('CamReg', REG);
+    reg.forEach((l, i) => ctx.fillText(l, X, regBase[i]));
+
+    // canto inferior direito
+    ctx.textAlign = 'right';
+    ctx.font = F('CamReg', 34 * u); ctx.fillStyle = 'rgba(255,255,255,0.88)';
+    ctx.fillText('Photo by', W - 27 * u, H - 86 * u);
+    ctx.font = F('CamBold', 50 * u);
+    const wCer = ctx.measureText('CER').width;
+    ctx.fillStyle = '#fff'; ctx.fillText('CER', W - 27 * u, H - 33 * u);
+    ctx.fillStyle = '#f4e444'; ctx.fillText('SPLI', W - 27 * u - wCer, H - 33 * u);
+    ctx.textAlign = 'left';
+
+    // texto vertical na direita
+    ctx.save();
+    ctx.translate(W - 22 * u, H * 0.59); ctx.rotate(-Math.PI / 2);
+    ctx.font = F('CamReg', 28 * u); ctx.fillStyle = 'rgba(255,255,255,0.92)';
+    ctx.fillText('© ' + verifyCode() + '   SPLICER Verified', 0, 0);
+    ctx.restore();
+    shadow(false);
 
     const p2 = (n) => String(n).padStart(2, '0');
     const clean = (s) => String(s || '').replace(/[^A-Za-z0-9_-]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
@@ -335,6 +374,7 @@
 
   async function finish(src, w, h) {
     if (!target) return;
+    await fontsReady;
     const { canvas, name } = stamp(src, w, h);
     const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.9));
     lastBlob = blob; lastName = name;

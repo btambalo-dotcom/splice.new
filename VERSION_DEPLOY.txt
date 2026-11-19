@@ -1,3 +1,4 @@
+SPLICER v161 - Link da camera: carimbo igual ao Timemark (fonte Roboto condensada, caixa da hora marrom com check amarelo, barra amarela, mesmas posicoes e tamanhos, Photo by e texto vertical)
 SPLICER v160 - Link da camera por splicer: celular tira foto com carimbo (hora, MAP, DEVICE, fusoes, data, endereco, GPS), salva na galeria e lanca no dispositivo escolhido no iPad (botao Foto no celular no pin); tabela nova cam_link; nao altera lancamentos existentes
 SPLICER v159 - dono de empresa so baixa PDF sem valores (PDF com valores, invoice e Summit bloqueados) e nao ve etiqueta no mapa
 SPLICER v158 - dono de empresa nao ve o nome do splicer (lista, mapa, servicos)
