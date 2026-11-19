@@ -659,6 +659,7 @@
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-outline-light btn-sm me-auto" id="etq-share">Compartilhar imagem</button>
+        <button type="button" class="btn btn-outline-secondary btn-sm" id="etq-connect-all" title="Mostra todos os aparelhos Bluetooth">Procurar todos</button>
         <button type="button" class="btn btn-outline-info btn-sm" id="etq-connect">Conectar</button>
         <button type="button" class="btn btn-primary" id="etq-print">Imprimir</button>
       </div>
@@ -755,7 +756,7 @@
 {% block extra_js %}
   {{ super() }}
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="{{ url_for('static', filename='js/etiqueta.js') }}?v=154"></script>
+  <script src="{{ url_for('static', filename='js/etiqueta.js') }}?v=155"></script>
   <script>
     // Fallback: se Leaflet não carregou, tenta unpkg
     if (typeof L === 'undefined') {

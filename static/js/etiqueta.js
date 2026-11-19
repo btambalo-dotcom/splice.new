@@ -190,12 +190,21 @@
     el.className = 'small mt-2 ' + (kind === 'err' ? 'text-danger' : kind === 'ok' ? 'text-success' : 'text-info');
   }
 
-  async function connect() {
+  async function connect(all) {
     const lib = await loadLib();
     if (client && client.isConnected && client.isConnected()) return client;
     client = new lib.NiimbotBluetoothClient();
     client.on('disconnect', () => { updateConnLabel(); });
-    await client.connect();
+    if (all) {
+      // v155 — mostra todos os aparelhos Bluetooth (caso o filtro não ache a impressora)
+      const dev = await navigator.bluetooth.requestDevice({
+        acceptAllDevices: true,
+        optionalServices: ['e7810a71-73ae-499d-8c15-faa9aef0c3f2'],
+      });
+      await client.connect({ authorizedDevice: dev });
+    } else {
+      await client.connect();
+    }
     updateConnLabel();
     return client;
   }
@@ -348,7 +357,13 @@
     $('etq-share').addEventListener('click', shareImage);
     $('etq-connect').addEventListener('click', async () => {
       if (!hasBluetooth()) { noBluetoothHelp(); return; }
-      try { setStatus('Procurando impressora...'); await connect(); setStatus('Impressora conectada.', 'ok'); }
+      try { setStatus('Procurando impressora...'); await connect(false); setStatus('Impressora conectada.', 'ok'); }
+      catch (e) { setStatus('Erro: ' + (e && e.message ? e.message : e), 'err'); }
+    });
+    const all = $('etq-connect-all');
+    if (all) all.addEventListener('click', async () => {
+      if (!hasBluetooth()) { noBluetoothHelp(); return; }
+      try { setStatus('Procurando todos os aparelhos...'); await connect(true); setStatus('Impressora conectada.', 'ok'); }
       catch (e) { setStatus('Erro: ' + (e && e.message ? e.message : e), 'err'); }
     });
   });
