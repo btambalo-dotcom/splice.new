@@ -63,6 +63,7 @@
       {% block extra_head %}{% endblock %}
 </head>
   {% set is_mont = current_user.is_authenticated and current_user.is_montador and not current_user.is_admin %}
+  {% set is_cons = current_user.is_authenticated and current_user.is_construcao and not current_user.is_admin %}
   <body class="bg-dark text-light{% if current_user.is_authenticated %} has-tabbar{% endif %}">
     <nav class="navbar navbar-expand-lg navbar-dark bg-black mb-4">
       <div class="container">
@@ -77,7 +78,10 @@
           </button>
           <div class="collapse navbar-collapse" id="mainNav">
           <div class="ms-auto d-flex flex-column flex-lg-row flex-lg-wrap align-items-stretch align-items-lg-center gap-2 py-2 py-lg-0 splicer-nav">
-            {% if is_mont %}
+            {% if is_cons %}
+            <a href="{{ url_for('my_maps') }}" class="btn btn-sm btn-outline-info me-2">🚧 Mapas</a>
+            <a href="{{ url_for('logout') }}" class="btn btn-sm btn-outline-danger">Sair</a>
+            {% elif is_mont %}
             <a href="{{ url_for('montador_home') }}" class="btn btn-sm btn-success me-2">🧰 Montagem</a>
             <a href="{{ url_for('logout') }}" class="btn btn-sm btn-outline-danger">Sair</a>
             {% else %}
@@ -136,7 +140,18 @@
     {# ---------- Barra de navegação do celular (estilo app) ---------- #}
     {% set ep = request.endpoint or '' %}
     <nav class="app-tabbar" aria-label="Navegação">
-      {% if is_mont %}
+      {% if is_cons %}
+      <a href="{{ url_for('my_maps') }}" class="app-tab app-tab-main active" aria-label="Mapas">
+        <span class="app-tab-bubble">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/></svg>
+        </span>
+        <span>Mapas</span>
+      </a>
+      <a href="{{ url_for('logout') }}" class="app-tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+        <span>Sair</span>
+      </a>
+      {% elif is_mont %}
       <a href="{{ url_for('montador_home') }}" class="app-tab app-tab-main active" aria-label="Montagem">
         <span class="app-tab-bubble">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>

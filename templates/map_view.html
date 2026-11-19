@@ -93,6 +93,7 @@
     .mv-search .form-control:focus { box-shadow:none; border-color:var(--mv-accent); }
 
     .mv-map-wrap { position:relative; }
+    #cabosBtn.active { background:#166534 !important; border-color:#22c55e !important; color:#fff !important; }
     /* v123 — busca por splitter e modo montagem */
     .mv-results { background:var(--mv-card); border:1px solid var(--mv-line); border-radius:12px; padding:10px 12px; margin-bottom:10px; }
     .mv-results .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; max-height:140px; overflow:auto; }
@@ -161,7 +162,10 @@
       <h1>{{ map_obj.name }}</h1>
     </div>
     <div class="mv-actions">
+      <button type="button" id="cabosBtn" class="btn btn-sm mv-btn" onclick="cabosToggle()" title="Onde o cabo já foi passado">🧵 Cabos</button>
+      {% if not is_cons %}
       <a href="{{ url_for('map_services', map_id=map_obj.id) }}" class="btn btn-sm mv-btn">Serviços</a>
+      {% endif %}
       {% set can_mont = current_user.is_admin or (current_user.can_montagem and not current_user.is_montador) %}
       {% if can_mont and not current_user.is_admin %}
       <button type="button" id="montModeBtn" class="btn btn-sm mv-btn" title="Ver situação da montagem das caixas">🧰 Montagem</button>
@@ -763,6 +767,8 @@
   {{ super() }}
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 {% if not hide_splicer %}<script src="{{ url_for('static', filename='js/etiqueta.js') }}?v=157"></script>{% endif %}
+  <script>window.CABOS_MAP_ID = {{ map_obj.id }}; window.CABOS_AUTO_ON = {{ 'true' if is_cons else 'false' }};</script>
+  <script src="{{ url_for('static', filename='js/cabos.js') }}?v=162"></script>
   {% if not hide_splicer %}
   <script>
   // v160 — escolhe o dispositivo para o celular (link da câmera) fotografar
@@ -808,6 +814,7 @@
     const initialFocusRecordId = {{ focus_record_id if focus_record_id is not none else "null" }};
     const IS_OWNER_READONLY = false; // owner nao tem permissao de edicao
 const IS_ADMIN = {{ "true" if current_user.is_admin else "false" }};
+const IS_CONS = {{ "true" if is_cons else "false" }};
     const MAP_NAME = "{{ map_obj.name }}";
     const testsReportUrl = "{{ url_for('export_map_tests_report', map_id=map_obj.id) }}";
 
@@ -2054,7 +2061,10 @@ popupParts.push(
 );
 popupParts.push('</div>');
 popupParts.push('</div>');
-const popupHtml = popupParts.join('');
+const popupHtml = IS_CONS
+  ? ('<div class="device-popup"><b>' + String(rec.device || '').replace(/</g, '&lt;') + '</b>' +
+     (rec.address ? '<br><span style="font-size:12px">' + String(rec.address).replace(/</g, '&lt;') + '</span>' : '') + '</div>')
+  : popupParts.join('');
               try { marker.bindPopup(popupHtml); } catch(e) {}
               marker.on('click', function () {
                 if (window._montMode && IS_ADMIN) {

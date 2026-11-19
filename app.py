@@ -741,6 +741,7 @@ class User(UserMixin, db.Model):
     can_view_values = db.Column(db.Boolean, default=True, nullable=False)  # pode ver valores financeiros nos lançamentos
     # Montador: só lança caixas montadas e vê o próprio histórico (v122)
     is_montador = db.Column(db.Boolean, default=False, nullable=True)
+    is_construcao = db.Column(db.Boolean, default=False, nullable=True)  # v162 — equipe de construção (marca cabo passado)
     # v133: splicer com acesso de VISUALIZAÇÃO à Montagem (modo montagem no mapa + rota por proximidade)
     can_montagem = db.Column(db.Boolean, default=False, nullable=True)
 
@@ -1058,6 +1059,24 @@ class CamLink(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
+class CableSegment(db.Model):
+    """v162 — trecho de cabo no mapa (rua entre duas caixas). status: pending (vermelho) / done (verde).
+    Tabela nova: não altera record/user."""
+    __tablename__ = "cable_segment"
+    id = db.Column(db.Integer, primary_key=True)
+    map_id = db.Column(db.Integer, index=True, nullable=False)
+    a_record_id = db.Column(db.Integer, nullable=True)
+    b_record_id = db.Column(db.Integer, nullable=True)
+    cable_name = db.Column(db.String(120), nullable=True)
+    coords = db.Column(db.Text, nullable=False)        # JSON [[lat,lng],...]
+    length_m = db.Column(db.Float, nullable=True)
+    status = db.Column(db.String(20), default="pending", nullable=False)
+    updated_by = db.Column(db.String(120), nullable=True)
+    updated_at = db.Column(db.DateTime, nullable=True)
+    created_by = db.Column(db.String(120), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
 class Expense(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
@@ -1362,6 +1381,7 @@ with app.app_context():
         _ensure_user_col("is_master_owner",     "BOOLEAN", "FALSE")
         _ensure_user_col("is_montador",         "BOOLEAN", "FALSE")  # v122
         _ensure_user_col("can_montagem",        "BOOLEAN", "FALSE")  # v133
+        _ensure_user_col("is_construcao",       "BOOLEAN", "FALSE")  # v162
     except Exception:
         pass
 
@@ -2588,14 +2608,45 @@ def _hide_people():
             return False
         if getattr(current_user, "is_admin", False) or getattr(current_user, "is_master_owner", False):
             return False
-        return bool(getattr(current_user, "is_company_owner", False))
+        return bool(getattr(current_user, "is_company_owner", False)) or bool(getattr(current_user, "is_construcao", False))
     except Exception:
         return False
 
 
+def _is_construcao_only(user=None) -> bool:
+    u = user or current_user
+    try:
+        return bool(getattr(u, "is_authenticated", False)) and bool(getattr(u, "is_construcao", False)) \
+            and not bool(getattr(u, "is_admin", False))
+    except Exception:
+        return False
+
+
+_CONSTRUCAO_ALLOWED_ENDPOINTS = {
+    "my_maps", "map_view", "api_map_records", "logout", "login", "static",
+    "pwa_service_worker", "pwa_manifest", "pwa_apple_icon", "pwa_favicon",
+    "api_map_cables", "api_cable_status", "api_cable_add",
+}
+
+
+@app.before_request
+def _construcao_access_guard():
+    try:
+        if not _is_construcao_only():
+            return None
+    except Exception:
+        return None
+    ep = request.endpoint or ""
+    if ep in _CONSTRUCAO_ALLOWED_ENDPOINTS:
+        return None
+    if request.method == "GET" and not request.path.startswith("/api/"):
+        return redirect(url_for("my_maps"))
+    abort(403)
+
+
 @app.context_processor
 def _inject_hide_people():
-    return {"hide_splicer": _hide_people()}
+    return {"hide_splicer": _hide_people(), "is_cons": _is_construcao_only()}
 
 
 # --------- Rotas ---------
@@ -5275,6 +5326,14 @@ def manage_users():
         can_view_values = bool(request.form.get("can_view_values"))
         is_montador = bool(request.form.get("is_montador"))
         can_montagem = bool(request.form.get("can_montagem"))  # v133
+        is_construcao = bool(request.form.get("is_construcao"))  # v162
+        if is_construcao:
+            is_admin = False
+            is_company_owner = False
+            is_montador = False
+            company_name = None
+            can_access_expenses = False
+            can_view_values = False
         if is_montador or is_admin:
             can_montagem = False
         if is_montador:
@@ -5300,6 +5359,7 @@ def manage_users():
             user.can_view_values = can_view_values
             user.is_montador = is_montador
             user.can_montagem = can_montagem
+            user.is_construcao = is_construcao
         else:
             user = User(
                 username=username,
@@ -5313,6 +5373,7 @@ def manage_users():
                 can_view_values=can_view_values,
                 is_montador=is_montador,
                 can_montagem=can_montagem,
+                is_construcao=is_construcao,
             )
             db.session.add(user)
         db.session.commit()
@@ -8731,6 +8792,145 @@ def cam_upload(token):
     result = dict(result or {})
     result.setdefault("device", rec.device)
     return jsonify(result)
+
+
+# ─────────────────────────────────────────────────────────────
+#  v162 — CABO PASSADO (construção marca os trechos; verde = passado, vermelho = falta)
+# ─────────────────────────────────────────────────────────────
+def _cable_user_name():
+    return (getattr(current_user, "splicer_name", None) or current_user.username or "").strip()
+
+
+def _cable_can_edit():
+    return bool(getattr(current_user, "is_admin", False)) or bool(getattr(current_user, "is_construcao", False))
+
+
+def _cable_seg_json(sg):
+    try:
+        coords = json.loads(sg.coords or "[]")
+    except Exception:
+        coords = []
+    return {
+        "id": sg.id, "a": sg.a_record_id, "b": sg.b_record_id, "cable": sg.cable_name or "",
+        "coords": coords, "length_m": sg.length_m, "status": sg.status or "pending",
+        "updated_by": sg.updated_by or "", "updated_at": (sg.updated_at.isoformat() + "Z") if sg.updated_at else None,
+    }
+
+
+def _cable_len(coords):
+    import math as _m
+    tot = 0.0
+    for i in range(1, len(coords)):
+        la1, lo1 = coords[i - 1]; la2, lo2 = coords[i]
+        p1, p2 = _m.radians(la1), _m.radians(la2)
+        dp, dl = p2 - p1, _m.radians(lo2 - lo1)
+        a = _m.sin(dp / 2) ** 2 + _m.cos(p1) * _m.cos(p2) * _m.sin(dl / 2) ** 2
+        tot += 2 * 6371000 * _m.asin(min(1.0, _m.sqrt(a)))
+    return round(tot, 1)
+
+
+def _cable_clean_coords(raw):
+    out = []
+    for p in (raw or []):
+        try:
+            la, lo = float(p[0]), float(p[1])
+            if -90 <= la <= 90 and -180 <= lo <= 180:
+                out.append([round(la, 6), round(lo, 6)])
+        except Exception:
+            continue
+    return out
+
+
+@app.route("/api/maps/<int:map_id>/cables", methods=["GET"])
+@login_required
+def api_map_cables(map_id):
+    mp = CompanyMap.query.get_or_404(map_id)
+    ensure_map_access(mp)
+    segs = CableSegment.query.filter_by(map_id=mp.id).order_by(CableSegment.id).all()
+    last = None
+    for sg in segs:
+        if sg.updated_at and (last is None or sg.updated_at > last.updated_at):
+            last = sg
+    return jsonify({
+        "ok": True, "can_edit": _cable_can_edit(), "is_admin": bool(getattr(current_user, "is_admin", False)),
+        "segments": [_cable_seg_json(sg) for sg in segs],
+        "last": {"by": last.updated_by, "at": last.updated_at.isoformat() + "Z"} if last else None,
+    })
+
+
+@app.route("/api/cables/<int:sid>/status", methods=["POST"])
+@login_required
+def api_cable_status(sid):
+    if not _cable_can_edit():
+        return jsonify({"ok": False, "error": "Sem permissão."}), 403
+    sg = CableSegment.query.get_or_404(sid)
+    mp = CompanyMap.query.get_or_404(sg.map_id)
+    ensure_map_access(mp)
+    data = request.get_json(silent=True) or {}
+    st = (data.get("status") or "").strip()
+    if st not in ("pending", "done"):
+        return jsonify({"ok": False, "error": "Status inválido."}), 400
+    sg.status = st
+    sg.updated_by = _cable_user_name()
+    sg.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({"ok": True, "segment": _cable_seg_json(sg)})
+
+
+@app.route("/api/maps/<int:map_id>/cables/add", methods=["POST"])
+@login_required
+def api_cable_add(map_id):
+    """Cria um ou vários trechos. Construção: trecho novo já entra como passado (verde) por padrão."""
+    if not _cable_can_edit():
+        return jsonify({"ok": False, "error": "Sem permissão."}), 403
+    mp = CompanyMap.query.get_or_404(map_id)
+    ensure_map_access(mp)
+    data = request.get_json(silent=True) or {}
+    items = data.get("segments") or [data]
+    is_admin = bool(getattr(current_user, "is_admin", False))
+    existing = {(min(s.a_record_id or 0, s.b_record_id or 0), max(s.a_record_id or 0, s.b_record_id or 0))
+                for s in CableSegment.query.filter_by(map_id=mp.id).all() if s.a_record_id and s.b_record_id}
+    created = []
+    now = datetime.utcnow()
+    who = _cable_user_name()
+    for it in items[:500]:
+        coords = _cable_clean_coords(it.get("coords"))
+        if len(coords) < 2:
+            continue
+        a = it.get("a"); b = it.get("b")
+        try:
+            a = int(a) if a else None; b = int(b) if b else None
+        except Exception:
+            a = b = None
+        if a and b:
+            key = (min(a, b), max(a, b))
+            if key in existing:
+                continue
+            existing.add(key)
+        st = (it.get("status") or ("pending" if is_admin else "done")).strip()
+        if st not in ("pending", "done"):
+            st = "pending"
+        sg = CableSegment(map_id=mp.id, a_record_id=a, b_record_id=b,
+                          cable_name=(str(it.get("cable") or "")[:120] or None),
+                          coords=json.dumps(coords), length_m=_cable_len(coords), status=st,
+                          created_by=who, created_at=now,
+                          updated_by=(who if st == "done" else None), updated_at=(now if st == "done" else None))
+        db.session.add(sg)
+        db.session.flush()
+        created.append(_cable_seg_json(sg))
+    db.session.commit()
+    return jsonify({"ok": True, "created": created})
+
+
+@app.route("/api/cables/<int:sid>/delete", methods=["POST"])
+@login_required
+def api_cable_delete(sid):
+    if not bool(getattr(current_user, "is_admin", False)):
+        return jsonify({"ok": False, "error": "Só admin apaga trecho."}), 403
+    sg = CableSegment.query.get_or_404(sid)
+    db.session.delete(sg)
+    db.session.commit()
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":
