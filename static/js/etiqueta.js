@@ -1,4 +1,4 @@
-/* SPLICER v149 — Impressão de etiquetas na NIIMBOT D110 (rolo contínuo 12 mm)
+/* SPLICER v149/v150 — Impressão de etiquetas na NIIMBOT D110 (rolo contínuo 12 mm)
    - Só tela: não mexe em lançamentos, valores ou banco.
    - Imprime direto por Bluetooth (Web Bluetooth). No iPad/iPhone isso só funciona
      dentro do navegador Bluefy (o Safari não tem Bluetooth para sites).
@@ -60,9 +60,30 @@
     return sp.s ? `${sp.olt} ${sp.p} ${sp.s}S` : `${sp.olt} ${sp.p}`;
   }
 
+  // v150 — cabo e fibras gravados na informação do pin ("CABO ... | FIBRAS ...")
+  function cableInfo(rec) {
+    const info = String((rec && rec.info) || '');
+    const c = info.match(/CABO\s+([^|]+)/i);
+    const f = info.match(/FIBRAS\s+([^|]+)/i);
+    return { cabo: c ? c[1].trim() : '', fibras: f ? f[1].trim() : '' };
+  }
+  function shortFibras(f) {          // "OLT07_85P_SBNGFL 6-8; OLT07_86P_SBNGFL 1" -> ["OLT07 85P F6-8", ...]
+    return String(f || '').split(';').map((t) => t.trim()).filter(Boolean).map((t) => {
+      const m = t.match(/OLT\s*0*(\d+)(?:_(\d+P))?_SBNGFL\s+([\d-]+)/i);
+      if (!m) return t;
+      const olt = 'OLT' + String(m[1]).padStart(2, '0');
+      return m[2] ? `${olt} ${m[2]} F${m[3]}` : `${olt} F${m[3]}`;
+    });
+  }
+
   // Modelos (as opções das fotos de campo)
   function buildText(mode, rec) {
     const sps = parseSplitters(rec.device);
+    if (mode === 'cabo') {               // nome do cabo + fibras usadas na caixa
+      const ci = cableInfo(rec);
+      if (!ci.cabo) return '';
+      return [ci.cabo.replace(/\s+(\d+)$/, ' $1F')].concat(shortFibras(ci.fibras)).join('\n');
+    }
     if (mode === 'tampa') {                // 1 etiqueta, uma linha por splitter com portas
       return sps.map(lineFull).join('\n');
     }
@@ -277,6 +298,10 @@
         { device: document.getElementById('device-name').value };
     }
     // usa o nome que está no campo (se o usuário editou e ainda não salvou)
+    if (currentRec && !currentRec.info) {
+      const inf = document.getElementById('device-info');
+      if (inf && inf.value) currentRec = Object.assign({}, currentRec, { info: inf.value });
+    }
     const nameField = document.getElementById('device-name');
     if (nameField && nameField.value) currentRec = Object.assign({}, currentRec, { device: nameField.value });
 

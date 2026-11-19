@@ -612,6 +612,7 @@
           <option value="tampa">Tampa da caixa — 1 etiqueta com todos (ex.: OLT04 45P 6S 21-24)</option>
           <option value="splitter">Splitter na bandeja — 1 etiqueta por splitter (ex.: OLT04 45P 6S)</option>
           <option value="splitter_portas">Splitter com portas — 1 etiqueta por splitter (ex.: OLT04 45P 6S 21-24)</option>
+          <option value="cabo">Cabo e fibras — nome do cabo + fibras usadas (ex.: SBNG.07.07.01 96F / OLT07 85P F6-8)</option>
           <option value="nome">Nome do dispositivo</option>
         </select>
 
@@ -753,7 +754,7 @@
 {% block extra_js %}
   {{ super() }}
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="{{ url_for('static', filename='js/etiqueta.js') }}?v=149"></script>
+  <script src="{{ url_for('static', filename='js/etiqueta.js') }}?v=150"></script>
   <script>
     // Fallback: se Leaflet não carregou, tenta unpkg
     if (typeof L === 'undefined') {
