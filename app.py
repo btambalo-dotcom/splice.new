@@ -2646,7 +2646,7 @@ def _cons_allowed_map_ids(user=None):
 _CONSTRUCAO_ALLOWED_ENDPOINTS = {
     "my_maps", "map_view", "api_map_records", "logout", "login", "static",
     "pwa_service_worker", "pwa_manifest", "pwa_apple_icon", "pwa_favicon",
-    "api_map_cables", "api_cable_status", "api_cable_add",
+    "api_map_cables", "api_cable_status", "api_cable_add", "api_cable_status_bulk",
 }
 
 
@@ -8905,6 +8905,34 @@ def api_cable_status(sid):
     sg.updated_at = datetime.utcnow()
     db.session.commit()
     return jsonify({"ok": True, "segment": _cable_seg_json(sg)})
+
+
+@app.route("/api/maps/<int:map_id>/cables/status-bulk", methods=["POST"])
+@login_required
+def api_cable_status_bulk(map_id):
+    """v163 — lança de uma vez os trechos selecionados (depois de confirmar na tela)."""
+    if not _cable_can_edit():
+        return jsonify({"ok": False, "error": "Sem permissão."}), 403
+    mp = CompanyMap.query.get_or_404(map_id)
+    ensure_map_access(mp)
+    data = request.get_json(silent=True) or {}
+    def _ids(k):
+        out = set()
+        for x in (data.get(k) or []):
+            try: out.add(int(x))
+            except Exception: pass
+        return out
+    done_ids, pend_ids = _ids("done"), _ids("pending")
+    who, now = _cable_user_name(), datetime.utcnow()
+    changed = []
+    for sg in CableSegment.query.filter(CableSegment.map_id == mp.id,
+                                        CableSegment.id.in_(list(done_ids | pend_ids) or [-1])).all():
+        sg.status = "done" if sg.id in done_ids else "pending"
+        sg.updated_by, sg.updated_at = who, now
+        changed.append(sg)
+    db.session.commit()
+    return jsonify({"ok": True, "segments": [_cable_seg_json(sg) for sg in changed],
+                    "last": {"by": who, "at": now.isoformat() + "Z"} if changed else None})
 
 
 @app.route("/api/maps/<int:map_id>/cables/add", methods=["POST"])

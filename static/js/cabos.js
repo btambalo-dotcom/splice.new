@@ -5,6 +5,7 @@
   const MAP_ID = window.CABOS_MAP_ID;
   const API = '/api/maps/' + MAP_ID + '/cables';
   let layer = null, data = null, on = false, addMode = false, addFirst = null, busy = false;
+  const sel = new Set();   // trechos selecionados (só lança depois de confirmar)
   const fmtDT = (iso) => {
     if (!iso) return '';
     const d = new Date(iso);
@@ -47,6 +48,21 @@
     if (segs.length) h += '<br>' + done.length + ' de ' + segs.length + ' trechos · ' + ft(mDone) + ' de ' + ft(mAll) + (mAll ? ' (' + Math.round(100 * mDone / mAll) + '%)' : '');
     else h += '<br><span style="color:#fbbf24">Nenhum trecho cadastrado ainda.</span>';
     h += '<br>Última atualização: ' + (last ? '<b>' + esc(last.by || '?') + '</b> · ' + fmtDT(last.at) : '<i>nenhuma</i>');
+    if (data.can_edit && sel.size) {
+      const segsSel = data.segments.filter((x) => sel.has(x.id));
+      const nDone = segsSel.filter((x) => x.status !== 'done').length, nUndo = segsSel.length - nDone;
+      h += '<div style="margin-top:6px;padding:6px;border-radius:10px;background:#422006;border:1px solid #f59e0b">' +
+        '<b style="color:#fde68a !important">' + sel.size + ' trecho(s) selecionado(s)</b>' +
+        (nDone ? ' · ' + nDone + ' para <b style="color:#4ade80 !important">passado</b>' : '') +
+        (nUndo ? ' · ' + nUndo + ' para <b style="color:#f87171 !important">não passado</b>' : '') +
+        '<div style="margin-top:5px;display:flex;gap:6px;justify-content:center;flex-wrap:wrap">' +
+        '<button type="button" class="btn btn-sm btn-success" onclick="window.cabosLancar()">✅ Lançar</button>' +
+        '<button type="button" class="btn btn-sm btn-outline-light" onclick="window.cabosLimpar()">Limpar seleção</button>' +
+        (data.is_admin ? '<button type="button" class="btn btn-sm btn-outline-danger" onclick="window.cabosApagarSel()">🗑️ Apagar</button>' : '') +
+        '</div></div>';
+    } else if (data.can_edit && !addMode) {
+      h += '<div style="color:#9ca3af;margin-top:3px;font-size:12px">Toque nos trechos para selecionar e depois em ✅ Lançar</div>';
+    }
     if (data.can_edit) {
       h += '<div style="margin-top:5px;display:flex;gap:6px;justify-content:center;flex-wrap:wrap">' +
         '<button type="button" class="btn btn-sm ' + (addMode ? 'btn-warning' : 'btn-outline-light') + '" onclick="window.cabosAddMode()">' + (addMode ? '✖ Cancelar trecho novo' : '➕ Trecho novo') + '</button>';
@@ -87,10 +103,20 @@
       const done = s.status === 'done';
       const color = done ? '#22c55e' : '#ef4444';
       // linha grossa invisível para facilitar o toque no celular
-      const hit = L.polyline(s.coords, { color: '#000', opacity: 0.01, weight: 22 });
-      const casing = L.polyline(s.coords, { color: '#111', opacity: 0.55, weight: 9, interactive: false });
+      const isSel = sel.has(s.id);
+      const hit = L.polyline(s.coords, { color: '#000', opacity: 0.01, weight: 24 });
+      const casing = L.polyline(s.coords, { color: isSel ? '#facc15' : '#111', opacity: isSel ? 0.95 : 0.55, weight: isSel ? 15 : 9, interactive: false });
       const line = L.polyline(s.coords, { color, opacity: 0.95, weight: 6, dashArray: done ? null : '10 7' });
-      [hit, line].forEach((pl) => pl.bindPopup(() => segPopup(s)));
+      if (data.can_edit) {
+        [hit, line].forEach((pl) => pl.on('click', (ev) => {
+          if (addMode) return;
+          L.DomEvent.stop(ev);
+          if (sel.has(s.id)) sel.delete(s.id); else sel.add(s.id);
+          draw();
+        }));
+      } else {
+        [hit, line].forEach((pl) => pl.bindPopup(() => segPopup(s)));
+      }
       casing.addTo(layer); line.addTo(layer); hit.addTo(layer);
     }
     if (!m.hasLayer(layer)) layer.addTo(m);
@@ -118,6 +144,56 @@
       draw();
     } catch (e) { alert('Sem conexão. Tente de novo.'); }
     finally { busy = false; }
+  };
+  // confirmação na própria tela (o pessoal pode tocar errado)
+  function ask(html, okTxt) {
+    return new Promise((res) => {
+      const o = document.createElement('div');
+      o.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:16px';
+      o.innerHTML = '<div style="background:#111827;color:#fff;border:1px solid #374151;border-radius:14px;max-width:420px;width:100%;padding:16px;font-size:15px;line-height:1.4">' +
+        html + '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">' +
+        '<button type="button" class="btn btn-outline-light" data-r="0">Cancelar</button>' +
+        '<button type="button" class="btn btn-success" data-r="1">' + okTxt + '</button></div></div>';
+      o.addEventListener('click', (e) => {
+        const r = e.target.getAttribute && e.target.getAttribute('data-r');
+        if (r !== null && r !== undefined) { o.remove(); res(r === '1'); }
+      });
+      document.body.appendChild(o);
+    });
+  }
+  window.cabosLimpar = function () { sel.clear(); draw(); };
+  window.cabosLancar = async function () {
+    if (!sel.size || busy) return;
+    const segsSel = data.segments.filter((x) => sel.has(x.id));
+    const toDone = segsSel.filter((x) => x.status !== 'done'), toPend = segsSel.filter((x) => x.status === 'done');
+    const mDone = toDone.reduce((a, x) => a + (x.length_m || 0), 0);
+    let h = '<b>Confirmar lançamento?</b><br>';
+    if (toDone.length) h += '<br>🟢 <b>' + toDone.length + '</b> trecho(s) como <b>CABO PASSADO</b> (' + ft(mDone) + ')';
+    if (toPend.length) h += '<br>🔴 <b>' + toPend.length + '</b> trecho(s) voltam para <b>NÃO PASSADO</b>';
+    h += '<br><br><span style="color:#9ca3af;font-size:13px">Confira no mapa: os trechos selecionados estão com borda amarela.</span>';
+    if (!(await ask(h, '✅ Sim, lançar'))) return;
+    busy = true;
+    try {
+      const r = await fetch(API + '/status-bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ done: toDone.map((x) => x.id), pending: toPend.map((x) => x.id) }) });
+      const d = await r.json();
+      if (!d.ok) { alert(d.error || 'Erro'); return; }
+      for (const sg of d.segments) { const i = data.segments.findIndex((x) => x.id === sg.id); if (i >= 0) data.segments[i] = sg; }
+      if (d.last) data.last = d.last;
+      sel.clear();
+      draw();
+    } catch (e) { alert('Sem conexão. Nada foi lançado — tente de novo.'); }
+    finally { busy = false; }
+  };
+  window.cabosApagarSel = async function () {
+    if (!sel.size) return;
+    if (!(await ask('<b>Apagar ' + sel.size + ' trecho(s) do mapa?</b><br><span style="color:#9ca3af;font-size:13px">Use só para trecho que não é caminho do cabo.</span>', '🗑️ Apagar'))) return;
+    for (const id of Array.from(sel)) {
+      const r = await fetch('/api/cables/' + id + '/delete', { method: 'POST' });
+      const d = await r.json().catch(() => ({}));
+      if (d.ok) { data.segments = data.segments.filter((x) => x.id !== id); sel.delete(id); }
+    }
+    draw();
   };
   window.cabosDel = async function (id) {
     if (!confirm('Apagar este trecho do mapa?')) return;
@@ -171,13 +247,13 @@
     const cable = (rec && cableOf(rec)) || (first.rec && cableOf(first.rec)) || '';
     const r = await fetch(API + '/add', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ a: first.rec ? first.rec.id : null, b: rec ? rec.id : null, coords, cable, status: 'done' })
+      body: JSON.stringify({ a: first.rec ? first.rec.id : null, b: rec ? rec.id : null, coords, cable, status: 'pending' })
     });
     const d = await r.json().catch(() => ({}));
     if (!d.ok) { alert(d.error || 'Erro'); renderBanner(); return; }
     if (d.created && d.created.length) {
       data.segments.push(...d.created);
-      data.last = { by: d.created[0].updated_by, at: d.created[0].updated_at };
+      d.created.forEach((x) => sel.add(x.id));   // entra selecionado: só fica verde depois de ✅ Lançar
     } else alert('Esse trecho já existe.');
     draw();
   }
@@ -248,13 +324,13 @@
     on = typeof force === 'boolean' ? force : !on;
     const btn = document.getElementById('cabosBtn');
     if (btn) btn.classList.toggle('active', on);
-    if (on) load(); else { addMode = false; draw(); }
+    if (on) load(); else { addMode = false; sel.clear(); draw(); }
   };
   function start() {
     if (!lm()) { setTimeout(start, 300); return; }
     hookClicks();
     if (window.CABOS_AUTO_ON) window.cabosToggle(true);
-    setInterval(() => { if (on && !document.hidden && !busy && !addMode) load(); }, 60000);
+    setInterval(() => { if (on && !document.hidden && !busy && !addMode && !sel.size) load(); }, 60000);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 })();

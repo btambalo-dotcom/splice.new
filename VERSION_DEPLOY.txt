@@ -1,3 +1,4 @@
+SPLICER v163.1 - Cabos: construcao seleciona os trechos (borda amarela) e so lanca depois de confirmar; trecho novo entra selecionado; construcao nao ve as areas coloridas de PON
 SPLICER v163 - Construcao: admin escolhe a empresa inteira ou os mapas que cada usuario da construcao pode ver (Usuarios > Empresa e mapas); tabela nova cons_access
 SPLICER v162 - Cabo passado: novo usuario Construcao (so ve mapas) marca trechos de cabo (verde passado / vermelho falta); botao Cabos no mapa mostra as linhas na rua e quem fez a ultima atualizacao com data e hora; admin gera trechos planejados ligando as caixas de cada cabo pela rua; tabela nova cable_segment e coluna user.is_construcao (nao altera lancamentos)
 SPLICER v161.1 - carimbo: hora com mesma grossura/largura do Timemark, PM, check e barra nas posicoes exatas

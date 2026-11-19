@@ -768,7 +768,7 @@
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 {% if not hide_splicer %}<script src="{{ url_for('static', filename='js/etiqueta.js') }}?v=157"></script>{% endif %}
   <script>window.CABOS_MAP_ID = {{ map_obj.id }}; window.CABOS_AUTO_ON = {{ 'true' if is_cons else 'false' }};</script>
-  <script src="{{ url_for('static', filename='js/cabos.js') }}?v=162.1"></script>
+  <script src="{{ url_for('static', filename='js/cabos.js') }}?v=163"></script>
   {% if not hide_splicer %}
   <script>
   // v160 — escolhe o dispositivo para o celular (link da câmera) fotografar
@@ -1832,7 +1832,7 @@ async function loadMarkers() {
             // Desenha um polígono suave (convex hull simples) para cada PON
             Object.keys(sections).forEach(secName => {
               const pts = sections[secName];
-              if (pts.length < 3) return;
+              if (IS_CONS || pts.length < 3) return;   // v163: construção não vê as áreas coloridas
 
               const hull = computeConvexHull(pts);
               const expandedHull = expandPolygon(hull, 1.16);
