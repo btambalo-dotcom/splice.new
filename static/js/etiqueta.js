@@ -102,7 +102,12 @@
   function buildText(mode, rec) {
     const sps = parseSplitters(rec.device);
     if (mode === 'cabo') {               // nome do cabo + fibras usadas na caixa (1 etiqueta por cabo)
-      return cablesInfo(rec).filter((ci) => ci.cabo).map((ci) => {
+      const seen = new Set();   // cabo com o mesmo nome (entra e sai) = 1 etiqueta só
+      return cablesInfo(rec).filter((ci) => {
+        const k = ci.cabo.toUpperCase().replace(/\s+/g, ' ').replace(/F$/, '').trim();
+        if (!ci.cabo || seen.has(k)) return false;
+        seen.add(k); return true;
+      }).map((ci) => {
         const fs = shortFibras(ci.fibras).map((f, i) => (i ? f.replace(/^OLT\d+\s+/, '') : f));
         return [ci.cabo.replace(/\s+(\d+)$/, ' $1F'), fs.join(' + ').replace(/\//g, '-')].filter(Boolean).join('\n');
       }).join('\n\n');
