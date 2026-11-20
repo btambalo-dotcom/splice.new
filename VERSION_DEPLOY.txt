@@ -1,3 +1,4 @@
+SPLICER v168.1 - ícone de fibras erradas escondido (dados mantidos)
 SPLICER v168 - marcação (só admin) de caixas feitas com fibra errada + resolvido
 SPLICER v167 - fibras físicas no cabo (ex.: 29-30) em vez da fibra da PON; endpoint bulk-info
 SPLICER v166 - Cabos no celular: barra pequena em cima (trechos, %, ultima atualizacao; detalhes no botao), e com os cabos ligados as areas coloridas de PON somem para nao atrapalhar
