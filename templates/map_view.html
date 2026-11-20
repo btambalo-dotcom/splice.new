@@ -163,6 +163,7 @@
     </div>
     <div class="mv-actions">
       <button type="button" id="cabosBtn" class="btn btn-sm mv-btn" onclick="cabosToggle()" title="Onde o cabo já foi passado">🧵 Cabos</button>
+      {% if current_user.is_admin %}<button type="button" id="fflagBtn" class="btn btn-sm mv-btn" onclick="fflagToggle()" style="display:none;background:#7f1d1d;border-color:#dc2626;color:#fff">⚠️ Fibras</button>{% endif %}
       {% if not is_cons %}
       <a href="{{ url_for('map_services', map_id=map_obj.id) }}" class="btn btn-sm mv-btn">Serviços</a>
       {% endif %}
@@ -769,6 +770,7 @@
 {% if not hide_splicer %}<script src="{{ url_for('static', filename='js/etiqueta.js') }}?v=167"></script>{% endif %}
   <script>window.CABOS_MAP_ID = {{ map_obj.id }}; window.CABOS_AUTO_ON = {{ 'true' if is_cons else 'false' }};</script>
   <script src="{{ url_for('static', filename='js/cabos.js') }}?v=166.1"></script>
+  {% if current_user.is_admin %}<script src="{{ url_for('static', filename='js/fibraflags.js') }}?v=168"></script>{% endif %}
   {% if not hide_splicer %}
   <script>
   // v160 — escolhe o dispositivo para o celular (link da câmera) fotografar

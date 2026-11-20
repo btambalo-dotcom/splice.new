@@ -1087,6 +1087,19 @@ class CableSegment(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
+class FiberFlag(db.Model):
+    """v168 — caixa feita com fibra errada (só admin vê). Tabela nova: não altera record."""
+    __tablename__ = "fiber_flag"
+    id = db.Column(db.Integer, primary_key=True)
+    map_id = db.Column(db.Integer, index=True, nullable=False)
+    record_id = db.Column(db.Integer, index=True, nullable=False)
+    note = db.Column(db.String(400), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_by = db.Column(db.String(120), nullable=True)
+    resolved_at = db.Column(db.DateTime, nullable=True)
+    resolved_by = db.Column(db.String(120), nullable=True)
+
+
 class Expense(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
@@ -11709,6 +11722,56 @@ def api_map_bulk_info(map_id):
             r.device_info = info; upd += 1
     db.session.commit()
     return jsonify({"ok": True, "updated": upd, "skipped": skip})
+
+
+def _fflag_json(f, r):
+    return {"id": f.id, "record_id": f.record_id, "note": f.note or "",
+            "device": r.device if r else "", "lat": r.latitude if r else None,
+            "lng": r.longitude if r else None,
+            "created_at": f.created_at.isoformat() + "Z" if f.created_at else None,
+            "resolved_at": f.resolved_at.isoformat() + "Z" if f.resolved_at else None,
+            "resolved_by": f.resolved_by or ""}
+
+
+@app.route("/api/maps/<int:map_id>/fiber-flags", methods=["GET"])
+@admin_required
+def api_fiber_flags(map_id):
+    mp = CompanyMap.query.get_or_404(map_id)
+    fl = FiberFlag.query.filter_by(map_id=mp.id).order_by(FiberFlag.id).all()
+    recs = {r.id: r for r in Record.query.filter(Record.id.in_([f.record_id for f in fl] or [0])).all()}
+    return jsonify({"ok": True, "flags": [_fflag_json(f, recs.get(f.record_id)) for f in fl]})
+
+
+@app.route("/api/maps/<int:map_id>/fiber-flags/add", methods=["POST"])
+@admin_required
+def api_fiber_flags_add(map_id):
+    mp = CompanyMap.query.get_or_404(map_id)
+    items = (request.get_json(silent=True) or {}).get("items") or []
+    have = {f.record_id for f in FiberFlag.query.filter_by(map_id=mp.id).all()}
+    n = 0
+    for it in items:
+        rid = int(it.get("record_id") or 0)
+        if not rid or rid in have:
+            continue
+        db.session.add(FiberFlag(map_id=mp.id, record_id=rid, note=str(it.get("note") or "")[:400],
+                                 created_by=getattr(current_user, "username", "") or ""))
+        have.add(rid); n += 1
+    db.session.commit()
+    return jsonify({"ok": True, "added": n})
+
+
+@app.route("/api/fiber-flags/<int:fid>/resolve", methods=["POST"])
+@admin_required
+def api_fiber_flag_resolve(fid):
+    f = FiberFlag.query.get_or_404(fid)
+    undo = bool((request.get_json(silent=True) or {}).get("undo"))
+    if undo:
+        f.resolved_at = None; f.resolved_by = None
+    else:
+        f.resolved_at = datetime.utcnow()
+        f.resolved_by = getattr(current_user, "username", "") or ""
+    db.session.commit()
+    return jsonify({"ok": True, "flag": _fflag_json(f, Record.query.get(f.record_id))})
 
 
 @app.route("/api/maps/<int:map_id>/merge-duplicates", methods=["POST"])
