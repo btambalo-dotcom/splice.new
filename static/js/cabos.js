@@ -330,7 +330,7 @@
     window.CABOS_ON = !show;
     if (typeof markersLayer === 'undefined') return;
     markersLayer.eachLayer((l) => {
-      if (l instanceof L.Polygon) {
+      if (l instanceof L.Path && !(l instanceof L.CircleMarker)) {   // área + contorno colorido da PON
         if (!l._cabosOrig) l._cabosOrig = { opacity: l.options.opacity, fillOpacity: l.options.fillOpacity };
         l.setStyle(show ? l._cabosOrig : { opacity: 0, fillOpacity: 0 });
         const el = l.getElement && l.getElement(); if (el) el.style.pointerEvents = show ? '' : 'none';
