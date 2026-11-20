@@ -67,11 +67,21 @@
   }
 
   // v150 — cabo e fibras gravados na informação do pin ("CABO ... | FIBRAS ...")
+  // v165 — caixa pode ter vários cabos: cada "CABO x" leva o "FIBRAS y" que vem logo depois
+  function cablesInfo(rec) {
+    const parts = String((rec && rec.info) || '').split('|').map((t) => t.trim());
+    const out = [];
+    parts.forEach((t) => {
+      let m = t.match(/^CABO\s+(.+)$/i);
+      if (m) { out.push({ cabo: m[1].trim(), fibras: '' }); return; }
+      m = t.match(/^FIBRAS\s+(.+)$/i);
+      if (m && out.length && !out[out.length - 1].fibras) out[out.length - 1].fibras = m[1].trim();
+    });
+    return out;
+  }
   function cableInfo(rec) {
-    const info = String((rec && rec.info) || '');
-    const c = info.match(/CABO\s+([^|]+)/i);
-    const f = info.match(/FIBRAS\s+([^|]+)/i);
-    return { cabo: c ? c[1].trim() : '', fibras: f ? f[1].trim() : '' };
+    const all = cablesInfo(rec);
+    return all[0] || { cabo: '', fibras: '' };
   }
   function shortFibras(f) {          // "OLT07_85P_SBNGFL 6-8; OLT07_86P_SBNGFL 1" -> ["OLT07 85P F6-8", ...]
     return String(f || '').split(';').map((t) => t.trim()).filter(Boolean).map((t) => {
@@ -91,13 +101,14 @@
   // Modelos (as opções das fotos de campo)
   function buildText(mode, rec) {
     const sps = parseSplitters(rec.device);
-    if (mode === 'cabo') {               // nome do cabo + fibras usadas na caixa
-      const ci = cableInfo(rec);
-      if (!ci.cabo) return '';
-      const fs = shortFibras(ci.fibras).map((f, i) => (i ? f.replace(/^OLT\d+\s+/, '') : f));
-      return [ci.cabo.replace(/\s+(\d+)$/, ' $1F'), fs.join(' + ')].filter(Boolean).join('\n');
+    if (mode === 'cabo') {               // nome do cabo + fibras usadas na caixa (1 etiqueta por cabo)
+      return cablesInfo(rec).filter((ci) => ci.cabo).map((ci) => {
+        const fs = shortFibras(ci.fibras).map((f, i) => (i ? f.replace(/^OLT\d+\s+/, '') : f));
+        return [ci.cabo.replace(/\s+(\d+)$/, ' $1F'), fs.join(' + ').replace(/\//g, '-')].filter(Boolean).join('\n');
+      }).join('\n\n');
     }
     if (mode === 'tampa') {                // 1 etiqueta, no máximo 2 linhas (3+ splitters: "A" / "B/C", como na foto)
+      if (!sps.length) return String(rec.device || '').replace(/\s*\/\s*/g, '\n');   // splice point / butt splice: nome da caixa
       return twoLines(sps.map(lineFull)).join('\n');
     }
     if (mode === 'completa') {             // etiqueta do cabo + etiqueta da tampa
@@ -177,7 +188,14 @@
     const mode = (document.getElementById('etq-mode') || {}).value;
     const seq = [];
     let rest = labels;
-    if (mode === 'completa' && labels.length > 1) { seq.push(labels[0]); rest = labels.slice(1); }
+    if (mode === 'completa' && labels.length > 1) {
+      // etiquetas de cabo saem 1x cada; as da caixa saem "copies" vezes
+      let nCab = 1;
+      try { if (currentRec) nCab = textToLabels(buildText('cabo', currentRec)).length || 1; } catch (e) {}
+      nCab = Math.min(nCab, labels.length - 1);
+      labels.slice(0, nCab).forEach((l) => seq.push(l));
+      rest = labels.slice(nCab);
+    }
     for (let k = 0; k < copies; k++) rest.forEach((l) => seq.push(l));
     return seq;
   }
@@ -197,7 +215,7 @@
     const total = printSequence(labels).length;
     document.getElementById('etq-count').textContent = !labels.length ? 'Nenhuma etiqueta' :
       (mode === 'completa' && labels.length > 1
-        ? `cabo 1× + caixa ${copies}× = ${total} etiqueta(s)`
+        ? (() => { let nc = 1; try { nc = Math.min(textToLabels(buildText('cabo', currentRec || {})).length || 1, labels.length - 1); } catch (e) {} return (nc > 1 ? nc + ' cabos 1× cada' : 'cabo 1×') + ` + caixa ${copies}× = ${total} etiqueta(s)`; })()
         : `${labels.length} etiqueta(s) × ${copies} = ${total}`);
   }
 
