@@ -11687,6 +11687,30 @@ def api_map_bulk_device_info(map_id):
     return jsonify({"ok": True, "box_model_updated": upd_model, "splitter_updated": upd_spl, "not_found": not_found})
 
 
+@app.route("/api/maps/<int:map_id>/bulk-info", methods=["POST"])
+@admin_required
+def api_map_bulk_info(map_id):
+    """Admin (v167): regrava só a informação (device_info) dos pins do mapa, por id.
+    Não mexe em splicer, data, preço nem lançamento."""
+    mp = CompanyMap.query.get_or_404(map_id)
+    items = (request.get_json(silent=True) or {}).get("items") or []
+    ids = [int(it.get("id")) for it in items if str(it.get("id", "")).isdigit()]
+    q = Record.query.filter(Record.id.in_(ids), Record.map == mp.name)
+    if mp.company:
+        q = q.filter(Record.company == mp.company)
+    recs = {r.id: r for r in q.all()}
+    upd, skip = 0, []
+    for it in items:
+        r = recs.get(int(it.get("id") or 0))
+        info = str(it.get("info") or "").strip()
+        if not r or not info or len(info) > 255:
+            skip.append(it.get("id")); continue
+        if r.device_info != info:
+            r.device_info = info; upd += 1
+    db.session.commit()
+    return jsonify({"ok": True, "updated": upd, "skipped": skip})
+
+
 @app.route("/api/maps/<int:map_id>/merge-duplicates", methods=["POST"])
 @admin_required
 def api_map_merge_duplicates(map_id):

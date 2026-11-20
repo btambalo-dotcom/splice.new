@@ -84,6 +84,8 @@
     return all[0] || { cabo: '', fibras: '' };
   }
   function shortFibras(f) {          // "OLT07_85P_SBNGFL 6-8; OLT07_86P_SBNGFL 1" -> ["OLT07 85P F6-8", ...]
+    const fis = String(f || '').match(/^([\d][\d\s,;-]*)\(/);   // v167: "29-30 (73P 5-6)" -> fibra física no cabo
+    if (fis) return ['F' + fis[1].trim().replace(/\s*[;,]\s*/g, ', F')];
     return String(f || '').split(';').map((t) => t.trim()).filter(Boolean).map((t) => {
       const m = t.match(/OLT\s*0*(\d+)(?:_(\d+P))?_SBNGFL\s+([\d-]+)/i);
       if (!m) return t;

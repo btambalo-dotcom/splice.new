@@ -1,3 +1,4 @@
+SPLICER v167 - fibras físicas no cabo (ex.: 29-30) em vez da fibra da PON; endpoint bulk-info
 SPLICER v166 - Cabos no celular: barra pequena em cima (trechos, %, ultima atualizacao; detalhes no botao), e com os cabos ligados as areas coloridas de PON somem para nao atrapalhar
 SPLICER v165.1 - Etiqueta: cabo com o mesmo nome imprime uma vez so; so imprime outra quando muda o nome do cabo
 SPLICER v165 - Etiqueta: caixa com varios cabos imprime 1 etiqueta para cada cabo (entrada e saida); splice point sem splitter usa o nome da caixa na etiqueta da tampa
