@@ -31,11 +31,13 @@
     if (!b) {
       b = document.createElement('div');
       b.id = 'cabos-banner';
-      b.style.cssText = 'position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:800;background:rgba(17,24,39,.94);color:#fff;border:1px solid #374151;border-radius:12px;padding:7px 12px;font-size:13px;max-width:94%;text-align:center;box-shadow:0 6px 20px #0007;line-height:1.35';
+      b.style.cssText = 'position:absolute;top:8px;left:56px;right:8px;z-index:800;background:rgba(17,24,39,.9);color:#fff;border:1px solid #374151;border-radius:10px;padding:4px 8px;font-size:12px;box-shadow:0 4px 14px #0006;line-height:1.3;max-width:520px;margin-left:auto';
       document.querySelector('.mv-map-wrap').appendChild(b);
     }
     return b;
   }
+  let expanded = false;
+  window.cabosExpand = function () { expanded = !expanded; renderBanner(); };
   function renderBanner() {
     const b = banner();
     if (!on || !data) { b.style.display = 'none'; return; }
@@ -43,32 +45,33 @@
     const done = segs.filter((s) => s.status === 'done');
     const mDone = done.reduce((a, s) => a + (s.length_m || 0), 0);
     const mAll = segs.reduce((a, s) => a + (s.length_m || 0), 0);
+    const pct = mAll ? Math.round(100 * mDone / mAll) : 0;
     const last = data.last;
-    let h = '<b>🧵 Cabo passado</b> · <b style="color:#4ade80 !important">━ verde = passado</b> · <b style="color:#f87171 !important">┅ vermelho = falta</b>';
-    if (segs.length) h += '<br>' + done.length + ' de ' + segs.length + ' trechos · ' + ft(mDone) + ' de ' + ft(mAll) + (mAll ? ' (' + Math.round(100 * mDone / mAll) + '%)' : '');
-    else h += '<br><span style="color:#fbbf24">Nenhum trecho cadastrado ainda.</span>';
-    h += '<br>Última atualização: ' + (last ? '<b>' + esc(last.by || '?') + '</b> · ' + fmtDT(last.at) : '<i>nenhuma</i>');
+    const btn = (cls, js, txt) => '<button type="button" class="btn btn-sm ' + cls + '" style="padding:2px 8px;font-size:12px;line-height:1.3" onclick="' + js + '">' + txt + '</button>';
+    // linha compacta (não cobre o mapa no celular)
+    let h = '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
+      '<span>🧵 <b>' + done.length + '/' + segs.length + '</b> · <b style="color:#4ade80 !important">' + pct + '%</b></span>' +
+      '<span style="color:#d1d5db !important">· ' + (last ? esc(last.by || '?') + ' ' + fmtDT(last.at).slice(0, 16) : 'sem atualização') + '</span>' +
+      '<span style="flex:1"></span>';
+    if (data.can_edit && !sel.size) h += btn(addMode ? 'btn-warning' : 'btn-outline-light', 'window.cabosAddMode()', addMode ? '✖' : '➕');
+    h += btn('btn-outline-secondary', 'window.cabosExpand()', expanded ? '▴' : '▾') + '</div>';
     if (data.can_edit && sel.size) {
       const segsSel = data.segments.filter((x) => sel.has(x.id));
       const nDone = segsSel.filter((x) => x.status !== 'done').length, nUndo = segsSel.length - nDone;
-      h += '<div style="margin-top:6px;padding:6px;border-radius:10px;background:#422006;border:1px solid #f59e0b">' +
-        '<b style="color:#fde68a !important">' + sel.size + ' trecho(s) selecionado(s) — ainda não lançado</b>' +
-        (nDone ? ' · ' + nDone + ' para <b style="color:#4ade80 !important">passado</b>' : '') +
-        (nUndo ? ' · ' + nUndo + ' para <b style="color:#f87171 !important">não passado</b>' : '') +
-        '<div style="margin-top:5px;display:flex;gap:6px;justify-content:center;flex-wrap:wrap">' +
-        '<button type="button" class="btn btn-sm btn-success" onclick="window.cabosLancar()">✅ Lançar</button>' +
-        '<button type="button" class="btn btn-sm btn-outline-light" onclick="window.cabosLimpar()">Limpar seleção</button>' +
-        (data.is_admin ? '<button type="button" class="btn btn-sm btn-outline-danger" onclick="window.cabosApagarSel()">🗑️ Apagar</button>' : '') +
-        '</div></div>';
-    } else if (data.can_edit && !addMode) {
-      h += '<div style="color:#9ca3af;margin-top:3px;font-size:12px">Toque nos trechos para selecionar e depois em ✅ Lançar</div>';
+      h += '<div style="margin-top:5px;padding:5px 6px;border-radius:9px;background:#422006;border:1px solid #f59e0b;display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
+        '<span style="color:#fde68a !important"><b>' + sel.size + '</b> selec.' + (nDone ? ' · ' + nDone + ' ✅' : '') + (nUndo ? ' · ' + nUndo + ' ↩️' : '') + '</span><span style="flex:1"></span>' +
+        btn('btn-success', 'window.cabosLancar()', '✅ Lançar') + btn('btn-outline-light', 'window.cabosLimpar()', '✖') +
+        (data.is_admin ? btn('btn-outline-danger', 'window.cabosApagarSel()', '🗑️') : '') + '</div>';
     }
-    if (data.can_edit) {
-      h += '<div style="margin-top:5px;display:flex;gap:6px;justify-content:center;flex-wrap:wrap">' +
-        '<button type="button" class="btn btn-sm ' + (addMode ? 'btn-warning' : 'btn-outline-light') + '" onclick="window.cabosAddMode()">' + (addMode ? '✖ Cancelar trecho novo' : '➕ Trecho novo') + '</button>';
-      if (data.is_admin) h += '<button type="button" class="btn btn-sm btn-outline-info" onclick="window.cabosGerar()">⚙️ Gerar trechos dos cabos</button>';
-      h += '</div>';
-      if (addMode) h += '<div style="color:#fbbf24;margin-top:4px">' + (addFirst ? 'Agora toque na caixa (ou no ponto) onde o trecho TERMINA' : 'Toque na caixa (ou no ponto) onde o trecho COMEÇA') + '</div>';
+    if (addMode) h += '<div style="color:#fbbf24 !important;margin-top:4px">' + (addFirst ? 'Toque onde o trecho TERMINA' : 'Toque onde o trecho COMEÇA') + '</div>';
+    if (expanded) {
+      h += '<div style="margin-top:5px;text-align:left;line-height:1.4">' +
+        '<b style="color:#4ade80 !important">━ verde</b> = passado · <b style="color:#f87171 !important">┅ vermelho</b> = falta<br>' +
+        (segs.length ? ft(mDone) + ' de ' + ft(mAll) : 'Nenhum trecho cadastrado ainda.') + '<br>' +
+        'Última atualização: ' + (last ? '<b>' + esc(last.by || '?') + '</b> · ' + fmtDT(last.at) : 'nenhuma') +
+        (data.can_edit ? '<br><span style="color:#9ca3af !important">Toque nos trechos para selecionar e depois em ✅ Lançar.</span>' : '') +
+        (data.is_admin ? '<div style="margin-top:5px">' + btn('btn-outline-info', 'window.cabosGerar()', '⚙️ Gerar trechos dos cabos') + '</div>' : '') +
+        '</div>';
     }
     b.innerHTML = h;
     b.style.display = '';
@@ -121,6 +124,7 @@
       casing.addTo(layer); line.addTo(layer); hit.addTo(layer);
     }
     if (!m.hasLayer(layer)) layer.addTo(m);
+    ponAreas(false);
     renderBanner();
   }
   async function load() {
@@ -321,8 +325,21 @@
   };
 
   // ---------- liga/desliga ----------
+  // com os cabos ligados, as áreas coloridas de PON somem (atrapalham marcar no celular)
+  function ponAreas(show) {
+    window.CABOS_ON = !show;
+    if (typeof markersLayer === 'undefined') return;
+    markersLayer.eachLayer((l) => {
+      if (l instanceof L.Polygon) {
+        if (!l._cabosOrig) l._cabosOrig = { opacity: l.options.opacity, fillOpacity: l.options.fillOpacity };
+        l.setStyle(show ? l._cabosOrig : { opacity: 0, fillOpacity: 0 });
+        const el = l.getElement && l.getElement(); if (el) el.style.pointerEvents = show ? '' : 'none';
+      }
+    });
+  }
   window.cabosToggle = function (force) {
     on = typeof force === 'boolean' ? force : !on;
+    ponAreas(!on);
     const btn = document.getElementById('cabosBtn');
     if (btn) btn.classList.toggle('active', on);
     if (on) load(); else { addMode = false; sel.clear(); draw(); }

@@ -1,3 +1,4 @@
+SPLICER v166 - Cabos no celular: barra pequena em cima (trechos, %, ultima atualizacao; detalhes no botao), e com os cabos ligados as areas coloridas de PON somem para nao atrapalhar
 SPLICER v165.1 - Etiqueta: cabo com o mesmo nome imprime uma vez so; so imprime outra quando muda o nome do cabo
 SPLICER v165 - Etiqueta: caixa com varios cabos imprime 1 etiqueta para cada cabo (entrada e saida); splice point sem splitter usa o nome da caixa na etiqueta da tampa
 SPLICER v164 - Camera do celular: fotos ficam guardadas no celular e so sao lancadas depois de tocar em Lancar e confirmar (IA lanca como no Foto Auto); toque na miniatura apaga antes de lancar; Salvar na galeria salva todas; corrige envio no iPhone (bytes em vez de Blob no IndexedDB); erro do servidor aparece na tela
