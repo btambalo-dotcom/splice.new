@@ -19,6 +19,8 @@
     density: 3,
     copies: 3,             // v157: cópias da etiqueta da caixa (cabo sai 1 só)
     marginMm: 3,
+    printer: 'niimbot',   // v169: niimbot | escpos (POTONO)
+    widthDots: 384,       // v169: largura ESC/POS (384=58mm, 576=80mm)
   };
 
   let cfg = loadCfg();
@@ -277,6 +279,7 @@
   }
 
   async function printAll() {
+    if (cfg.printer === 'escpos') return printEscpos();
     const labels = textToLabels(document.getElementById('etq-text').value);
     if (!labels.length) { setStatus('Escreva o texto da etiqueta.', 'err'); return; }
     if (!hasBluetooth()) { noBluetoothHelp(); return; }
@@ -323,6 +326,39 @@
     }
   }
 
+  // v169 — impressão ESC/POS (POTONO e afins)
+  async function printEscpos() {
+    const labels = textToLabels(document.getElementById('etq-text').value);
+    if (!labels.length) { setStatus('Escreva o texto da etiqueta.', 'err'); return; }
+    if (!hasBluetooth()) { noBluetoothHelp(); return; }
+    if (!window.Escpos) { setStatus('Módulo ESC/POS não carregou.', 'err'); return; }
+    const btn = document.getElementById('etq-print'); btn.disabled = true;
+    try {
+      setStatus('Conectando na impressora...');
+      await window.Escpos.connect(true);          // mostra todos (POTONO não filtra bem)
+      const seq = printSequence(labels);
+      for (let i = 0; i < seq.length; i++) {
+        setStatus(`Imprimindo ${i + 1}/${seq.length}...`);
+        await window.Escpos.printCanvas(renderLabel(seq[i]), parseInt(cfg.widthDots, 10) || 384);
+      }
+      setStatus('Pronto! Etiqueta(s) impressa(s).', 'ok');
+    } catch (e) {
+      console.error('[escpos]', e);
+      setStatus('Erro: ' + (e && e.message ? e.message : e), 'err');
+    } finally { btn.disabled = false; }
+  }
+
+  async function testEscpos() {
+    if (!hasBluetooth()) { noBluetoothHelp(); return; }
+    if (!window.Escpos) { setStatus('Módulo ESC/POS não carregou.', 'err'); return; }
+    try {
+      setStatus('Conectando e testando...');
+      await window.Escpos.connect(true);
+      await window.Escpos.printTest(parseInt(cfg.widthDots, 10) || 384);
+      setStatus('Teste enviado. Saiu "SPLICER OK"?', 'ok');
+    } catch (e) { setStatus('Erro: ' + (e && e.message ? e.message : e), 'err'); }
+  }
+
   function noBluetoothHelp() {
     setStatus('Este navegador não tem Bluetooth. No iPad abra o SPLICER no app Bluefy para imprimir direto — ou use "Compartilhar imagem" e imprima pelo app NIIMBOT.', 'err');
   }
@@ -358,6 +394,15 @@
     document.getElementById('etq-length').value = String(cfg.lengthMm);
     document.getElementById('etq-density').value = String(cfg.density);
     document.getElementById('etq-copies').value = String(cfg.copies);
+    var pr = document.getElementById('etq-printer'); if (pr) pr.value = cfg.printer;
+    var wd = document.getElementById('etq-width'); if (wd) wd.value = String(cfg.widthDots);
+    applyPrinter();
+  }
+
+  function applyPrinter() {
+    var isE = cfg.printer === 'escpos';
+    var box = document.getElementById('etq-width-box'); if (box) box.style.display = isE ? '' : 'none';
+    var t = document.getElementById('etq-test'); if (t) t.style.display = isE ? '' : 'none';
   }
 
   function applyMode() {
@@ -411,6 +456,9 @@
     $('etq-density').addEventListener('change', (e) => { cfg.density = parseInt(e.target.value, 10) || 3; saveCfg(); });
     $('etq-copies').addEventListener('change', (e) => { cfg.copies = Math.max(1, parseInt(e.target.value, 10) || 1); saveCfg(); renderPreview(); });
     $('etq-print').addEventListener('click', printAll);
+    if ($('etq-printer')) $('etq-printer').addEventListener('change', (e) => { cfg.printer = e.target.value; saveCfg(); applyPrinter(); });
+    if ($('etq-width')) $('etq-width').addEventListener('change', (e) => { cfg.widthDots = parseInt(e.target.value, 10) || 384; saveCfg(); });
+    if ($('etq-test')) $('etq-test').addEventListener('click', testEscpos);
     $('etq-share').addEventListener('click', shareImage);
     $('etq-connect').addEventListener('click', async () => {
       if (!hasBluetooth()) { noBluetoothHelp(); return; }
