@@ -786,7 +786,7 @@
   {{ super() }}
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 {% if not hide_splicer %}<script src="{{ url_for('static', filename='js/escpos.js') }}?v=169"></script>
-{% if not hide_splicer %}<script src="{{ url_for('static', filename='js/polono.js') }}?v=170"></script>{% endif %}
+{% if not hide_splicer %}<script src="{{ url_for('static', filename='js/polono.js') }}?v=171"></script>{% endif %}
 {% if not hide_splicer %}<script src="{{ url_for('static', filename='js/etiqueta.js') }}?v=170"></script>{% endif %}{% endif %}
   <script>window.CABOS_MAP_ID = {{ map_obj.id }}; window.CABOS_AUTO_ON = {{ 'true' if is_cons else 'false' }};</script>
   <script src="{{ url_for('static', filename='js/cabos.js') }}?v=166.1"></script>

@@ -15,8 +15,8 @@
     const svcs = await server.getPrimaryServices();
     for (const s of svcs) {
       let cs; try { cs = await s.getCharacteristics(); } catch (e) { continue; }
-      for (const c of cs) if (WCH.includes(c.uuid) && (c.properties.write || c.properties.writeWithoutResponse)) { withResp = !c.properties.writeWithoutResponse; return c; }
-      for (const c of cs) { if (c.properties.writeWithoutResponse) { withResp = false; return c; } if (c.properties.write) { withResp = true; return c; } }
+      for (const c of cs) if (WCH.includes(c.uuid) && (c.properties.write || c.properties.writeWithoutResponse)) { withResp = !!c.properties.write; return c; }
+      for (const c of cs) { if (c.properties.write) { withResp = true; return c; } if (c.properties.writeWithoutResponse) { withResp = false; return c; } }
     }
     return null;
   }
@@ -31,10 +31,11 @@
     if (!ch) { try { device.gatt.disconnect(); } catch (e) {} throw new Error('Conectou mas não achei a característica de escrita (ff02).'); }
   }
   async function writeRaw(bytes) {
-    const CH = 120;
+    const CH = withResp ? 100 : 100;
     for (let i = 0; i < bytes.length; i += CH) {
       const part = bytes.slice(i, i + CH);
-      if (withResp) await ch.writeValueWithResponse(part); else { await ch.writeValueWithoutResponse(part); await sleep(6); }
+      if (withResp) await ch.writeValueWithResponse(part);        // confiável: não embaralha
+      else { await ch.writeValueWithoutResponse(part); await sleep(20); }
     }
   }
   const te = new TextEncoder();
