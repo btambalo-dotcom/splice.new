@@ -1,3 +1,4 @@
+SPLICER v170 - driver POLONO P31S (TSPL) na tela de etiqueta
 SPLICER v169 - suporte a impressora ESC/POS (POTONO) na etiqueta, alem da NIIMBOT
 SPLICER v168.1 - ícone de fibras erradas escondido (dados mantidos)
 SPLICER v168 - marcação (só admin) de caixas feitas com fibra errada + resolvido

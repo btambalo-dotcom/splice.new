@@ -280,6 +280,7 @@
 
   async function printAll() {
     if (cfg.printer === 'escpos') return printEscpos();
+    if (cfg.printer === 'polono') return printPolono();
     const labels = textToLabels(document.getElementById('etq-text').value);
     if (!labels.length) { setStatus('Escreva o texto da etiqueta.', 'err'); return; }
     if (!hasBluetooth()) { noBluetoothHelp(); return; }
@@ -324,6 +325,36 @@
       btn.disabled = false;
       updateConnLabel();
     }
+  }
+
+  // v170 — impressão POLONO P31S (TSPL)
+  function polonoOpt() {
+    const dmap = { 1: 6, 2: 10, 3: 15 };
+    return { gaps: cfg.paper === 'gaps', lengthMm: cfg.lengthMm || 40, gapMm: 2, density: dmap[parseInt(cfg.density, 10)] || 10, headDots: 96 };
+  }
+  async function printPolono() {
+    const labels = textToLabels(document.getElementById('etq-text').value);
+    if (!labels.length) { setStatus('Escreva o texto da etiqueta.', 'err'); return; }
+    if (!hasBluetooth()) { noBluetoothHelp(); return; }
+    if (!window.Polono) { setStatus('Módulo POLONO não carregou.', 'err'); return; }
+    const btn = document.getElementById('etq-print'); btn.disabled = true;
+    try {
+      setStatus('Conectando na impressora...');
+      await window.Polono.connect(true);
+      const seq = printSequence(labels);
+      for (let i = 0; i < seq.length; i++) {
+        setStatus(`Imprimindo ${i + 1}/${seq.length}...`);
+        await window.Polono.printCanvas(renderLabel(seq[i]), polonoOpt());
+      }
+      setStatus('Pronto! Etiqueta(s) impressa(s).', 'ok');
+    } catch (e) { console.error('[polono]', e); setStatus('Erro: ' + (e && e.message ? e.message : e), 'err'); }
+    finally { btn.disabled = false; }
+  }
+  async function testPolono() {
+    if (!hasBluetooth()) { noBluetoothHelp(); return; }
+    if (!window.Polono) { setStatus('Módulo POLONO não carregou.', 'err'); return; }
+    try { setStatus('Conectando e testando...'); await window.Polono.connect(true); await window.Polono.printTest(polonoOpt()); setStatus('Teste enviado. Saiu "SPLICER OK"?', 'ok'); }
+    catch (e) { setStatus('Erro: ' + (e && e.message ? e.message : e), 'err'); }
   }
 
   // v169 — impressão ESC/POS (POTONO e afins)
@@ -402,7 +433,7 @@
   function applyPrinter() {
     var isE = cfg.printer === 'escpos';
     var box = document.getElementById('etq-width-box'); if (box) box.style.display = isE ? '' : 'none';
-    var t = document.getElementById('etq-test'); if (t) t.style.display = isE ? '' : 'none';
+    var t = document.getElementById('etq-test'); if (t) t.style.display = (isE || cfg.printer === 'polono') ? '' : 'none';
   }
 
   function applyMode() {
@@ -458,7 +489,7 @@
     $('etq-print').addEventListener('click', printAll);
     if ($('etq-printer')) $('etq-printer').addEventListener('change', (e) => { cfg.printer = e.target.value; saveCfg(); applyPrinter(); });
     if ($('etq-width')) $('etq-width').addEventListener('change', (e) => { cfg.widthDots = parseInt(e.target.value, 10) || 384; saveCfg(); });
-    if ($('etq-test')) $('etq-test').addEventListener('click', testEscpos);
+    if ($('etq-test')) $('etq-test').addEventListener('click', () => (cfg.printer === 'polono' ? testPolono() : testEscpos()));
     $('etq-share').addEventListener('click', shareImage);
     $('etq-connect').addEventListener('click', async () => {
       if (!hasBluetooth()) { noBluetoothHelp(); return; }

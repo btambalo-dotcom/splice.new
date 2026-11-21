@@ -634,7 +634,8 @@
             <label class="form-label mb-1 small">Impressora</label>
             <select class="form-select form-select-sm bg-dark text-light border-secondary" id="etq-printer">
               <option value="niimbot">NIIMBOT (D110)</option>
-              <option value="escpos">POTONO / térmica (ESC/POS)</option>
+              <option value="polono">POLONO P31S</option>
+              <option value="escpos">Outra térmica (ESC/POS)</option>
             </select>
           </div>
           <div class="col-6" id="etq-width-box" style="display:none">
@@ -785,7 +786,8 @@
   {{ super() }}
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 {% if not hide_splicer %}<script src="{{ url_for('static', filename='js/escpos.js') }}?v=169"></script>
-{% if not hide_splicer %}<script src="{{ url_for('static', filename='js/etiqueta.js') }}?v=169"></script>{% endif %}{% endif %}
+{% if not hide_splicer %}<script src="{{ url_for('static', filename='js/polono.js') }}?v=170"></script>{% endif %}
+{% if not hide_splicer %}<script src="{{ url_for('static', filename='js/etiqueta.js') }}?v=170"></script>{% endif %}{% endif %}
   <script>window.CABOS_MAP_ID = {{ map_obj.id }}; window.CABOS_AUTO_ON = {{ 'true' if is_cons else 'false' }};</script>
   <script src="{{ url_for('static', filename='js/cabos.js') }}?v=166.1"></script>
   {% if FFLAG_ON and current_user.is_admin %}<script src="{{ url_for('static', filename='js/fibraflags.js') }}?v=168"></script>{% endif %}
