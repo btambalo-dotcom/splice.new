@@ -1,3 +1,4 @@
+SPLICER v172 - POLONO driver aceita mais etiquetadoras TSPL (ORGBRO X1 etc.)
 SPLICER v171 - POLONO P31S: envio com confirmacao (corrige imagem embaralhada)
 SPLICER v170 - driver POLONO P31S (TSPL) na tela de etiqueta
 SPLICER v169 - suporte a impressora ESC/POS (POTONO) na etiqueta, alem da NIIMBOT

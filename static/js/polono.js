@@ -3,9 +3,13 @@
 (function () {
   'use strict';
   const SVC = ['0000ff00-0000-1000-8000-00805f9b34fb', '0000ae00-0000-1000-8000-00805f9b34fb',
-               '0000ff e0'.replace(' ', '') + '-0000-1000-8000-00805f9b34fb'];
+               '0000ffe0-0000-1000-8000-00805f9b34fb', '0000fff0-0000-1000-8000-00805f9b34fb',
+               '000018f0-0000-1000-8000-00805f9b34fb', '49535343-fe7d-4ae5-8fa9-9fafd205e455',
+               'e7810a71-73ae-499d-8c15-faa9aef0c3f2'];
   const WCH = ['0000ff02-0000-1000-8000-00805f9b34fb', '0000ae01-0000-1000-8000-00805f9b34fb',
-               '0000ffe1-0000-1000-8000-00805f9b34fb'];
+               '0000ffe1-0000-1000-8000-00805f9b34fb', '0000fff2-0000-1000-8000-00805f9b34fb',
+               '00002af1-0000-1000-8000-00805f9b34fb', '49535343-8841-43f4-a8d4-ecbe34729bb3',
+               'bef8d6c9-9c21-4c9e-b632-bd58c1009f9f'];
   const DPM = 8;                       // 203 dpi = 8 dots/mm
   let device = null, server = null, ch = null, withResp = false;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
